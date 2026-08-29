@@ -1469,7 +1469,14 @@ final class AppModel {
                 .filter { $0.score >= settings.memoryThreshold }
                 .sorted { $0.score > $1.score }
                 .prefix(max(1, settings.memoryTopK))
-            sections.append(contentsOf: scored.map { "## \($0.chunk.label)\n\($0.chunk.text)" })
+            // Group retrieved bullets under one header per file (keeping best-scoring files first).
+            var order: [String] = []
+            var byLabel: [String: [String]] = [:]
+            for item in scored {
+                if byLabel[item.chunk.label] == nil { order.append(item.chunk.label) }
+                byLabel[item.chunk.label, default: []].append(item.chunk.text)
+            }
+            sections.append(contentsOf: order.map { "## \($0)\n\((byLabel[$0] ?? []).joined(separator: "\n"))" })
             trace(conversationID, .memory, "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", settings.memoryThreshold)) injected")
         } catch {
             // Embedding endpoint unavailable: fall back to injecting everything so memory isn't lost.
