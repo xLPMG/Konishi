@@ -205,9 +205,11 @@ struct ChatView: View {
                 .font(.system(size: model.settings.fontSize))
                 .lineLimit(1...8)
                 .padding(.vertical, 4)
-                .onKeyPress(.return) {
-                    // Enter sends; Shift+Enter falls through to insert a newline.
-                    guard !NSEvent.modifierFlags.contains(.shift) else { return .ignored }
+                .onKeyPress(keys: [.return]) { keyPress in
+                    if keyPress.modifiers.contains(.shift) {
+                        model.draft.append("\n")
+                        return .handled
+                    }
                     model.send()
                     return .handled
                 }
