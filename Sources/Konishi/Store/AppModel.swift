@@ -2487,7 +2487,7 @@ final class AppModel {
         let newUserTurns = fresh.filter { $0.role == .user && !$0.content.isEmpty }.count
         guard newUserTurns >= max(1, settings.autoMemoryEvery) else { return }
         let scope = persona(for: convo).memoryScope
-        let bullets = memory.bulletCount(in: scope)
+        let bullets = memory.bulletCount(in: MemoryStore.globalScope) + memory.bulletCount(in: scope)
         let consolidate = settings.autoConsolidate
             && bullets >= max(10, settings.autoConsolidateThreshold)
             && bullets > (lastConsolidatedBullets[scope] ?? 0)
@@ -2507,15 +2507,16 @@ final class AppModel {
     private func runMemoryMaintenance(conversationID: UUID, messages: [ChatMessage], upTo: Int, consolidate: Bool) {
         guard let idx = conversationIndex(conversationID) else { return }
         let persona = persona(for: conversations[idx])
-        let scope = persona.memoryScope
+        let personaScope = persona.memoryScope
+        let globalScope = MemoryStore.globalScope
         let transcript = messages
             .filter { ($0.role == .user || $0.role == .assistant) && !$0.content.isEmpty }
             .map { "\($0.role == .user ? "USER" : "ASSISTANT"): \($0.content)" }
             .joined(separator: "\n\n")
         guard !transcript.isEmpty else { return }
 
-        let snapshot = MemoryProfile.snapshot(store: memory, scope: scope)
-        let beforeMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: memory, scope: scope))
+        let snapshot = MemoryProfile.snapshot(store: memory, global: globalScope, persona: personaScope)
+        let beforeMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: memory, global: globalScope, persona: personaScope))
         let extra = settings.reflectionCustomPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let assistant = assistantName(for: persona)
         let now = Self.dateContext()
@@ -2533,8 +2534,8 @@ final class AppModel {
         isReflecting = true
         isMemorizing = true
         trace(conversationID, .memory, consolidate
-            ? "consolidating memory (\(scope)) on server model…"
-            : "auto memory: updating (\(scope)) on \(useServer ? "server" : "on-device")…")
+            ? "consolidating memory (\(personaScope)) on server model…"
+            : "auto memory: updating (\(personaScope)) on \(useServer ? "server" : "on-device")…")
         Task { [weak self] in
             guard let self else { return }
             defer { self.isReflecting = false; self.isMemorizing = false }
@@ -2572,14 +2573,15 @@ final class AppModel {
                     return
                 }
                 for cat in MemoryCategory.allCases {
+                    let target = cat.targetScope(global: globalScope, persona: personaScope)
                     let body = (sections[cat] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    if body.isEmpty {
-                        self.memory.delete(scope: scope, name: cat.fileName)
+                    if body.isEmpty || body == "(none yet)" {
+                        self.memory.delete(scope: target, name: cat.fileName)
                     } else {
-                        self.memory.write(scope: scope, name: cat.fileName, content: body)
+                        self.memory.write(scope: target, name: cat.fileName, content: body)
                     }
                 }
-                let afterMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: self.memory, scope: scope))
+                let afterMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: self.memory, global: globalScope, persona: personaScope))
                 let changes = MemoryProfile.diff(before: beforeMemory, after: afterMemory)
                 traceDetail = changes.isEmpty ? "(no file changes)" : changes
             } else {
@@ -2587,12 +2589,13 @@ final class AppModel {
                     self.trace(conversationID, .error, "memory update skipped: could not parse typed operations from output")
                     return
                 }
-                let application = MemoryProfile.apply(delta, store: self.memory, scope: scope)
+                let application = MemoryProfile.apply(delta, store: self.memory, global: globalScope, persona: personaScope)
                 for (cat, body) in application.changedBodies {
+                    let target = cat.targetScope(global: globalScope, persona: personaScope)
                     if body.isEmpty {
-                        self.memory.delete(scope: scope, name: cat.fileName)
+                        self.memory.delete(scope: target, name: cat.fileName)
                     } else {
-                        self.memory.write(scope: scope, name: cat.fileName, content: body)
+                        self.memory.write(scope: target, name: cat.fileName, content: body)
                     }
                 }
                 operationSummary = "; \(application.appliedCount) applied, \(application.skippedCount) skipped"
@@ -2602,11 +2605,11 @@ final class AppModel {
                 self.conversations[i].memorizedCount = min(upTo, self.conversations[i].messages.count)
                 self.touch(i)
             }
-            if consolidate { self.lastConsolidatedBullets[scope] = self.memory.bulletCount(in: scope) }
+            if consolidate { self.lastConsolidatedBullets[personaScope] = self.memory.bulletCount(in: globalScope) + self.memory.bulletCount(in: personaScope) }
             let how = consolidate ? "consolidated (server)" : "updated (\(useServer ? "server" : "on-device"))"
             self.trace(
                 conversationID, .memory,
-                "\(how) long-term memory (\(scope)) from \(messages.count) messages\(operationSummary)",
+                "\(how) long-term memory (\(personaScope)) from \(messages.count) messages\(operationSummary)",
                 detail: traceDetail
             )
         }

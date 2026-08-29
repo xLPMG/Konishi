@@ -6,8 +6,8 @@ enum MemoryCategory: String, CaseIterable, Codable, Sendable {
     case profile
     case preferences
     case projects
-    case facts
-    case glossary
+    case people
+    case history
 
     /// File on disk under `~/Konishi/memory/<scope>/`.
     var fileName: String {
@@ -15,8 +15,8 @@ enum MemoryCategory: String, CaseIterable, Codable, Sendable {
         case .profile: "profile.md"
         case .preferences: "preferences.md"
         case .projects: "projects.md"
-        case .facts: "facts.md"
-        case .glossary: "glossary.md"
+        case .people: "people.md"
+        case .history: "history.md"
         }
     }
 
@@ -26,20 +26,34 @@ enum MemoryCategory: String, CaseIterable, Codable, Sendable {
         case .profile: "Profile"
         case .preferences: "Preferences"
         case .projects: "Projects"
-        case .facts: "Facts"
-        case .glossary: "People & Terms"
+        case .people: "People"
+        case .history: "History"
         }
     }
 
     /// One-line description of what belongs in this category.
     var guidance: String {
         switch self {
-        case .profile: "stable identity — name, role, location, hardware, OS, environment"
-        case .preferences: "how they like things — style, tools, conventions, dos and don'ts"
-        case .projects: "ongoing work or projects and their context"
-        case .facts: "durable facts, decisions, and conclusions about their world"
-        case .glossary: "people, systems, and domain terms specific to them"
+        case .profile: "stable identity — name, location, education, occupation, skills, hardware, OS, environment"
+        case .preferences: "how they like to interact — style, tone, tools, conventions, dos and don'ts, likes and dislikes"
+        case .projects: "active or important projects and goals — status, constraints, and decisions"
+        case .people: "people and relationships in their life, each with the context that makes them relevant"
+        case .history: "dated events, completed milestones, and durable past decisions"
         }
+    }
+
+    /// Persona-independent facts about the user live in the shared global scope; interaction
+    /// preferences that differ per assistant live in the persona scope.
+    var isGlobal: Bool {
+        switch self {
+        case .profile, .projects, .people, .history: true
+        case .preferences: false
+        }
+    }
+
+    /// The memory scope this category is stored in, given the active global and persona scopes.
+    func targetScope(global: String, persona: String) -> String {
+        isGlobal ? global : persona
     }
 }
 
@@ -76,14 +90,15 @@ enum MemoryProfile {
     """
 
     /// The current memory rendered as a sectioned document for the prompt.
-    static func snapshot(store: MemoryStore, scope: String) -> String {
-        contents(store: store, scope: scope).map { category, body in
+    static func snapshot(store: MemoryStore, global: String, persona: String) -> String {
+        contents(store: store, global: global, persona: persona).map { category, body in
             "## \(category.header)\n\(body.isEmpty ? "(none yet)" : body)"
         }.joined(separator: "\n\n")
     }
 
-    static func contents(store: MemoryStore, scope: String) -> [(MemoryCategory, String)] {
+    static func contents(store: MemoryStore, global: String, persona: String) -> [(MemoryCategory, String)] {
         MemoryCategory.allCases.map { category in
+            let scope = category.targetScope(global: global, persona: persona)
             let url = Paths.memoryScope(scope).appendingPathComponent(category.fileName)
             let file = MemoryStore.File(scope: scope, name: category.fileName, url: url)
             let body = store.read(file).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -125,7 +140,7 @@ enum MemoryProfile {
         Compare NEW MESSAGES with CURRENT MEMORY and return ONLY the required changes. Do not copy \
         unchanged facts. The application will apply and deduplicate the operations.\(extraLine)
         Output only one JSON object with this shape:
-        {"operations":[{"action":"add|remove|replace","category":"profile|preferences|projects|facts|glossary","fact":"...","replacement":"..."}]}
+        {"operations":[{"action":"add|remove|replace","category":"profile|preferences|projects|people|history","fact":"...","replacement":"..."}]}
 
         For add, fact is the new fact. For remove, fact must exactly identify the existing fact. \
         For replace, fact identifies the existing fact and replacement is the updated wording. \
@@ -152,8 +167,8 @@ enum MemoryProfile {
     }
 
     /// Applies valid operations in order and reports exactly what changed or was rejected.
-    static func apply(_ delta: Delta, store: MemoryStore, scope: String) -> ApplyResult {
-        let before = Dictionary(uniqueKeysWithValues: contents(store: store, scope: scope))
+    static func apply(_ delta: Delta, store: MemoryStore, global: String, persona: String) -> ApplyResult {
+        let before = Dictionary(uniqueKeysWithValues: contents(store: store, global: global, persona: persona))
         var bodies: [MemoryCategory: [String]] = [:]
         var actions: [String] = []
         var appliedCount = 0
