@@ -1,0 +1,32 @@
+# SwiftPM build artifacts
+.build/
+.swiftpm/
+
+# Generated app bundle (assembled by run.sh)
+Konishi.app/
+
+# Xcode
+DerivedData/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+
+# macOS
+.DS_Store
+
+# Editor / misc
+*.swp
+*~
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+credentials.*
+secrets.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
