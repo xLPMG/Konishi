@@ -297,6 +297,9 @@ private struct MessageRow: View {
     var body: some View {
         bubble
             .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
+            .contextMenu {
+                Button("Copy Message", systemImage: "doc.on.doc") { copyMessage() }
+            }
     }
 
     private var bubble: some View {
@@ -400,10 +403,7 @@ private struct MessageRow: View {
 
     private var actions: some View {
         HStack(spacing: 12) {
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(message.content, forType: .string)
-            } label: { Image(systemName: "doc.on.doc") }
+            Button { copyMessage() } label: { Image(systemName: "doc.on.doc") }
             if !isUser {
                 Button { model.speak(message.content) } label: { Image(systemName: "speaker.wave.2") }
                 Button { model.regenerate(messageID: message.id) } label: { Image(systemName: "arrow.clockwise") }
@@ -414,6 +414,11 @@ private struct MessageRow: View {
         }
         .buttonStyle(.plain).font(.caption)
         .foregroundStyle(isUser ? .white.opacity(0.85) : .secondary)
+    }
+
+    private func copyMessage() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(message.content, forType: .string)
     }
 }
 

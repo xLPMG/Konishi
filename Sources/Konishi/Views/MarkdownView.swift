@@ -12,8 +12,15 @@ struct MarkdownView: View {
                 switch block {
                 case let .code(code, language):
                     CodeBlockView(code: code, language: language, baseSize: baseSize)
+                case let .table(headers, rows, alignments):
+                    MarkdownTableView(
+                        headers: headers,
+                        rows: rows,
+                        alignments: alignments,
+                        baseSize: baseSize
+                    )
                 case let .lines(lines):
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                    ForEach(Array(groupedLines(lines).enumerated()), id: \.offset) { _, line in
                         lineView(line)
                     }
                 }
@@ -26,6 +33,11 @@ struct MarkdownView: View {
     private enum Block {
         case lines([String])
         case code(String, String?)
+        case table([String], [[String]], [TableAlignment])
+    }
+
+    fileprivate enum TableAlignment {
+        case leading, center, trailing
     }
 
     private var blocks: [Block] { Self.parse(text) }
@@ -53,7 +65,36 @@ struct MarkdownView: View {
         var language: String?
 
         func flushLines() {
-            if !buffer.isEmpty { result.append(.lines(buffer)); buffer = [] }
+            guard !buffer.isEmpty else { return }
+            var plain: [String] = []
+
+            func flushPlain() {
+                if !plain.isEmpty { result.append(.lines(plain)); plain = [] }
+            }
+
+            var index = 0
+            while index < buffer.count {
+                if index + 1 < buffer.count,
+                   let headers = tableCells(buffer[index]),
+                   let alignments = tableSeparator(buffer[index + 1]),
+                   headers.count == alignments.count {
+                    flushPlain()
+                    var rows: [[String]] = []
+                    index += 2
+                    while index < buffer.count,
+                          let cells = tableCells(buffer[index]),
+                          cells.count == headers.count {
+                        rows.append(cells)
+                        index += 1
+                    }
+                    result.append(.table(headers, rows, alignments))
+                } else {
+                    plain.append(buffer[index])
+                    index += 1
+                }
+            }
+            flushPlain()
+            buffer = []
         }
 
         for line in text.components(separatedBy: "\n") {
@@ -77,7 +118,70 @@ struct MarkdownView: View {
         return result
     }
 
+    private static func tableCells(_ line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("|") else { return nil }
+        var content = trimmed
+        if content.hasPrefix("|") { content.removeFirst() }
+        if content.hasSuffix("|") { content.removeLast() }
+
+        var cells: [String] = []
+        var cell = ""
+        var escaped = false
+        for character in content {
+            if escaped {
+                cell.append(character)
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "|" {
+                cells.append(cell.trimmingCharacters(in: .whitespaces))
+                cell = ""
+            } else {
+                cell.append(character)
+            }
+        }
+        if escaped { cell.append("\\") }
+        cells.append(cell.trimmingCharacters(in: .whitespaces))
+        return cells.count >= 2 ? cells : nil
+    }
+
+    private static func tableSeparator(_ line: String) -> [TableAlignment]? {
+        guard let cells = tableCells(line) else { return nil }
+        var alignments: [TableAlignment] = []
+        for cell in cells {
+            let marker = cell.replacingOccurrences(of: " ", with: "")
+            let leadingColon = marker.hasPrefix(":")
+            let trailingColon = marker.hasSuffix(":")
+            let dashes = marker.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            guard dashes.count >= 3, dashes.allSatisfy({ $0 == "-" }) else { return nil }
+            alignments.append(leadingColon && trailingColon ? .center : trailingColon ? .trailing : .leading)
+        }
+        return alignments
+    }
+
     // MARK: Line rendering
+
+    private func groupedLines(_ lines: [String]) -> [String] {
+        var result: [String] = []
+        var paragraph: [String] = []
+
+        func flushParagraph() {
+            if !paragraph.isEmpty { result.append(paragraph.joined(separator: "\n")); paragraph = [] }
+        }
+
+        for line in lines {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty || headingLevel(line) != nil
+                || isBullet(line) || numberedItem(line) != nil || line.hasPrefix("> ") {
+                flushParagraph()
+                result.append(line)
+            } else {
+                paragraph.append(line)
+            }
+        }
+        flushParagraph()
+        return result
+    }
 
     @ViewBuilder
     private func lineView(_ raw: String) -> some View {
@@ -114,10 +218,44 @@ struct MarkdownView: View {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
         )
-        if let attr = try? AttributedString(markdown: s, options: options) {
+        let displayText = Self.normalizeInlineMath(s)
+        if let attr = try? AttributedString(markdown: displayText, options: options) {
             return Text(attr).font(.system(size: baseSize))
         }
-        return Text(s).font(.system(size: baseSize))
+        return Text(displayText).font(.system(size: baseSize))
+    }
+
+    /// SwiftUI Markdown has no math typesetter; render `$...$` spans as clean inline code
+    /// instead of exposing model-oriented delimiters in the conversation.
+    fileprivate static func normalizeInlineMath(_ text: String) -> String {
+        var result = ""
+        var index = text.startIndex
+        while index < text.endIndex {
+            guard text[index] == "$", index == text.startIndex || text[text.index(before: index)] != "\\" else {
+                result.append(text[index])
+                index = text.index(after: index)
+                continue
+            }
+            let contentStart = text.index(after: index)
+            guard contentStart < text.endIndex,
+                  let close = text[contentStart...].firstIndex(of: "$"),
+                  close > contentStart else {
+                result.append("$")
+                index = contentStart
+                continue
+            }
+            let expression = text[contentStart..<close]
+            if expression.contains("\n") {
+                result.append("$")
+                index = contentStart
+                continue
+            }
+            result.append("`")
+            result.append(contentsOf: expression)
+            result.append("`")
+            index = text.index(after: close)
+        }
+        return result
     }
 
     private func headingLevel(_ line: String) -> Int? {
@@ -143,6 +281,65 @@ struct MarkdownView: View {
         let after = t.dropFirst(digits.count)
         guard after.hasPrefix(". ") else { return nil }
         return (n, String(after.dropFirst(2)))
+    }
+}
+
+private struct MarkdownTableView: View {
+    let headers: [String]
+    let rows: [[String]]
+    let alignments: [MarkdownView.TableAlignment]
+    let baseSize: Double
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+                tableRow(headers, header: true)
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    tableRow(row, header: false)
+                        .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035))
+                }
+            }
+            .overlay(Rectangle().stroke(.separator, lineWidth: 1))
+        }
+    }
+
+    private func tableRow(_ cells: [String], header: Bool) -> some View {
+        GridRow {
+            ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
+                inline(cell)
+                    .fontWeight(header ? .semibold : .regular)
+                    .frame(minWidth: 90, maxWidth: 260, alignment: frameAlignment(index))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .overlay(alignment: .trailing) {
+                        Rectangle().fill(.separator).frame(width: 1)
+                    }
+            }
+        }
+        .background(header ? Color.primary.opacity(0.08) : Color.clear)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.separator).frame(height: 1)
+        }
+    }
+
+    private func inline(_ text: String) -> Text {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        let displayText = MarkdownView.normalizeInlineMath(text)
+        if let attributed = try? AttributedString(markdown: displayText, options: options) {
+            return Text(attributed).font(.system(size: baseSize))
+        }
+        return Text(displayText).font(.system(size: baseSize))
+    }
+
+    private func frameAlignment(_ index: Int) -> Alignment {
+        guard alignments.indices.contains(index) else { return .leading }
+        switch alignments[index] {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
     }
 }
 
