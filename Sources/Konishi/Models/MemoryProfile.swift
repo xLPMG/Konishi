@@ -321,9 +321,11 @@ enum MemoryProfile {
 
         Do a thorough pass: merge duplicate or overlapping bullets (including across categories), \
         move each item to the category it truly belongs in, resolve contradictions in favour of the \
-        most recent information, delete stale or transient items, and tighten the wording of every \
-        bullet. The result should be shorter and better organized than the input, losing no lasting \
-        information about the user.
+        most recent information, and delete stale or transient items. PRESERVE the existing wording \
+        of every bullet you keep — do NOT reword, re-order, or add "Key: value" prefixes to bullets \
+        that are already correct. Change a bullet only to merge a genuine duplicate, resolve a real \
+        contradiction, or drop a stale fact. If nothing is duplicated, contradictory, or stale, \
+        output the memory unchanged. Never drop a fact that is still true.
 
         Categories:
         \(legend)

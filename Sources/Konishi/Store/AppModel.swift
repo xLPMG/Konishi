@@ -1403,10 +1403,8 @@ final class AppModel {
         if isLanguageConversation(conversationID) { return languageDeckContext() }
         guard settings.injectMemory else { return "" }
         let scopes = [MemoryStore.globalScope, persona.memoryScope]
-        if settings.useEmbeddingMemory, let query = history.last(where: { $0.role == .user })?.content {
-            return await retrieveMemory(conversationID: conversationID, scopes: scopes, query: query)
-        }
-        return combinedMemoryCached(scopes: scopes)
+        let query = history.last(where: { $0.role == .user })?.content ?? ""
+        return await retrieveMemory(conversationID: conversationID, scopes: scopes, query: query)
     }
 
     /// Single-entry cache of `memory.combined(scopes:)`, invalidated when any file's mtime changes.
@@ -1421,35 +1419,43 @@ final class AppModel {
         return text
     }
 
+    /// Injects the user's identity (global profile) in full plus the top-K bullets most relevant
+    /// to the current query, so memory can grow large without flooding the context.
     private func retrieveMemory(conversationID: UUID, scopes: [String], query: String) async -> String {
-        // Split memory files into bullet-level blocks so we inject only the matching facts.
+        let profileName = MemoryCategory.profile.fileName
+        let profileScope = MemoryStore.globalScope
+        let profileURL = Paths.memoryScope(profileScope).appendingPathComponent(profileName)
+        let profileBody = memory.read(MemoryStore.File(scope: profileScope, name: profileName, url: profileURL))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var sections: [String] = []
+        if !profileBody.isEmpty { sections.append("## \(profileScope)/\(profileName)\n\(profileBody)") }
+
+        // Every other bullet is a retrieval candidate.
         var chunks: [(label: String, text: String)] = []
         for scope in scopes {
             for file in memory.files(in: scope) {
+                if scope == profileScope, file.name == profileName { continue }
                 for block in MemoryStore.blocks(memory.read(file)) {
                     chunks.append((label: "\(scope)/\(file.name)", text: block))
                 }
             }
         }
-        guard !chunks.isEmpty else { return "" }
-        let modelID = settings.embeddingModel
+        guard !chunks.isEmpty, !query.isEmpty else { return sections.joined(separator: "\n\n") }
         do {
-            let (q, blockEmb) = try await embedWithCache(query: query, blocks: chunks.map(\.text), model: modelID)
+            let (q, blockEmb) = try await embedWithCache(query: query, blocks: chunks.map(\.text), model: settings.embeddingModel)
             let scored = zip(chunks, blockEmb)
                 .map { (chunk: $0.0, score: Self.cosine(q, $0.1)) }
-                .filter { $0.score >= settings.memoryThreshold }   // only fitting memories
+                .filter { $0.score >= settings.memoryThreshold }
                 .sorted { $0.score > $1.score }
-            guard !scored.isEmpty else {
-                trace(conversationID, .memory, "memory retrieval: no bullet scored ≥ \(String(format: "%.2f", settings.memoryThreshold)) (injected none)")
-                return ""
-            }
-            return scored.prefix(max(1, settings.memoryTopK))
-                .map { "## \($0.chunk.label)\n\($0.chunk.text)" }
-                .joined(separator: "\n\n")
+                .prefix(max(1, settings.memoryTopK))
+            sections.append(contentsOf: scored.map { "## \($0.chunk.label)\n\($0.chunk.text)" })
+            trace(conversationID, .memory, "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", settings.memoryThreshold)) injected")
         } catch {
-            trace(conversationID, .error, "memory retrieval failed: \(Self.embedErrorHint(error))")
-            return ""
+            // Embedding endpoint unavailable: fall back to injecting everything so memory isn't lost.
+            trace(conversationID, .error, "memory retrieval failed, injecting all: \(Self.embedErrorHint(error))")
+            return combinedMemoryCached(scopes: scopes)
         }
+        return sections.joined(separator: "\n\n")
     }
 
     /// Describes an embedding failure, hinting at the common cause (server has no embeddings endpoint).
@@ -2474,8 +2480,8 @@ final class AppModel {
     private var lastConsolidatedBullets: [String: Int] = [:]
 
     /// After a completed turn, fold new messages into memory once enough fresh user turns
-    /// have accumulated. Uses the accurate server model (gated by a cheap on-device check)
-    /// unless the user opts for the on-device model. Escalates to a full consolidation once
+    /// have accumulated. The extractor itself decides whether anything is worth saving (it
+    /// returns no operations when nothing is durable). Escalates to a full consolidation once
     /// the memory has grown large, so it stays deduped and compact without manual effort.
     private func updateMemoryIfNeeded(conversationID: UUID) {
         guard settings.autoMemory, !settings.pauseMemoryWrites, !isMemorizing, !isReflecting,
@@ -2494,9 +2500,17 @@ final class AppModel {
         runMemoryMaintenance(conversationID: conversationID, messages: fresh, upTo: convo.messages.count, consolidate: consolidate)
     }
 
-    /// Manual trigger (Reflect button): a deeper, more expensive rewrite of the WHOLE memory
-    /// over the full conversation, using the server (GPU) model.
+    /// Manual "Update Memory": extract durable facts from the whole conversation using the
+    /// same safe, additive delta path as the automatic pass (no full rewrite).
     func reflect() {
+        guard let convo = selectedConversation, !convo.messages.isEmpty,
+              !isReflecting, !isMemorizing else { return }
+        runMemoryMaintenance(conversationID: convo.id, messages: convo.messages, upTo: convo.messages.count, consolidate: false)
+    }
+
+    /// Manual "Clean Up Memory": a full dedup/reorganize rewrite of the whole memory, backed up
+    /// first so it is reversible.
+    func consolidateMemory() {
         guard let convo = selectedConversation, !convo.messages.isEmpty,
               !isReflecting, !isMemorizing else { return }
         runMemoryMaintenance(conversationID: convo.id, messages: convo.messages, upTo: convo.messages.count, consolidate: true)
@@ -2528,37 +2542,20 @@ final class AppModel {
         if settings.disableThinkingForTasks { config.enableThinking = false }
         config.maxTokens = min(config.maxTokens ?? 2000, 2000)
 
-        // Reflect always uses the server; the auto pass follows the user's setting.
-        let useServer = consolidate || settings.autoMemoryUseServer
-
         isReflecting = true
         isMemorizing = true
         trace(conversationID, .memory, consolidate
-            ? "consolidating memory (\(personaScope)) on server model…"
-            : "auto memory: updating (\(personaScope)) on \(useServer ? "server" : "on-device")…")
+            ? "consolidating memory (\(personaScope))…"
+            : "auto memory: updating (\(personaScope))…")
         Task { [weak self] in
             guard let self else { return }
             defer { self.isReflecting = false; self.isMemorizing = false }
-            // Cheap on-device triage before spending the GPU: skip turns requiring no memory change.
-            if !consolidate, useServer,
-               !(await self.memoryGateAllowsUpdate(transcript, currentMemory: snapshot, conversationID: conversationID)) {
-                if let i = self.ensureHydratedIndex(conversationID) {
-                    self.conversations[i].memorizedCount = min(upTo, self.conversations[i].messages.count)
-                    self.touch(i)
-                }
-                self.trace(conversationID, .memory, "auto memory: no durable info in \(messages.count) messages (skipped)")
-                return
-            }
             let result: String?
-            if useServer {
-                do {
-                    result = try await ChatService.completeStreaming(config: config, messages: [WireMessage(role: Role.user.rawValue, text: instruction)])
-                } catch {
-                    self.trace(conversationID, .error, "\(consolidate ? "reflect" : "auto memory") failed: \(error.localizedDescription)")
-                    return
-                }
-            } else {
-                result = await self.onDeviceComplete(prompt: instruction, config: config)
+            do {
+                result = try await ChatService.completeStreaming(config: config, messages: [WireMessage(role: Role.user.rawValue, text: instruction)])
+            } catch {
+                self.trace(conversationID, .error, "\(consolidate ? "memory cleanup" : "auto memory") failed: \(error.localizedDescription)")
+                return
             }
             guard let result, !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 self.trace(conversationID, .error, "memory update produced no output (model returned an empty reply)")
@@ -2571,6 +2568,9 @@ final class AppModel {
                 guard !sections.isEmpty else {
                     self.trace(conversationID, .error, "memory consolidation skipped: could not parse category sections from output")
                     return
+                }
+                if let backupURL = self.memory.backup(scopes: [globalScope, personaScope]) {
+                    self.trace(conversationID, .memory, "backed up memory before cleanup → \(backupURL.lastPathComponent)")
                 }
                 for cat in MemoryCategory.allCases {
                     let target = cat.targetScope(global: globalScope, persona: personaScope)
@@ -2606,40 +2606,13 @@ final class AppModel {
                 self.touch(i)
             }
             if consolidate { self.lastConsolidatedBullets[personaScope] = self.memory.bulletCount(in: globalScope) + self.memory.bulletCount(in: personaScope) }
-            let how = consolidate ? "consolidated (server)" : "updated (\(useServer ? "server" : "on-device"))"
+            let how = consolidate ? "cleaned up" : "updated"
             self.trace(
                 conversationID, .memory,
                 "\(how) long-term memory (\(personaScope)) from \(messages.count) messages\(operationSummary)",
                 detail: traceDetail
             )
         }
-    }
-
-    /// One-shot on-device yes/no: does this snippet require any durable memory change?
-    /// Returns true (proceed) when the on-device model is unavailable, so nothing is silently dropped.
-    private func memoryGateAllowsUpdate(_ transcript: String, currentMemory: String, conversationID: UUID) async -> Bool {
-        guard settings.useOnDeviceModel, OnDeviceLLM.isAvailable else {
-            trace(conversationID, .memory, "memory gate: on-device model unavailable — extracting anyway")
-            return true
-        }
-        let prompt = """
-        \(MemoryProfile.contentPolicy)
-
-        Does the conversation require ANY change to CURRENT MEMORY about the USER? Answer YES when it \
-        adds a durable fact, corrects or contradicts an existing fact, changes a preference, or asks to \
-        forget/remove something. Answer NO only when memory should remain exactly unchanged. Ignore the \
-        assistant's own words. Answer with only YES or NO.
-
-        CURRENT MEMORY:
-        \(currentMemory)
-
-        CONVERSATION:
-        \(transcript)
-        """
-        let answer = (await OnDeviceLLM.complete(prompt: prompt, temperature: 0))?.uppercased() ?? "YES"
-        let save = answer.contains("YES")
-        trace(conversationID, .memory, "memory gate (ANE): \(save ? "YES — durable info, extracting" : "NO — nothing durable")")
-        return save
     }
 
     // MARK: - Server info

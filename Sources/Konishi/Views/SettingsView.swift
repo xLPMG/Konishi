@@ -163,10 +163,6 @@ private struct MemorySettings: View {
                         LabeledContent("Update every",
                                        value: "\(settings.autoMemoryEvery) message\(settings.autoMemoryEvery == 1 ? "" : "s")")
                     }
-                    Picker("Extract with", selection: $settings.autoMemoryUseServer) {
-                        Text("Server model (accurate)").tag(true)
-                        Text("On-device model (fast)").tag(false)
-                    }
                     TextField("Extra memory instruction (optional)", text: $settings.reflectionCustomPrompt, axis: .vertical)
                         .lineLimit(1...3)
                     Toggle("Self-consolidate when memory grows", isOn: $settings.autoConsolidate)
@@ -176,17 +172,16 @@ private struct MemorySettings: View {
                         }
                     }
                 }
-                Text("Konishi keeps a structured profile about you (profile, preferences, projects, facts, people & terms). The server model is more accurate; a quick on-device check first decides whether a turn is worth extracting, so the GPU only runs when there's something to save. Once memory passes the note count above, an automatic pass dedupes and reorganizes it so it stays compact. The Reflect button (brain icon) rewrites the whole memory on the server.")
+                Text("Konishi keeps a structured profile about you (profile, preferences, projects, people, history). Every few messages it extracts durable facts on the server model; if a turn has nothing worth saving, nothing changes. Once memory passes the note count above, an automatic pass dedupes and reorganizes it. Update Memory extracts from the current chat; Clean Up Memory does a full backed-up reorganize.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Long-term Memory") {
                 Toggle("Inject memory into system prompt", isOn: $settings.injectMemory)
                 Toggle("Tell the model today's date", isOn: $settings.injectDateContext)
-                Toggle("Retrieve relevant memory via embeddings", isOn: $settings.useEmbeddingMemory)
-                if settings.useEmbeddingMemory {
+                if settings.injectMemory {
                     ModelSelectField(title: "Embedding model", selection: $settings.embeddingModel, models: model.embeddingCandidates)
-                    Stepper(value: $settings.memoryTopK, in: 1...20) {
-                        LabeledContent("Max chunks", value: "\(settings.memoryTopK)")
+                    Stepper(value: $settings.memoryTopK, in: 1...50) {
+                        LabeledContent("Facts per turn", value: "\(settings.memoryTopK)")
                     }
                     VStack(alignment: .leading) {
                         HStack {
@@ -197,6 +192,8 @@ private struct MemorySettings: View {
                         }
                         Slider(value: $settings.memoryThreshold, in: 0...0.9, step: 0.05)
                     }
+                    Text("Your identity profile is always included; other facts are retrieved by relevance to the current message, so memory can grow large without flooding the prompt. Needs an embedding model — if it's unavailable, all memory is injected as a fallback.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             Section("Attached documents (RAG)") {

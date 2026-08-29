@@ -75,6 +75,32 @@ struct MemoryStore {
         return parts.joined(separator: "|")
     }
 
+    /// Copies every memory file in the given scopes into a timestamped backup folder. Returns it,
+    /// or nil if there was nothing to back up.
+    @discardableResult
+    func backup(scopes: [String]) -> URL? {
+        let fm = FileManager.default
+        let root = Paths.memoryBackup(Self.backupStamp())
+        var copied = false
+        for scope in scopes {
+            let scopeFiles = files(in: scope)
+            guard !scopeFiles.isEmpty else { continue }
+            let dir = root.appendingPathComponent(scope, isDirectory: true)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            for file in scopeFiles {
+                try? fm.copyItem(at: file.url, to: dir.appendingPathComponent(file.name))
+                copied = true
+            }
+        }
+        return copied ? root : nil
+    }
+
+    private static func backupStamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd-HHmmss"
+        return f.string(from: Date())
+    }
+
     /// Splits a memory file into individual bullet/line blocks. Structured memory files are
     /// single-newline bullet lists, so retrieval and counting must work line-by-line.
     static func blocks(_ text: String) -> [String] {

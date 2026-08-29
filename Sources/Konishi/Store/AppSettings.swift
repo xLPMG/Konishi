@@ -145,10 +145,6 @@ final class AppSettings {
     var autoMemoryEvery: Int {
         didSet { defaults.set(autoMemoryEvery, forKey: Keys.autoMemoryEvery) }
     }
-    /// Use the accurate server model (gated by a cheap on-device check) for automatic memory.
-    var autoMemoryUseServer: Bool {
-        didSet { defaults.set(autoMemoryUseServer, forKey: Keys.autoMemoryUseServer) }
-    }
     /// Pause automatically writing new memories. Existing memory is still injected/retrieved and
     /// the manual Reflect button still extracts on demand.
     var pauseMemoryWrites: Bool {
@@ -212,9 +208,6 @@ final class AppSettings {
     /// Route cheap auxiliary tasks (summaries, reflection) to Apple's on-device model.
     var useOnDeviceModel: Bool {
         didSet { defaults.set(useOnDeviceModel, forKey: Keys.useOnDeviceModel) }
-    }
-    var useEmbeddingMemory: Bool {
-        didSet { defaults.set(useEmbeddingMemory, forKey: Keys.useEmbeddingMemory) }
     }
     var embeddingModel: String {
         didSet { defaults.set(embeddingModel, forKey: Keys.embeddingModel) }
@@ -307,7 +300,6 @@ final class AppSettings {
         self.reflectionCustomPrompt = defaults.string(forKey: Keys.reflectionCustomPrompt) ?? ""
         self.autoMemory = defaults.object(forKey: Keys.autoMemory) as? Bool ?? true
         self.autoMemoryEvery = defaults.object(forKey: Keys.autoMemoryEvery) as? Int ?? 2
-        self.autoMemoryUseServer = defaults.object(forKey: Keys.autoMemoryUseServer) as? Bool ?? true
         self.pauseMemoryWrites = defaults.object(forKey: Keys.pauseMemoryWrites) as? Bool ?? false
         self.autoConsolidate = defaults.object(forKey: Keys.autoConsolidate) as? Bool ?? true
         self.autoConsolidateThreshold = defaults.object(forKey: Keys.autoConsolidateThreshold) as? Int ?? 40
@@ -349,9 +341,8 @@ final class AppSettings {
         self.autoApproveByMode = autoByMode
         self.sendImagesToModel = defaults.object(forKey: Keys.sendImagesToModel) as? Bool ?? false
         self.useOnDeviceModel = defaults.object(forKey: Keys.useOnDeviceModel) as? Bool ?? true
-        self.useEmbeddingMemory = defaults.object(forKey: Keys.useEmbeddingMemory) as? Bool ?? false
         self.embeddingModel = defaults.string(forKey: Keys.embeddingModel) ?? "text-embedding-nomic-embed-text-v1.5"
-        self.memoryTopK = defaults.object(forKey: Keys.memoryTopK) as? Int ?? 5
+        self.memoryTopK = defaults.object(forKey: Keys.memoryTopK) as? Int ?? 10
         self.memoryThreshold = defaults.object(forKey: Keys.memoryThreshold) as? Double ?? 0.4
         self.autoSpeak = defaults.object(forKey: Keys.autoSpeak) as? Bool ?? false
         self.voiceIdentifier = defaults.string(forKey: Keys.voiceIdentifier) ?? ""
@@ -468,7 +459,6 @@ final class AppSettings {
         static let reflectionCustomPrompt = "konishi.reflectionCustomPrompt"
         static let autoMemory = "konishi.autoMemory"
         static let autoMemoryEvery = "konishi.autoMemoryEvery"
-        static let autoMemoryUseServer = "konishi.autoMemoryUseServer"
         static let pauseMemoryWrites = "konishi.pauseMemoryWrites"
         static let autoConsolidate = "konishi.autoConsolidate"
         static let autoConsolidateThreshold = "konishi.autoConsolidateThreshold"
@@ -483,7 +473,6 @@ final class AppSettings {
         static let sendImagesToModel = "konishi.sendImagesToModel"
         static let useOnDeviceModel = "konishi.useOnDeviceModel"
         static let settingsVersion = "konishi.settingsVersion"
-        static let useEmbeddingMemory = "konishi.useEmbeddingMemory"
         static let embeddingModel = "konishi.embeddingModel"
         static let memoryTopK = "konishi.memoryTopK"
         static let memoryThreshold = "konishi.memoryThreshold"

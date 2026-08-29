@@ -69,7 +69,11 @@ struct RootView: View {
                             Label("Open Memory…", systemImage: "tray.full")
                         }
                         Button { model.reflect() } label: {
-                            Label("Update Memory Now", systemImage: "brain.head.profile")
+                            Label("Update Memory", systemImage: "brain.head.profile")
+                        }
+                        .disabled(model.selectedConversation?.messages.isEmpty ?? true)
+                        Button { model.consolidateMemory() } label: {
+                            Label("Clean Up Memory", systemImage: "wand.and.stars")
                         }
                         .disabled(model.selectedConversation?.messages.isEmpty ?? true)
                         Divider()

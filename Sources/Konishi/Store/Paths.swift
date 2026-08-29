@@ -24,6 +24,8 @@ enum Paths {
     /// Language-learning data (profiles + spaced-repetition deck).
     static let language = root.appendingPathComponent("language", isDirectory: true)
     static let languageDB = language.appendingPathComponent("deck.sqlite")
+    /// Timestamped snapshots of memory taken before a consolidation rewrite (reversible).
+    static let memoryBackups = root.appendingPathComponent("memory-backups", isDirectory: true)
 
     static func traceFile(_ id: UUID) -> URL {
         try? FileManager.default.createDirectory(at: traces, withIntermediateDirectories: true)
@@ -43,6 +45,12 @@ enum Paths {
 
     static func memoryScope(_ scope: String) -> URL {
         let url = memory.appendingPathComponent(scope, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    static func memoryBackup(_ name: String) -> URL {
+        let url = memoryBackups.appendingPathComponent(name, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
