@@ -6,6 +6,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
     case files
     case web
     case compute
+    case system
     case language
     case interactive
 
@@ -17,6 +18,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
         case .files: "Files"
         case .web: "Web"
         case .compute: "Compute"
+        case .system: "System"
         case .language: "Language deck"
         case .interactive: "Interactive"
         }
@@ -180,6 +182,23 @@ enum Tools {
                 required: ["code"]
             ),
             group: .compute, mutating: true,
+            defaultEnabled: false, defaultAutoApprove: false
+        ),
+
+        // MARK: System
+        ToolSpec(
+            name: "run_shell",
+            summary: "Run an arbitrary shell command",
+            description: "Run a command on the user's system with /bin/zsh -lc and return its exit status and combined output.",
+            parameters: .schema(
+                properties: [
+                    "command": .property("string", "the complete shell command to run"),
+                    "working_directory": .property("string", "optional absolute or ~-relative working directory"),
+                    "timeout_seconds": .property("integer", "timeout in seconds (default 120, maximum 600)")
+                ],
+                required: ["command"]
+            ),
+            group: .system, mutating: true,
             defaultEnabled: false, defaultAutoApprove: false
         )
     ]

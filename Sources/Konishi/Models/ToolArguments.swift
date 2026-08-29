@@ -25,6 +25,11 @@ enum ToolArguments {
         var maxSources: Int?
     }
     struct Python: Decodable { let code: String }
+    struct Shell: Decodable {
+        let command: String
+        var workingDirectory: String?
+        var timeoutSeconds: Int?
+    }
     struct Calculation: Decodable { let expression: String }
     struct DueItems: Decodable { var limit: Int? }
 

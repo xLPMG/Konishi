@@ -791,7 +791,7 @@ final class AppModel {
             let needsMore = !hasContent || toolCalls.contains { Self.continuationTools.contains($0.function.name ?? "") }
             let batch = PendingToolBatch(conversationID: conversationID, calls: toolCalls, continueAfter: needsMore)
             let names = toolCalls.compactMap { $0.function.name }
-            if !names.isEmpty && names.allSatisfy({ settings.autoApproveTools(for: mode).contains($0) }) {
+            if !names.isEmpty && toolCalls.allSatisfy({ toolCallIsAutoApproved($0, mode: mode) }) {
                 activity = "Calling \(names.joined(separator: ", "))…"
                 executeAndContinue(batch: batch, approved: true)   // auto-approved: keeps streaming
             } else {
@@ -870,6 +870,13 @@ final class AppModel {
         "get_due_items", "search_deck", "web_search", "web_fetch", "web_research", "file_read",
         "memory_list", "memory_read", "calculate", "python_exec", "ask_multiple_choice"
     ]
+
+    private func toolCallIsAutoApproved(_ call: ToolCall, mode: AppMode) -> Bool {
+        guard let name = call.function.name else { return false }
+        if settings.autoApproveTools(for: mode).contains(name) { return true }
+        guard name == "run_shell", let args: ToolArguments.Shell = Self.decodeToolArgs(call) else { return false }
+        return settings.shellCommandIsAutoApproved(args.command, for: mode)
+    }
 
     func approveTools() {
         guard let batch = pendingApproval else { return }
@@ -1061,6 +1068,20 @@ final class AppModel {
             let (status, out) = await runtime.runPythonCapture(args.code, workdir: workdir)
             let body = out.isEmpty ? "(no output — remember to print() results)" : String(out.prefix(12_000))
             return "exit \(status)\n\(body)"
+        case "run_shell":
+            guard toolEnabled("run_shell") else {
+                return "Error: run_shell is disabled (enable it in Settings › Tools)"
+            }
+            guard let args: ToolArguments.Shell = Self.decodeToolArgs(call),
+                  !args.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return "Error: missing command"
+            }
+            let (status, output) = await runtime.runShellCapture(
+                args.command,
+                workingDirectory: args.workingDirectory,
+                timeoutSeconds: args.timeoutSeconds ?? 120
+            )
+            return "exit \(status)\n\(output.isEmpty ? "(no output)" : output)"
         case "add_vocab", "add_grammar":
             guard toolEnabled(call.function.name ?? "") else { return "Error: tool disabled" }
             guard let profile = activeLanguageProfile else { return "Error: no active language profile" }

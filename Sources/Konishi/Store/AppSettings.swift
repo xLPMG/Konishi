@@ -179,6 +179,8 @@ final class AppSettings {
     var enabledToolsByMode: [String: Set<String>] = [:]
     /// Per-mode auto-approved tools (keyed by AppMode.rawValue). Absent entry = that mode's defaults.
     var autoApproveByMode: [String: Set<String>] = [:]
+    /// Per-mode executable names that may bypass run_shell's general approval requirement.
+    var shellAutoApproveCommandsByMode: [String: String] = [:]
 
     /// Tools enabled for a mode; falls back to that mode's defaults until customised.
     func enabledTools(for mode: AppMode) -> Set<String> {
@@ -199,6 +201,40 @@ final class AppSettings {
         if on { set.insert(name) } else { set.remove(name) }
         autoApproveByMode[mode.rawValue] = set
         defaults.set(Array(set), forKey: Keys.autoApproveKey(mode))
+    }
+    func shellAutoApproveCommands(for mode: AppMode) -> String {
+        shellAutoApproveCommandsByMode[mode.rawValue] ?? ""
+    }
+    func setShellAutoApproveCommands(_ commands: String, for mode: AppMode) {
+        shellAutoApproveCommandsByMode[mode.rawValue] = commands
+        defaults.set(commands, forKey: Keys.shellAutoApproveCommandsKey(mode))
+    }
+
+    /// Only simple invocations can bypass approval. Shell composition and substitutions must
+    /// still be reviewed, even when the executable itself is listed.
+    func shellCommandIsAutoApproved(_ command: String, for mode: AppMode) -> Bool {
+        let allowed = Set(shellAutoApproveCommands(for: mode)
+            .split(whereSeparator: \Character.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty })
+        guard !allowed.isEmpty else { return false }
+
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unsafeSyntax = CharacterSet(charactersIn: "\n\r;&|<>`$()")
+        guard !trimmed.isEmpty, trimmed.rangeOfCharacter(from: unsafeSyntax) == nil,
+              let first = trimmed.split(whereSeparator: \Character.isWhitespace).first else { return false }
+        let executable = String(first)
+        let validName = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._/+"))
+        guard executable.unicodeScalars.allSatisfy(validName.contains) else { return false }
+        let name = URL(fileURLWithPath: executable).lastPathComponent
+        guard allowed.contains(executable) || allowed.contains(name) else { return false }
+
+        if name == "find" {
+            let mutatingActions = ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]
+            let arguments = trimmed.split(whereSeparator: \Character.isWhitespace).dropFirst().map(String.init)
+            guard !arguments.contains(where: { mutatingActions.contains($0.lowercased()) }) else { return false }
+        }
+        return true
     }
     /// Send attached/generated images to the model. Needs a vision-capable server (mlx-vlm or
     /// LM Studio with a vision model); mlx_lm.server is text-only and rejects image content.
@@ -339,6 +375,9 @@ final class AppSettings {
         }
         self.enabledToolsByMode = enabledByMode
         self.autoApproveByMode = autoByMode
+        self.shellAutoApproveCommandsByMode = Dictionary(uniqueKeysWithValues: AppMode.allCases.compactMap { mode in
+            defaults.string(forKey: Keys.shellAutoApproveCommandsKey(mode)).map { (mode.rawValue, $0) }
+        })
         self.sendImagesToModel = defaults.object(forKey: Keys.sendImagesToModel) as? Bool ?? false
         self.useOnDeviceModel = defaults.object(forKey: Keys.useOnDeviceModel) as? Bool ?? true
         self.embeddingModel = defaults.string(forKey: Keys.embeddingModel) ?? "text-embedding-nomic-embed-text-v1.5"
@@ -470,6 +509,7 @@ final class AppSettings {
         static let autoApproveTools = "konishi.autoApproveTools"
         static func enabledToolsKey(_ mode: AppMode) -> String { "konishi.enabledTools." + mode.rawValue }
         static func autoApproveKey(_ mode: AppMode) -> String { "konishi.autoApprove." + mode.rawValue }
+        static func shellAutoApproveCommandsKey(_ mode: AppMode) -> String { "konishi.shellAutoApproveCommands." + mode.rawValue }
         static let sendImagesToModel = "konishi.sendImagesToModel"
         static let useOnDeviceModel = "konishi.useOnDeviceModel"
         static let settingsVersion = "konishi.settingsVersion"

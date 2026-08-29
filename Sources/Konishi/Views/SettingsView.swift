@@ -250,6 +250,20 @@ private struct ToolsSettings: View {
                     .disabled(!settings.toolsEnabled)
                 }
             }
+            Section {
+                TextEditor(text: Binding(
+                    get: { settings.shellAutoApproveCommands(for: toolMode) },
+                    set: { settings.setShellAutoApproveCommands($0, for: toolMode) }
+                ))
+                .font(.body.monospaced())
+                .frame(height: 72)
+                .disabled(!settings.toolsEnabled || !settings.enabledTools(for: toolMode).contains("run_shell"))
+            } header: {
+                Text("Shell auto-approval")
+            } footer: {
+                Text("One executable per line, for example ls or find. Simple invocations bypass approval even when run_shell Auto is off. Pipes, chaining, redirects, substitutions, and mutating find actions still require approval.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

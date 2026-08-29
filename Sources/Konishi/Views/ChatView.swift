@@ -270,9 +270,35 @@ private struct ToolApprovalBar: View {
             Label("The model wants to run \(batch.calls.count) tool call(s)", systemImage: "wrench.and.screwdriver.fill")
                 .font(.callout.weight(.semibold))
             ForEach(batch.calls) { call in
-                Text("• \(call.function.name ?? "tool")(\(call.function.arguments))")
-                    .font(.system(size: 12, design: .monospaced))
-                    .lineLimit(2).textSelection(.enabled)
+                if call.function.name == "run_shell",
+                   let args: ToolArguments.Shell = decodeArguments(call) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("Shell command", systemImage: "terminal")
+                            .font(.caption.weight(.semibold))
+                        ScrollView([.horizontal, .vertical]) {
+                            Text(args.command)
+                                .font(.system(size: 12, design: .monospaced))
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: true, vertical: true)
+                        }
+                            .defaultScrollAnchor(.topLeading)
+                        .frame(height: 18)
+                        .padding(6)
+                        .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                        Text("Working directory: \(args.workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Text("Timeout: \(max(1, min(args.timeoutSeconds ?? 120, 600))) seconds")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("• \(call.function.name ?? "tool")(\(call.function.arguments))")
+                        .font(.system(size: 12, design: .monospaced))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
             }
             HStack {
                 Button("Approve") { model.approveTools() }.buttonStyle(.borderedProminent)
@@ -283,6 +309,11 @@ private struct ToolApprovalBar: View {
         .padding(10)
         .background(model.currentAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 12).padding(.top, 8)
+    }
+
+    private func decodeArguments<T: Decodable>(_ call: ToolCall) -> T? {
+        guard let data = call.function.arguments.data(using: .utf8) else { return nil }
+        return try? Wire.decoder.decode(T.self, from: data)
     }
 }
 

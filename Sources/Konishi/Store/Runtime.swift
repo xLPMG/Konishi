@@ -322,6 +322,66 @@ final class Runtime {
         return await Self.runCapture(python: py, script: tmp.path, workdir: workdir, timeout: timeout, cleanup: tmp)
     }
 
+    /// Run an approved command through the login shell and capture bounded combined output.
+    func runShellCapture(
+        _ command: String,
+        workingDirectory: String?,
+        timeoutSeconds: Int
+    ) async -> (Int32, String) {
+        let directory: URL
+        if let workingDirectory, !workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            directory = URL(
+                fileURLWithPath: (workingDirectory as NSString).expandingTildeInPath,
+                isDirectory: true
+            )
+        } else {
+            directory = FileManager.default.homeDirectoryForCurrentUser
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return (-1, "Working directory does not exist: \(directory.path)")
+        }
+        return await Self.runShellCommand(
+            command,
+            workdir: directory,
+            timeout: .seconds(max(1, min(timeoutSeconds, 600)))
+        )
+    }
+
+    private static func runShellCommand(
+        _ command: String,
+        workdir: URL,
+        timeout: Duration
+    ) async -> (Int32, String) {
+        await Task.detached {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            proc.arguments = ["-lc", command]
+            proc.currentDirectoryURL = workdir
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = pipe
+            do {
+                try proc.run()
+            } catch {
+                return (Int32(-1), "Failed to launch shell: \(error.localizedDescription)")
+            }
+            let watchdog = Task {
+                try? await Task.sleep(for: timeout)
+                if proc.isRunning { proc.terminate() }
+            }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            watchdog.cancel()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            let capped = output.count > 20_000
+                ? String(output.prefix(20_000)) + "\n… (output truncated)"
+                : output
+            return (proc.terminationStatus, capped)
+        }.value
+    }
+
     /// A Python string literal for embedding a path in the bootstrap.
     private static func pyQuote(_ s: String) -> String {
         "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
