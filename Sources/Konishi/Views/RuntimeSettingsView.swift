@@ -203,13 +203,8 @@ private struct ManagedServerRow: View {
                 TextField("Command", text: $draft.command, axis: .vertical)
                     .font(.system(size: 12, design: .monospaced))
                     .lineLimit(1...3)
-                HStack {
-                    Stepper(value: $draft.port, in: 1024...65535) {
-                        LabeledContent("Port", value: "\(draft.port)")
-                    }
-                }
-                Text("This field sets the port — Konishi adds --port automatically, so leave it out of the command.")
-                    .font(.caption).foregroundStyle(.secondary)
+                TextField("Host", text: $draft.host)
+                NumberField("Port", value: $draft.port, range: 1024...65535, step: 1)
                 Picker("Role", selection: $draft.role) {
                     ForEach(ManagedServer.Role.allCases) { Text($0.label).tag($0) }
                 }

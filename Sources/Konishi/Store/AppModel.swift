@@ -2805,36 +2805,36 @@ final class AppModel {
     }
 
     private func pointChat(at server: ManagedServer) {
-        settings.baseURL = "http://127.0.0.1:\(server.effectivePort)"
+        settings.baseURL = "http://127.0.0.1:\(server.port)"
         settings.apiToken = ""
         refreshServerInfo()
     }
 
     private func pointAudio(at server: ManagedServer) {
-        settings.audioBaseURL = "http://127.0.0.1:\(server.effectivePort)"
+        settings.audioBaseURL = "http://127.0.0.1:\(server.port)"
         refreshAudioModels()
     }
 
     private func pointEmbedding(at server: ManagedServer) {
-        settings.embeddingBaseURL = "http://127.0.0.1:\(server.effectivePort)"
+        settings.embeddingBaseURL = "http://127.0.0.1:\(server.port)"
     }
 
     /// Point the chat endpoint at a locally-running managed server.
     func useForChat(_ server: ManagedServer) {
-        settings.baseURL = "http://127.0.0.1:\(server.effectivePort)"
+        settings.baseURL = "http://127.0.0.1:\(server.port)"
         settings.apiToken = ""
         refreshServerInfo()
     }
 
     /// Point the audio (STT/TTS) endpoint at a locally-running managed server.
     func useForAudio(_ server: ManagedServer) {
-        settings.audioBaseURL = "http://127.0.0.1:\(server.effectivePort)"
+        settings.audioBaseURL = "http://127.0.0.1:\(server.port)"
         refreshAudioModels()
     }
 
     /// Point the embeddings endpoint at a locally-running managed server.
     func useForEmbeddings(_ server: ManagedServer) {
-        settings.embeddingBaseURL = "http://127.0.0.1:\(server.effectivePort)"
+        settings.embeddingBaseURL = "http://127.0.0.1:\(server.port)"
     }
 
     // MARK: - Persona management

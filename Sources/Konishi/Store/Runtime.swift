@@ -85,7 +85,7 @@ final class Runtime {
                 statuses[server.id] = .running   // ours from a prior session (tentative until HTTP-verified)
                 startTailing(server.id)
                 verifyAdopted(server, port: rec.port)
-            } else if Self.portInUse(server.effectivePort) {
+            } else if Self.portInUse(server.port) {
                 records[server.id] = nil         // any stale PID no longer owns this port
                 statuses[server.id] = .running   // tentative — started outside Konishi, or a zombie
                 verifyAdopted(server)
@@ -108,7 +108,7 @@ final class Runtime {
     /// otherwise mark it failed so the UI doesn't claim it's usable. (It stays stoppable — we
     /// still hold its PID/port.)
     private func verifyAdopted(_ server: ManagedServer, port: Int? = nil) {
-        let port = port ?? server.effectivePort
+        let port = port ?? server.port
         let id = server.id
         Task { [weak self] in
             let alive = await Self.httpAlive(port: port)
@@ -425,9 +425,8 @@ final class Runtime {
         statuses[server.id] = .starting
         EmbedServer.ensureInstalled()   // materialise the bundled mlx embeddings server script
         // Free the port first (kill any orphaned holder), pause for the kernel to release it, then exec.
-        let port = server.effectivePort
         let command = server.launchCommand
-        let freePort = "p=$(lsof -ti tcp:\(port) 2>/dev/null); if [ -n \"$p\" ]; then kill -9 $p 2>/dev/null; sleep 0.6; fi; "
+        let freePort = "p=$(lsof -ti tcp:\(server.port) 2>/dev/null); if [ -n \"$p\" ]; then kill -9 $p 2>/dev/null; sleep 0.6; fi; "
         let full = freePort + "export PATH=\"\(venvBinPath):$PATH\"; exec \(command)"
         appendLog("▶︎ \(server.name): \(command)\n")
 
@@ -438,7 +437,7 @@ final class Runtime {
         processes[server.id] = proc
         statuses[server.id] = .running
         // `exec` replaces the login shell, so the shell PID is the server's PID.
-        records[server.id] = RunningRecord(id: server.id, pid: proc.processIdentifier, port: port, name: server.name)
+        records[server.id] = RunningRecord(id: server.id, pid: proc.processIdentifier, port: server.port, name: server.name)
         persistRecords()
         startTailing(server.id)
     }
@@ -454,7 +453,7 @@ final class Runtime {
             return
         }
         records[server.id] = nil                                       // drop any stale record before (re)launching
-        if Self.portInUse(server.effectivePort), await Self.httpAlive(port: server.effectivePort) {
+        if Self.portInUse(server.port), await Self.httpAlive(port: server.port) {
             statuses[server.id] = .running                             // healthy instance started outside Konishi
             startTailing(server.id)
             return
@@ -470,7 +469,7 @@ final class Runtime {
         } else if let rec = records[id], Self.recordOwnsServer(rec) {
             Self.killPID(rec.pid)        // orphan from a prior session — kill by PID (works even if the port was edited)
             Self.killPort(rec.port)
-        } else if let port = servers.first(where: { $0.id == id })?.effectivePort {
+        } else if let port = servers.first(where: { $0.id == id })?.port {
             Self.killPort(port)          // last resort: kill whatever holds the configured port
         }
         records[id] = nil
@@ -506,7 +505,7 @@ final class Runtime {
     }
 
     func addServer() {
-        servers.append(ManagedServer(name: "New Server", pipPackage: "", command: "", port: 8090, role: .none, note: ""))
+        servers.append(ManagedServer(name: "New Server", pipPackage: "", command: "", host: "127.0.0.1", port: 8090, role: .none, note: ""))
         saveServers()
     }
 

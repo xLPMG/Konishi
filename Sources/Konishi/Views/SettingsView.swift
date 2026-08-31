@@ -489,7 +489,7 @@ private struct AppearanceSettings: View {
 }
 
 /// A directly-typable integer field with a stepper for nudging.
-private struct NumberField: View {
+/*private*/ struct NumberField: View {
     let title: String
     @Binding var value: Int
     var range: ClosedRange<Int> = 0...Int.max
