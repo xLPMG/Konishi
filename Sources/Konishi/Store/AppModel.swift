@@ -1483,20 +1483,19 @@ final class AppModel {
         return await retrieveMemory(conversationID: conversationID, scopes: scopes, query: query)
     }
 
-    /// Single-entry cache of `memory.combined(scopes:)`, invalidated when any file's mtime changes.
-    /// Avoids re-reading every memory file from disk on the main actor before each request.
-    private var memoryCache: (scopes: [String], signature: String, text: String)?
-
-    private func combinedMemoryCached(scopes: [String]) -> String {
-        let sig = memory.signature(scopes: scopes)
-        if let c = memoryCache, c.scopes == scopes, c.signature == sig { return c.text }
-        let text = memory.combined(scopes: scopes)
-        memoryCache = (scopes, sig, text)
-        return text
+    private struct ScoredMemoryChunk {
+        // label is the memory chunk's identifier (scope/file), text is the content of the chunk.
+        let chunk: (label: String, text: String)
+        let score: Double
+        let semanticScore: Double?
+        let lexicalScore: Double
+        let rawLexicalScore: Double
     }
 
     /// Injects the user's identity (global profile) in full plus the top-K bullets most relevant
-    /// to the current query, so memory can grow large without flooding the context.
+    /// to the current query, so memory can grow large without flooding the context.  When an
+    /// embeddings endpoint is available, lexical BM25 and semantic similarity are combined;
+    /// otherwise BM25 remains a useful fully-local fallback.
     private func retrieveMemory(conversationID: UUID, scopes: [String], query: String) async -> String {
         let profileName = MemoryCategory.profile.fileName
         let profileScope = MemoryStore.globalScope
@@ -1517,28 +1516,80 @@ final class AppModel {
             }
         }
         guard !chunks.isEmpty, !query.isEmpty else { return sections.joined(separator: "\n\n") }
+        let rawLexicalScores = MemoryRetrieval.bm25(query: query, documents: chunks.map(\.text))
+        let lexicalScores = rawLexicalScores.map(MemoryRetrieval.boundedBM25)
         do {
             let (q, blockEmb) = try await embedWithCache(query: query, blocks: chunks.map(\.text), model: settings.embeddingModel)
-            let scored = zip(chunks, blockEmb)
-                .map { (chunk: $0.0, score: Self.cosine(q, $0.1)) }
+            let semanticScores = blockEmb.map { (Self.cosine(q, $0) + 1.0) / 2.0 } // map cosine to [0, 1] range for comparison with BM25
+            let scored = chunks.indices
+                .map { index in
+                    ScoredMemoryChunk(
+                        chunk: chunks[index],
+                        score: 0.7 * semanticScores[index] + 0.3 * lexicalScores[index],
+                        semanticScore: semanticScores[index],
+                        lexicalScore: lexicalScores[index],
+                        rawLexicalScore: rawLexicalScores[index]
+                    )
+                }
                 .filter { $0.score >= settings.memoryThreshold }
                 .sorted { $0.score > $1.score }
                 .prefix(max(1, settings.memoryTopK))
-            // Group retrieved bullets under one header per file (keeping best-scoring files first).
-            var order: [String] = []
-            var byLabel: [String: [String]] = [:]
-            for item in scored {
-                if byLabel[item.chunk.label] == nil { order.append(item.chunk.label) }
-                byLabel[item.chunk.label, default: []].append(item.chunk.text)
-            }
-            sections.append(contentsOf: order.map { "## \($0)\n\((byLabel[$0] ?? []).joined(separator: "\n"))" })
-            trace(conversationID, .memory, "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", settings.memoryThreshold)) injected")
+            appendMemorySections(Array(scored), to: &sections)
+            trace(
+                conversationID,
+                .memory,
+                "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", settings.memoryThreshold)) injected",
+                detail: memoryRetrievalTraceDetail(Array(scored))
+            )
         } catch {
-            // Embedding endpoint unavailable: fall back to injecting everything so memory isn't lost.
-            trace(conversationID, .error, "memory retrieval failed, injecting all: \(Self.embedErrorHint(error))")
-            return combinedMemoryCached(scopes: scopes)
+            // An embeddings server is optional: retain targeted lexical retrieval when it is down.
+            let scored = chunks.indices
+                .map { index in
+                    ScoredMemoryChunk(
+                        chunk: chunks[index],
+                        score: lexicalScores[index],
+                        semanticScore: nil,
+                        lexicalScore: lexicalScores[index],
+                        rawLexicalScore: rawLexicalScores[index]
+                    )
+                }
+                .filter { $0.score >= 0.2 } // magic number :)
+                .sorted { $0.score > $1.score }
+                .prefix(max(1, settings.memoryTopK))
+            appendMemorySections(Array(scored), to: &sections)
+            trace(
+                conversationID,
+                .error,
+                "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(Self.embedErrorHint(error))",
+                detail: memoryRetrievalTraceDetail(Array(scored))
+            )
         }
         return sections.joined(separator: "\n\n")
+    }
+
+    /// Group selected bullets by source file, preserving score order between files.
+    private func appendMemorySections(_ scored: [ScoredMemoryChunk], to sections: inout [String]) {
+        var order: [String] = []
+        var byLabel: [String: [String]] = [:]
+        for item in scored {
+            if byLabel[item.chunk.label] == nil { order.append(item.chunk.label) }
+            byLabel[item.chunk.label, default: []].append(item.chunk.text)
+        }
+        sections.append(contentsOf: order.map { "## \($0)\n\((byLabel[$0] ?? []).joined(separator: "\n"))" })
+    }
+
+    /// Trace details for the exact bullets injected this turn, in retrieval order.
+    private func memoryRetrievalTraceDetail(_ scored: [ScoredMemoryChunk]) -> String {
+        guard !scored.isEmpty else { return "No memory bullets met the retrieval criteria." }
+        return scored.enumerated().map { rank, item in
+            let scores: String
+            if let semantic = item.semanticScore {
+                scores = "hybrid \(String(format: "%.3f", item.score))  semantic \(String(format: "%.3f", semantic))  BM25 \(String(format: "%.3f", item.lexicalScore)) (raw \(String(format: "%.3f", item.rawLexicalScore)))"
+            } else {
+                scores = "BM25 \(String(format: "%.3f", item.score)) (raw \(String(format: "%.3f", item.rawLexicalScore)))"
+            }
+            return "\(rank + 1). \(scores)\n   \(item.chunk.label)\n   \(item.chunk.text)"
+        }.joined(separator: "\n\n")
     }
 
     /// Describes an embedding failure, hinting at the common cause (server has no embeddings endpoint).

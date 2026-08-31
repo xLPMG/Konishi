@@ -186,14 +186,14 @@ private struct MemorySettings: View {
                     }
                     VStack(alignment: .leading) {
                         HStack {
-                            Text("Match threshold")
+                            Text("Hybrid match threshold")
                             Spacer()
                             Text(settings.memoryThreshold, format: .number.precision(.fractionLength(2)))
                                 .foregroundStyle(.secondary).monospacedDigit()
                         }
-                        Slider(value: $settings.memoryThreshold, in: 0...0.9, step: 0.05)
+                        Slider(value: $settings.memoryThreshold, in: 0...1.0, step: 0.05)
                     }
-                    Text("Your identity profile is always included; other facts are retrieved by relevance to the current message, so memory can grow large without flooding the prompt. Needs an embedding model — if it's unavailable, all memory is injected as a fallback.")
+                    Text("Your identity profile is always included. With embeddings, semantic and BM25 relevance are blended and filtered by this threshold; without them, the top lexical (BM25) matches are used. Retrieved memory is attached to the latest user turn, so memory can grow without flooding the stable system prompt.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

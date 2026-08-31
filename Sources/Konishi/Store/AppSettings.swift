@@ -259,7 +259,8 @@ final class AppSettings {
     var memoryTopK: Int {
         didSet { defaults.set(memoryTopK, forKey: Keys.memoryTopK) }
     }
-    /// Minimum cosine similarity for a memory chunk to be injected (0 = always).
+    /// Minimum hybrid semantic/BM25 score for a memory chunk to be injected when embeddings work.
+    /// BM25-only fallback retrieves positive lexical matches and is governed by top-K instead.
     var memoryThreshold: Double {
         didSet { defaults.set(memoryThreshold, forKey: Keys.memoryThreshold) }
     }
@@ -392,7 +393,7 @@ final class AppSettings {
         self.useOnDeviceModel = defaults.object(forKey: Keys.useOnDeviceModel) as? Bool ?? true
         self.embeddingModel = defaults.string(forKey: Keys.embeddingModel) ?? "text-embedding-nomic-embed-text-v1.5"
         self.memoryTopK = defaults.object(forKey: Keys.memoryTopK) as? Int ?? 10
-        self.memoryThreshold = defaults.object(forKey: Keys.memoryThreshold) as? Double ?? 0.4
+        self.memoryThreshold = defaults.object(forKey: Keys.memoryThreshold) as? Double ?? 0.55
         self.autoSpeak = defaults.object(forKey: Keys.autoSpeak) as? Bool ?? false
         self.voiceIdentifier = defaults.string(forKey: Keys.voiceIdentifier) ?? ""
         self.speechRate = defaults.object(forKey: Keys.speechRate) as? Double ?? 0.5

@@ -18,6 +18,7 @@ xcuserdata/
 # Editor / misc
 *.swp
 *~
+.vscode/
 
 # Local configuration and secrets
 .env
