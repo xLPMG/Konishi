@@ -1893,7 +1893,8 @@ final class AppModel {
         }
         
         // have enough messages passed since the last successful title update?
-        guard currentMsgs.count >= (conversations[idx].lastTitledMessageCount + messageThreshold) else { return }
+        guard currentMsgs.count >= ((conversations[idx].lastTitledMessageCount ?? 0) + messageThreshold) 
+            else { return }
         
         let contextWindow = 8 // TODO: extract this as a setting or use messageThreshold?
         let transcript = currentMsgs.suffix(contextWindow) // last messages
