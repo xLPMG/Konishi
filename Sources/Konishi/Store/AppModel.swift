@@ -515,7 +515,8 @@ final class AppModel {
         let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
         let history = Array(allHistory.dropFirst(folded))
         let summary = conversations[idx].summary ?? ""
-        let config = settings.requestConfig(modelOverride: persona.model)
+        var config = settings.requestConfig(modelOverride: persona.model)
+        config.enableThinking = settings.reasoningEnabled
         let tools: [ToolDef]?
         if mode == .language {
             tools = Tools.definitions(enabled: settings.enabledTools(for: .language))
@@ -545,6 +546,7 @@ final class AppModel {
             var charCount = 0
             var deltaCount = 0
             var reasoning = ""
+            var answer = ""
             var finishReason: String?
             var usage: Usage?
             var toolCalls: [ToolCall]?
@@ -560,14 +562,19 @@ final class AppModel {
                             self.trace(conversationID, .token, String(format: "First token after %.0f ms", Date().timeIntervalSince(start) * 1000))
                         }
                         let out = stripper.consume(d)
-                        if !out.reasoning.isEmpty { reasoning += out.reasoning }
+                        if !out.reasoning.isEmpty {
+                            reasoning += out.reasoning
+                            self.appendReasoning(out.reasoning, conversationID: conversationID, assistantID: assistantID)
+                        }
                         if !out.visible.isEmpty {
                             deltaCount += 1
                             charCount += out.visible.count
+                            answer += out.visible
                             self.appendDelta(out.visible, conversationID: conversationID, assistantID: assistantID)
                         }
                     case let .reasoning(r):
                         reasoning += r
+                        self.appendReasoning(r, conversationID: conversationID, assistantID: assistantID)
                     case let .usage(u):
                         usage = u
                         self.trace(conversationID, .usage, "prompt=\(u.promptTokens ?? 0), completion=\(u.completionTokens ?? 0), total=\(u.totalTokens ?? 0)")
@@ -586,10 +593,14 @@ final class AppModel {
                 if !tail.visible.isEmpty {
                     deltaCount += 1
                     charCount += tail.visible.count
+                    answer += tail.visible
                     self.appendDelta(tail.visible, conversationID: conversationID, assistantID: assistantID)
                 }
                 if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     self.trace(conversationID, .reasoning, reasoning)
+                }
+                if !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.trace(conversationID, .result, answer)
                 }
                 if deltaCount == 0 && (toolCalls?.isEmpty ?? true) {
                     if finishReason == "length" {
@@ -622,6 +633,10 @@ final class AppModel {
     // markdown) a few times per second instead of once per token.
     private var deltaBuffer = ""
     private var flushTask: Task<Void, Never>?
+    /// Buffered reasoning tokens, flushed on the same cadence as content so the disclosure updates
+    /// a few times per second instead of once per token.
+    private var reasoningBuffer = ""
+    private var reasoningFlushTask: Task<Void, Never>?
     /// Streaming TTS: text of the current assistant message not yet flushed to the speaker.
     /// Only the unspoken tail is held, so we never rescan the whole (growing) message each flush.
     private var ttsPending = ""
@@ -660,6 +675,32 @@ final class AppModel {
         else { return }
         conversations[idx].messages[mIdx].content += pending
         streamSpeak(delta: pending, assistantID: assistantID)
+    }
+
+    private func appendReasoning(_ chunk: String, conversationID: UUID, assistantID: UUID) {
+        reasoningBuffer += chunk
+        let interval = settings.streamFlushMs
+        if interval <= 0 {
+            flushReasoning(conversationID: conversationID, assistantID: assistantID)
+            return
+        }
+        guard reasoningFlushTask == nil else { return }
+        reasoningFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(interval))
+            guard let self, !Task.isCancelled else { return }
+            self.reasoningFlushTask = nil
+            self.flushReasoning(conversationID: conversationID, assistantID: assistantID)
+        }
+    }
+
+    private func flushReasoning(conversationID: UUID, assistantID: UUID) {
+        guard !reasoningBuffer.isEmpty else { return }
+        let pending = reasoningBuffer
+        reasoningBuffer = ""
+        guard let idx = conversationIndex(conversationID),
+              let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
+        else { return }
+        conversations[idx].messages[mIdx].reasoning = (conversations[idx].messages[mIdx].reasoning ?? "") + pending
     }
 
     private var nativeTTS: Bool { mode == .language || settings.ttsSource == .native }
@@ -762,12 +803,16 @@ final class AppModel {
         flushTask?.cancel()
         flushTask = nil
         flushDeltas(conversationID: conversationID, assistantID: assistantID)
+        reasoningFlushTask?.cancel()
+        reasoningFlushTask = nil
+        flushReasoning(conversationID: conversationID, assistantID: assistantID)
         guard let idx = conversationIndex(conversationID),
               let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
         else { isStreaming = false; streamingConversationID = nil; return }
 
         let hasTools = !(toolCalls?.isEmpty ?? true)
-        if conversations[idx].messages[mIdx].content.isEmpty, !hasTools {
+        let hasReasoning = !(conversations[idx].messages[mIdx].reasoning?.isEmpty ?? true)
+        if conversations[idx].messages[mIdx].content.isEmpty, !hasTools, !hasReasoning {
             conversations[idx].messages.remove(at: mIdx)
             touch(idx)
             activity = nil
@@ -847,6 +892,9 @@ final class AppModel {
         flushTask?.cancel()
         flushTask = nil
         deltaBuffer = ""
+        reasoningFlushTask?.cancel()
+        reasoningFlushTask = nil
+        reasoningBuffer = ""
         streamingConversationID = nil
         activity = nil
         isStreaming = false

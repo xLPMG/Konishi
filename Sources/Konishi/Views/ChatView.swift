@@ -53,7 +53,7 @@ struct ChatView: View {
         (model.selectedConversation?.messages ?? []).filter { m in
             switch m.role {
             case .tool: return false
-            case .assistant: return !m.content.isEmpty
+            case .assistant: return !m.content.isEmpty || !(m.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
             default: return true
             }
         }
@@ -77,6 +77,10 @@ struct ChatView: View {
                 pinnedToBottom = atBottom
             }
             .onChange(of: messages.last?.content) {
+                guard pinnedToBottom, let last = messages.last else { return }
+                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+            .onChange(of: messages.last?.reasoning) {
                 guard pinnedToBottom, let last = messages.last else { return }
                 withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(last.id, anchor: .bottom) }
             }
@@ -191,6 +195,15 @@ struct ChatView: View {
             .help("Attach image or file")
 
             ContextGauge(used: model.selectedConversation?.lastStats?.promptTokens ?? 0, window: model.contextWindow)
+
+            Button { model.settings.reasoningEnabled.toggle() } label: {
+                Image(systemName: "brain")
+                    .font(.title3)
+                    .foregroundStyle(model.settings.reasoningEnabled ? AnyShapeStyle(model.currentAccent) : AnyShapeStyle(.secondary))
+                    .opacity(model.settings.reasoningEnabled ? 1 : 0.55)
+            }
+            .buttonStyle(.plain)
+            .help(model.settings.reasoningEnabled ? "Reasoning on — model thinks before answering (slower). Click to turn off." : "Reasoning off — faster replies. Click to turn on.")
 
             Button { model.toggleDictation() } label: {
                 Image(systemName: model.voice.isListening ? "mic.fill" : "mic")
@@ -324,6 +337,7 @@ private struct MessageRow: View {
     let message: ChatMessage
     @State private var hovering = false
     @State private var zoom: IdentifiableImage?
+    @State private var reasoningExpanded = false
 
     private var isUser: Bool { message.role == .user }
 
@@ -343,6 +357,10 @@ private struct MessageRow: View {
                     .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 if !message.images.isEmpty { imageGrid }
                 if !message.attachments.isEmpty { attachmentChips }
+                if let reasoning = message.reasoning,
+                   !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    reasoningView(reasoning)
+                }
                 content
                 if message.interrupted {
                     Label("Interrupted", systemImage: "waveform.badge.minus")
@@ -428,6 +446,23 @@ private struct MessageRow: View {
         } else if !message.content.isEmpty {
             MarkdownView(text: message.content, baseSize: model.settings.fontSize).textSelection(.enabled)
         }
+    }
+
+    private func reasoningView(_ reasoning: String) -> some View {
+        DisclosureGroup(isExpanded: $reasoningExpanded) {
+            Text(reasoning)
+                .font(.system(size: max(11, model.settings.fontSize - 2)))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+        } label: {
+            Label("Reasoning", systemImage: "brain")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var bubbleBackground: AnyShapeStyle {

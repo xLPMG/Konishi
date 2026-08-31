@@ -163,6 +163,10 @@ final class AppSettings {
     var disableThinkingForTasks: Bool {
         didSet { defaults.set(disableThinkingForTasks, forKey: Keys.disableThinkingForTasks) }
     }
+    /// Let the chat model "think" (chain-of-thought) before answering. Off = faster replies.
+    var reasoningEnabled: Bool {
+        didSet { defaults.set(reasoningEnabled, forKey: Keys.reasoningEnabled) }
+    }
     /// Index attached files larger than this many characters for retrieval instead of inlining them.
     var ragThresholdChars: Int {
         didSet { defaults.set(ragThresholdChars, forKey: Keys.ragThresholdChars) }
@@ -340,6 +344,7 @@ final class AppSettings {
         self.autoConsolidate = defaults.object(forKey: Keys.autoConsolidate) as? Bool ?? true
         self.autoConsolidateThreshold = defaults.object(forKey: Keys.autoConsolidateThreshold) as? Int ?? 40
         self.disableThinkingForTasks = defaults.object(forKey: Keys.disableThinkingForTasks) as? Bool ?? true
+        self.reasoningEnabled = defaults.object(forKey: Keys.reasoningEnabled) as? Bool ?? true
         self.ragThresholdChars = defaults.object(forKey: Keys.ragThresholdChars) as? Int ?? 12000
         self.ragTopK = defaults.object(forKey: Keys.ragTopK) as? Int ?? 6
         self.toolsEnabled = defaults.object(forKey: Keys.toolsEnabled) as? Bool ?? false
@@ -502,6 +507,7 @@ final class AppSettings {
         static let autoConsolidate = "konishi.autoConsolidate"
         static let autoConsolidateThreshold = "konishi.autoConsolidateThreshold"
         static let disableThinkingForTasks = "konishi.disableThinkingForTasks"
+        static let reasoningEnabled = "konishi.reasoningEnabled"
         static let ragThresholdChars = "konishi.ragThresholdChars"
         static let ragTopK = "konishi.ragTopK"
         static let toolsEnabled = "konishi.toolsEnabled"

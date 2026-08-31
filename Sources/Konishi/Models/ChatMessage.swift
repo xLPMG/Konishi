@@ -36,6 +36,8 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     var role: Role
     var content: String
     var stats: MessageStats?
+    /// The model's streamed chain-of-thought (reasoning), shown in a collapsible section. Never re-sent.
+    var reasoning: String?
     /// Base64 data URLs for attached images (vision).
     var images: [String]
     /// Extracted-text document attachments (PDF, text files) injected into the prompt.
@@ -58,6 +60,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         role: Role,
         content: String,
         stats: MessageStats? = nil,
+        reasoning: String? = nil,
         images: [String] = [],
         attachments: [Attachment] = [],
         sources: [Source] = [],
@@ -71,6 +74,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         self.role = role
         self.content = content
         self.stats = stats
+        self.reasoning = reasoning
         self.images = images
         self.attachments = attachments
         self.sources = sources
@@ -85,7 +89,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     var attachmentBytes: Int { attachments.reduce(0) { $0 + $1.text.utf8.count } }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, content, stats, images, attachments, sources, interrupted, toolCalls, toolCallId, toolName, localOnly
+        case id, role, content, stats, reasoning, images, attachments, sources, interrupted, toolCalls, toolCallId, toolName, localOnly
     }
 
     // Tolerant decode so conversations saved before `images`/`attachments` existed still load.
@@ -95,6 +99,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         role = try c.decode(Role.self, forKey: .role)
         content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
         stats = try c.decodeIfPresent(MessageStats.self, forKey: .stats)
+        reasoning = try c.decodeIfPresent(String.self, forKey: .reasoning)
         images = try c.decodeIfPresent([String].self, forKey: .images) ?? []
         attachments = try c.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
         sources = try c.decodeIfPresent([Source].self, forKey: .sources) ?? []
