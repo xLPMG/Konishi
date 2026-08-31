@@ -55,6 +55,11 @@ enum MemoryCategory: String, CaseIterable, Codable, Sendable {
     func targetScope(global: String, persona: String) -> String {
         isGlobal ? global : persona
     }
+
+    /// Whether a file name is one of the managed category files (so writes should be canonicalized).
+    static func isCategoryFile(_ name: String) -> Bool {
+        allCases.contains { $0.fileName == name }
+    }
 }
 
 /// Builds the maintainer prompt and parses its structured output.
@@ -370,5 +375,16 @@ enum MemoryProfile {
         }
         flush()
         return result
+    }
+
+    // MARK: - Schema validation
+
+    /// The schema-correct form of a category body: one `- ` bullet per line, deduped, with headings,
+    /// placeholders, blanks, and stray markers removed. Used to auto-fix model output on write.
+    static func canonical(_ body: String) -> String {
+        let kept = MemoryStore.blocks(body).filter { line in
+            !line.hasPrefix("#") && normalized(line) != "(none yet)" && !normalized(line).isEmpty
+        }
+        return deduplicate(kept.map(formatFact).filter { !$0.isEmpty }).joined(separator: "\n")
     }
 }

@@ -1007,14 +1007,21 @@ final class AppModel {
                 return "Error: missing name/content"
             }
             let scope = args.scope ?? persona.memoryScope
-            memory.write(scope: scope, name: args.name, content: args.content)
+            let content = MemoryCategory.isCategoryFile(args.name) ? MemoryProfile.canonical(args.content) : args.content
+            memory.write(scope: scope, name: args.name, content: content)
             return "Saved \(scope)/\(args.name)."
         case "memory_append":
             guard let args: ToolArguments.MemoryWrite = Self.decodeToolArgs(call) else {
                 return "Error: missing name/content"
             }
             let scope = args.scope ?? persona.memoryScope
-            memory.append(scope: scope, name: args.name, content: args.content)
+            if MemoryCategory.isCategoryFile(args.name) {
+                let existing = memory.read(MemoryStore.File(scope: scope, name: args.name, url: Paths.memoryScope(scope).appendingPathComponent(args.name)))
+                let merged = existing.isEmpty ? args.content : existing + "\n" + args.content
+                memory.write(scope: scope, name: args.name, content: MemoryProfile.canonical(merged))
+            } else {
+                memory.append(scope: scope, name: args.name, content: args.content)
+            }
             return "Appended to \(scope)/\(args.name)."
         case "file_read":
             guard toolEnabled("file_read"), let args: ToolArguments.FileRead = Self.decodeToolArgs(call) else {
@@ -2600,15 +2607,19 @@ final class AppModel {
                 if let backupURL = self.memory.backup(scopes: [globalScope, personaScope]) {
                     self.trace(conversationID, .memory, "backed up memory before cleanup → \(backupURL.lastPathComponent)")
                 }
+                var lintFixes: [String] = []
                 for cat in MemoryCategory.allCases {
                     let target = cat.targetScope(global: globalScope, persona: personaScope)
-                    let body = (sections[cat] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    if body.isEmpty || body == "(none yet)" {
+                    let raw = (sections[cat] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    let clean = MemoryProfile.canonical(raw)
+                    if clean.isEmpty {
                         self.memory.delete(scope: target, name: cat.fileName)
                     } else {
-                        self.memory.write(scope: target, name: cat.fileName, content: body)
+                        if clean != raw { lintFixes.append(cat.header) }
+                        self.memory.write(scope: target, name: cat.fileName, content: clean)
                     }
                 }
+                if !lintFixes.isEmpty { operationSummary = "; fixed formatting (\(lintFixes.joined(separator: ", ")))" }
                 let afterMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: self.memory, global: globalScope, persona: personaScope))
                 let changes = MemoryProfile.diff(before: beforeMemory, after: afterMemory)
                 traceDetail = changes.isEmpty ? "(no file changes)" : changes
