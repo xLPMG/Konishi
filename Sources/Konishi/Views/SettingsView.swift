@@ -125,8 +125,9 @@ private struct GenerationSettings: View {
                 }
                 Label(OnDeviceLLM.status, systemImage: OnDeviceLLM.isAvailable ? "checkmark.seal" : "exclamationmark.triangle")
                     .font(.caption).foregroundStyle(OnDeviceLLM.isAvailable ? .green : .secondary)
+                NumberField("Number of new messages before updating the title", value: $settings.messageThresholdForTitleUpdate, range: 0...25, step: 1)
                 Toggle("Disable server thinking for these tasks", isOn: $settings.disableThinkingForTasks)
-                Text("Chat titles and the quick “is this worth remembering?” check run on Apple's on-device model (ANE), off-loading the GPU. When set to Basic, titles use a simple heuristic and the memory check is skipped. Summaries and memory extraction choose their own model (above, and in the Memory tab). “Disable server thinking” turns off reasoning for these mechanical server tasks via chat_template_kwargs (Gemma 3/4, Qwen 3) — turn off if your server rejects it.")
+                Text("Chat title auto generation runs on Apple's on-device model (ANE), off-loading the GPU. When set to Basic, titles use a simple heuristic and the memory check is skipped. Summaries and memory extraction choose their own model (above, and in the Memory tab). “Disable server thinking” turns off reasoning for these mechanical server tasks via chat_template_kwargs (Gemma 3/4, Qwen 3) — turn off if your server rejects it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

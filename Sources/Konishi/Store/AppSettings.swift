@@ -163,6 +163,10 @@ final class AppSettings {
     var disableThinkingForTasks: Bool {
         didSet { defaults.set(disableThinkingForTasks, forKey: Keys.disableThinkingForTasks) }
     }
+    /// Number of new messages before updating the chat title.
+    var messageThresholdForTitleUpdate: Int {
+        didSet { defaults.set(messageThresholdForTitleUpdate, forKey: Keys.messageThresholdForTitleUpdate) }
+    }
     /// Let the chat model "think" (chain-of-thought) before answering. Off = faster replies.
     var reasoningEnabled: Bool {
         didSet { defaults.set(reasoningEnabled, forKey: Keys.reasoningEnabled) }
@@ -344,6 +348,7 @@ final class AppSettings {
         self.autoConsolidate = defaults.object(forKey: Keys.autoConsolidate) as? Bool ?? true
         self.autoConsolidateThreshold = defaults.object(forKey: Keys.autoConsolidateThreshold) as? Int ?? 40
         self.disableThinkingForTasks = defaults.object(forKey: Keys.disableThinkingForTasks) as? Bool ?? true
+        self.messageThresholdForTitleUpdate = defaults.object(forKey: Keys.messageThresholdForTitleUpdate) as? Int ?? 6
         self.reasoningEnabled = defaults.object(forKey: Keys.reasoningEnabled) as? Bool ?? true
         self.ragThresholdChars = defaults.object(forKey: Keys.ragThresholdChars) as? Int ?? 12000
         self.ragTopK = defaults.object(forKey: Keys.ragTopK) as? Int ?? 6
@@ -507,6 +512,7 @@ final class AppSettings {
         static let autoConsolidate = "konishi.autoConsolidate"
         static let autoConsolidateThreshold = "konishi.autoConsolidateThreshold"
         static let disableThinkingForTasks = "konishi.disableThinkingForTasks"
+        static let messageThresholdForTitleUpdate = "konishi.messageThresholdForTitleUpdate"
         static let reasoningEnabled = "konishi.reasoningEnabled"
         static let ragThresholdChars = "konishi.ragThresholdChars"
         static let ragTopK = "konishi.ragTopK"

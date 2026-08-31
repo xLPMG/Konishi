@@ -15,6 +15,8 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var memorizedCount: Int?
     /// True for Learn-mode sessions; kept separate from normal chats and excluded from memory.
     var isLanguage: Bool?
+    /// Number of messages at the time the title was last updated.
+    var lastTitledMessageCount: Int
 
     init(
         id: UUID = UUID(),
@@ -26,7 +28,8 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         summary: String? = nil,
         summarizedCount: Int? = nil,
         memorizedCount: Int? = nil,
-        isLanguage: Bool? = nil
+        isLanguage: Bool? = nil,
+        lastTitledMessageCount: Int = 0
     ) {
         self.id = id
         self.title = title
@@ -38,6 +41,7 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.summarizedCount = summarizedCount
         self.memorizedCount = memorizedCount
         self.isLanguage = isLanguage
+        self.lastTitledMessageCount = lastTitledMessageCount
     }
 
     var lastStats: MessageStats? {
@@ -59,6 +63,7 @@ struct ConversationMeta: Decodable {
     var summarizedCount: Int?
     var memorizedCount: Int?
     var isLanguage: Bool?
+    var lastTitledMessageCount: Int
 
     /// A body-less `Conversation` (empty `messages`) carrying just the metadata.
     func asConversation() -> Conversation {
@@ -66,7 +71,7 @@ struct ConversationMeta: Decodable {
             id: id, title: title, personaID: personaID, messages: [],
             createdAt: createdAt, updatedAt: updatedAt,
             summary: summary, summarizedCount: summarizedCount, memorizedCount: memorizedCount,
-            isLanguage: isLanguage
+            isLanguage: isLanguage, lastTitledMessageCount: lastTitledMessageCount
         )
     }
 }

@@ -1880,40 +1880,54 @@ final class AppModel {
         }
     }
 
-    /// After the first two exchanges, refine the auto-title using fuller context (once, on-device).
-    private func maybeRefineTitle(conversationID: UUID) {
+
+    /// Refines the title, potentially multiple times, but only after a significant change in context.
+    /// - Parameter conversationID: The UUID of the chat.
+    /// - Parameter messageThreshold: How many new messages must occur before we re-title.
+    private func maybeRefineTitle(conversationID: UUID, messageThreshold: Int = 6) {
         guard settings.autoTitle, settings.useOnDeviceModel, OnDeviceLLM.isAvailable,
-              autoTitledIDs.contains(conversationID),
-              let idx = conversationIndex(conversationID) else { return }
-        let msgs = conversations[idx].messages.filter {
+            let idx = conversationIndex(conversationID) else { return }
+        
+        let currentMsgs = conversations[idx].messages.filter {
             ($0.role == .user || $0.role == .assistant) && !$0.content.isEmpty
         }
-        // Run exactly once, after two user + two assistant messages.
-        guard msgs.filter({ $0.role == .user }).count == 2,
-              msgs.filter({ $0.role == .assistant }).count == 2 else { return }
-        let transcript = msgs.prefix(4)
-            .map { "\($0.role == .user ? "User" : "Assistant"): \(String($0.content.prefix(300)))" }
+        
+        // have enough messages passed since the last successful title update?
+        guard currentMsgs.count >= (conversations[idx].lastTitledMessageCount + messageThreshold) else { return }
+        
+        let contextWindow = 8 // TODO: extract this as a setting or use messageThreshold?
+        let transcript = currentMsgs.suffix(contextWindow) // last messages
+            .map { "\($0.role == .user ? "User" : "Assistant"): \($0.content.prefix(300))" }
             .joined(separator: "\n")
-        let current = conversations[idx].title
+        
+        let currentTitle = conversations[idx].title
+        
         Task { [weak self] in
             let prompt = """
             Write a concise chat title (3–6 words, Title Case, no quotes or trailing punctuation) \
-            that captures the topic of this conversation:
+            that captures the subject of the most recent messages:
 
             \(transcript)
             """
-            guard let raw = await OnDeviceLLM.complete(prompt: prompt, temperature: 0.2) else { return }
+            
+            guard let raw = await OnDeviceLLM.complete(prompt: prompt, temperature: 0.3) else { return }
+            
             var title = raw
                 .components(separatedBy: .newlines).first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }?
                 .trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'.")) ?? ""
-            if title == title.uppercased(), title != title.lowercased() { title = title.capitalized }
-            guard let self, title.count >= 2, title.count <= 60,
-                  self.autoTitledIDs.contains(conversationID),
-                  let i = self.conversationIndex(conversationID),
-                  self.conversations[i].title == current   // not renamed while generating
+            
+            if title == title.uppercased() && title != title.lowercased() { title = title.capitalized }
+            
+            guard let self, title.count >= 2, title.count <= 60, // check that title length is reasonable
+                let i = self.conversationIndex(conversationID),  // revalidate conversation id 
+                self.conversations[i].title == currentTitle      // check that the user didnt manually change the title
             else { return }
+            
+            // Update the title and the tracking counter
             self.conversations[i].title = title
+            self.conversations[i].lastTitledMessageCount = currentMsgs.count
             self.touch(i)
+            trace(conversationID, .info, "refined conversation title")
         }
     }
 
