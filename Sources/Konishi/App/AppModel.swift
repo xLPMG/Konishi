@@ -7,7 +7,6 @@ import AppKit
 final class AppModel {
     // Persisted state
     var settings: AppSettings
-    var personas: [Persona]
     var conversations: [Conversation]
 
     // Selection & transient UI state
@@ -49,13 +48,14 @@ final class AppModel {
     var connectionOK: Bool?
     var discoveredModels: [LocalModels.Entry] = []
 
-    let memory = MemoryStore()
-    let files = FileStore()
-    let documents = DocumentStore()
+    let memoryStore = MemoryStore()
+    let fileStore = FileStore()
+    let documentStore = DocumentStore()
+    let personaStore = PersonaStore()
     let runtime = Runtime()
     let voice = VoiceManager()
     let embeddingCache = EmbeddingCache()
-    let language = LanguageStore()
+    let languageStore = LanguageStore()
     private var streamTask: Task<Void, Never>?
     /// Resumed with the tool result once the user answers a pending multiple-choice prompt.
     private var interactionContinuation: CheckedContinuation<String, Never>?
@@ -71,9 +71,8 @@ final class AppModel {
     init() {
         Paths.ensure()
         self.settings = AppSettings()
-        self.personas = Self.loadPersonas()
         self.conversations = Self.loadConversations().sorted { $0.updatedAt > $1.updatedAt }
-        self.languageProfiles = language.allProfiles()
+        self.languageProfiles = languageStore.allProfiles()
         self.selectedConversationID = conversations.first(where: { $0.isLanguage != true })?.id
         VoiceManager.warmVoices()   // preload the slow system voice catalog off-main
         if conversations.isEmpty {
@@ -94,21 +93,9 @@ final class AppModel {
         return conversations.first { $0.id == id }
     }
 
-    func persona(for conversation: Conversation?) -> Persona {
-        if let pid = conversation?.personaID, let p = personas.first(where: { $0.id == pid }) {
-            return p
-        }
-        return personas.first ?? Persona.defaults[0]
-    }
+    var currentPersona: Persona { personaStore.persona(for: selectedConversation) }
 
-    var currentPersona: Persona { persona(for: selectedConversation) }
-
-    /// The assistant's display name: its own name if set, else the persona/mode label.
-    func assistantName(for persona: Persona) -> String {
-        if let n = persona.assistantName?.trimmingCharacters(in: .whitespaces), !n.isEmpty { return n }
-        return persona.name
-    }
-    var currentAssistantName: String { assistantName(for: currentPersona) }
+    var currentAssistantName: String { personaStore.assistantName(for: currentPersona) }
 
     var currentAccent: Color {
         if let hex = currentPersona.accentColorHex { return Color(hex: hex) }
@@ -280,7 +267,7 @@ final class AppModel {
     }
 
     private func currentPersonaIDForNewChat() -> UUID? {
-        selectedConversation?.personaID ?? personas.first?.id
+        selectedConversation?.personaID ?? personaStore.personas.first?.id
     }
 
     func deleteConversation(_ id: UUID) {
@@ -293,7 +280,7 @@ final class AppModel {
         traceSaveTasks[id] = nil
         loadedTraceIDs.remove(id)
         Self.deleteTraceFile(id)
-        documents.deleteAll(conversationID: id)
+        documentStore.deleteAll(conversationID: id)
         Self.deleteConversationFile(id)
         try? FileManager.default.removeItem(at: Paths.conversationFiles(id))
         if selectedConversationID == id {
@@ -510,7 +497,7 @@ final class AppModel {
 
     private func runStream(conversationID: UUID, assistantID: UUID) {
         guard let idx = conversationIndex(conversationID) else { return }
-        let persona = persona(for: conversations[idx])
+        let persona = personaStore.persona(for: conversations[idx])
         let allHistory = conversations[idx].messages.filter { $0.id != assistantID }
         let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
         let history = Array(allHistory.dropFirst(folded))
@@ -534,8 +521,8 @@ final class AppModel {
         streamTask = Task { [weak self] in
             guard let self else { return }
             let systemText = self.mode == .language
-                ? self.languageSystemPrompt(persona: persona)
-                : self.stableSystemPrompt(persona: persona)
+                ? languageSystemPrompt(persona: persona)
+                : personaStore.stableSystemPrompt(persona: persona, injectDateContext: settings.injectDateContext, mode: mode)
             let memoryText = await self.memoryContext(conversationID: conversationID, persona: persona, history: history)
             let documentText = await self.documentContext(conversationID: conversationID, history: history)
             let wire = self.buildWire(systemText: systemText, summary: summary, memoryText: memoryText, documentText: documentText, history: history)
@@ -1036,11 +1023,11 @@ final class AppModel {
     }
 
     private func executeTool(_ call: ToolCall, conversationID: UUID) async -> String {
-        let persona = persona(for: selectedConversation)
+        let persona = personaStore.persona(for: selectedConversation)
         switch call.function.name {
         case "memory_list":
             let scopes = [MemoryStore.globalScope, persona.memoryScope]
-            let list = scopes.flatMap { s in memory.files(in: s).map { "\(s)/\($0.name)" } }
+            let list = scopes.flatMap { s in memoryStore.files(in: s).map { "\(s)/\($0.name)" } }
             return list.isEmpty ? "(no memory notes)" : list.joined(separator: "\n")
         case "memory_read":
             guard let args: ToolArguments.MemoryRead = Self.decodeToolArgs(call) else {
@@ -1048,7 +1035,7 @@ final class AppModel {
             }
             let scope = args.scope ?? persona.memoryScope
             let file = MemoryStore.File(scope: scope, name: args.name, url: Paths.memoryScope(scope).appendingPathComponent(args.name))
-            let content = memory.read(file)
+            let content = memoryStore.read(file)
             return content.isEmpty ? "(empty or not found)" : content
         case "memory_write":
             guard let args: ToolArguments.MemoryWrite = Self.decodeToolArgs(call) else {
@@ -1056,7 +1043,7 @@ final class AppModel {
             }
             let scope = args.scope ?? persona.memoryScope
             let content = MemoryCategory.isCategoryFile(args.name) ? MemoryProfile.canonical(args.content) : args.content
-            memory.write(scope: scope, name: args.name, content: content)
+            memoryStore.write(scope: scope, name: args.name, content: content)
             return "Saved \(scope)/\(args.name)."
         case "memory_append":
             guard let args: ToolArguments.MemoryWrite = Self.decodeToolArgs(call) else {
@@ -1064,11 +1051,11 @@ final class AppModel {
             }
             let scope = args.scope ?? persona.memoryScope
             if MemoryCategory.isCategoryFile(args.name) {
-                let existing = memory.read(MemoryStore.File(scope: scope, name: args.name, url: Paths.memoryScope(scope).appendingPathComponent(args.name)))
+                let existing = memoryStore.read(MemoryStore.File(scope: scope, name: args.name, url: Paths.memoryScope(scope).appendingPathComponent(args.name)))
                 let merged = existing.isEmpty ? args.content : existing + "\n" + args.content
-                memory.write(scope: scope, name: args.name, content: MemoryProfile.canonical(merged))
+                memoryStore.write(scope: scope, name: args.name, content: MemoryProfile.canonical(merged))
             } else {
-                memory.append(scope: scope, name: args.name, content: args.content)
+                memoryStore.append(scope: scope, name: args.name, content: args.content)
             }
             return "Appended to \(scope)/\(args.name)."
         case "file_read":
@@ -1152,7 +1139,7 @@ final class AppModel {
             let notes = grammar?.notes ?? vocab?.notes
             let tags = grammar?.tags ?? vocab?.tags
             // Dedup: update an existing card of the same kind/term, keeping its schedule + counts.
-            if var existing = language.findByTerm(profileID: profile.id, kind: kind, term: term) {
+            if var existing = languageStore.findByTerm(profileID: profile.id, kind: kind, term: term) {
                 if !translation.isEmpty { existing.translation = translation }
                 if let r = vocab?.reading, !r.isEmpty { existing.reading = r }
                 if let pos = vocab?.partOfSpeech, !pos.isEmpty { existing.partOfSpeech = pos }
@@ -1182,14 +1169,14 @@ final class AppModel {
             guard toolEnabled("search_deck") else { return "Error: tool disabled" }
             guard let profile = activeLanguageProfile else { return "Error: no active language profile" }
             guard let args: ToolArguments.Query = Self.decodeToolArgs(call) else { return "Error: missing query" }
-            let results = language.search(profileID: profile.id, query: args.query)
+            let results = languageStore.search(profileID: profile.id, query: args.query)
             if results.isEmpty { return "No matching cards." }
             return results.map { "\($0.id.uuidString) | \($0.term) — \($0.translation) [box \($0.box)]" }.joined(separator: "\n")
         case "get_due_items":
             guard toolEnabled("get_due_items") else { return "Error: tool disabled" }
             guard let profile = activeLanguageProfile else { return "Error: no active language profile" }
             let args: ToolArguments.DueItems? = Self.decodeToolArgs(call)
-            let due = language.dueItems(profileID: profile.id, limit: args?.limit ?? 10)
+            let due = languageStore.dueItems(profileID: profile.id, limit: args?.limit ?? 10)
             if due.isEmpty { return "Nothing is due for review." }
             return due.map { "\($0.id.uuidString) | \($0.kind.rawValue): \($0.term) — \($0.translation)" }.joined(separator: "\n")
         case "record_review":
@@ -1246,23 +1233,6 @@ final class AppModel {
         turnSources.append(Source(title: title.isEmpty ? url : title, url: url))
     }
 
-    // MARK: - Prompt building, memory retrieval, budgeting
-
-    /// Stable across turns for a persona → keeps the server's prompt/KV prefix cache valid.
-    private func stableSystemPrompt(persona: Persona) -> String {
-        var text = persona.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let name = persona.assistantName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
-            text = "Your name is \(name).\n\n" + text
-        }
-        if settings.injectDateContext {
-            text += (text.isEmpty ? "" : "\n\n") + "For context, it is currently \(Self.dateContext())."
-        }
-        if mode == .conversational {
-            text += (text.isEmpty ? "" : "\n\n") + "This is a spoken voice conversation. Keep replies natural and concise. When the user clearly wants to stop (says goodbye, 'that's all', 'we're done'), say a brief farewell and call the end_conversation tool to hang up."
-        }
-        return text
-    }
-
     // MARK: - Language learning
 
     /// The active language profile, or the first one if the stored id is stale/empty.
@@ -1275,11 +1245,11 @@ final class AppModel {
     }
 
     func reloadLanguageProfiles() {
-        languageProfiles = language.allProfiles()
+        languageProfiles = languageStore.allProfiles()
     }
 
     func saveLanguageProfile(_ profile: LanguageProfile, makeActive: Bool = false) {
-        language.upsertProfile(profile)
+        languageStore.upsertProfile(profile)
         reloadLanguageProfiles()
         if makeActive || settings.activeLanguageProfileID.isEmpty {
             settings.activeLanguageProfileID = profile.id.uuidString
@@ -1287,7 +1257,7 @@ final class AppModel {
     }
 
     func deleteLanguageProfile(_ id: UUID) {
-        language.deleteProfile(id: id)
+        languageStore.deleteProfile(id: id)
         reloadLanguageProfiles()
         if settings.activeLanguageProfileID == id.uuidString {
             settings.activeLanguageProfileID = languageProfiles.first?.id.uuidString ?? ""
@@ -1309,7 +1279,7 @@ final class AppModel {
         guard let p = activeLanguageProfile else {
             lines.append("You are a friendly, patient language tutor. No language profile is set up yet — ask the user which language they want to learn, their native language, and their rough level, then help them get started.")
             if settings.injectDateContext {
-                lines.append("For context, it is currently \(Self.dateContext()).")
+                lines.append("For context, it is currently \(DateContext.current()).")
             }
             return lines.joined(separator: "\n\n")
         }
@@ -1332,29 +1302,29 @@ final class AppModel {
         lines.append("You maintain a spaced-repetition deck of the words, grammar points, and phrases the user has learned.")
 
         if settings.injectDateContext {
-            lines.append("For context, it is currently \(Self.dateContext()).")
+            lines.append("For context, it is currently \(DateContext.current()).")
         }
         return lines.joined(separator: "\n\n")
     }
 
     /// Applies a Leitner review to a card and returns a short status for the model.
     func recordDeckReview(itemID: UUID, correct: Bool) -> String {
-        guard var item = language.item(id: itemID) else { return "Error: card not found" }
+        guard var item = languageStore.item(id: itemID) else { return "Error: card not found" }
         item.recordReview(correct: correct)
-        language.upsert(item)
+        languageStore.upsert(item)
         languageDeckRevision &+= 1
         return "\(item.term): \(correct ? "correct" : "wrong"), now box \(item.box)/\(LearnItem.boxCount), due \(Self.dueString(item.dueDate))."
     }
 
     /// Adds a card to the active profile's deck (used by the add_vocab/add_grammar tools).
     func addDeckCard(_ item: LearnItem) {
-        language.upsert(item)
+        languageStore.upsert(item)
         languageDeckRevision &+= 1
     }
 
     /// Deletes a card from the deck.
     func deleteDeckItem(_ id: UUID) {
-        language.delete(id: id)
+        languageStore.delete(id: id)
         languageDeckRevision &+= 1
     }
 
@@ -1380,7 +1350,7 @@ final class AppModel {
         guard let p = activeLanguageProfile else { return "" }
         let key = "\(p.id.uuidString)#\(languageDeckRevision)"
         if let c = deckContextCache, c.key == key { return c.text }
-        let (s, tags) = language.deckSummary(profileID: p.id)
+        let (s, tags) = languageStore.deckSummary(profileID: p.id)
         let text: String
         if s.total == 0 {
             text = "# Learner's deck\nThe deck is empty — introduce and bank new words and grammar."
@@ -1448,31 +1418,6 @@ final class AppModel {
         return "in \(days) days"
     }
 
-    /// A rough, cache-friendly "now" for background awareness: weekday, date, and part of day.
-    /// Deliberately day/part-of-day granular (not exact clock time) so the system prompt stays
-    /// stable within a session and doesn't invalidate the server's prefix cache every turn.
-    static func dateContext(_ date: Date = Date()) -> String {
-        let hour = Calendar.current.component(.hour, from: date)
-        let part: String
-        // The small hours (past midnight, before dawn) are still colloquially the PREVIOUS
-        // day's night — at 00:30 on Friday it's "Thursday night", not "Friday night".
-        var dayDate = date
-        switch hour {
-        case 5..<12: part = "morning"
-        case 12..<17: part = "afternoon"
-        case 17..<21: part = "evening"
-        case 21...23: part = "night"
-        default:      part = "night"; dayDate = Calendar.current.date(byAdding: .day, value: -1, to: date) ?? date
-        }
-        return "\(dateContextFormatter.string(from: dayDate)) (\(part))"
-    }
-
-    private static let dateContextFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "EEEE, d MMMM yyyy"
-        return f
-    }()
-
     /// Dynamic memory for this turn (attached to the latest user message, not the system prompt).
     private func memoryContext(conversationID: UUID, persona: Persona, history: [ChatMessage]) async -> String {
         // Language sessions get a compact deck summary instead of personal memory (the deck is the memory).
@@ -1500,7 +1445,7 @@ final class AppModel {
         let profileName = MemoryCategory.profile.fileName
         let profileScope = MemoryStore.globalScope
         let profileURL = Paths.memoryScope(profileScope).appendingPathComponent(profileName)
-        let profileBody = memory.read(MemoryStore.File(scope: profileScope, name: profileName, url: profileURL))
+        let profileBody = memoryStore.read(MemoryStore.File(scope: profileScope, name: profileName, url: profileURL))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         var sections: [String] = []
         if !profileBody.isEmpty { sections.append("## \(profileScope)/\(profileName)\n\(profileBody)") }
@@ -1508,9 +1453,9 @@ final class AppModel {
         // Every other bullet is a retrieval candidate.
         var chunks: [(label: String, text: String)] = []
         for scope in scopes {
-            for file in memory.files(in: scope) {
+            for file in memoryStore.files(in: scope) {
                 if scope == profileScope, file.name == profileName { continue }
-                for block in MemoryStore.blocks(memory.read(file)) {
+                for block in MemoryStore.blocks(memoryStore.read(file)) {
                     chunks.append((label: "\(scope)/\(file.name)", text: block))
                 }
             }
@@ -1601,7 +1546,7 @@ final class AppModel {
 
     /// Indexed documents for the current conversation.
     var indexedDocuments: [StoredDocument] {
-        selectedConversationID.map { documents.documents(for: $0) } ?? []
+        selectedConversationID.map { documentStore.documents(for: $0) } ?? []
     }
 
     /// Inline small attachments; index large ones for retrieval. Returns true when indexed as RAG.
@@ -1609,7 +1554,7 @@ final class AppModel {
     func addDocument(name: String, text: String) -> Bool {
         if settings.ragThresholdChars > 0, text.count > settings.ragThresholdChars,
            let convoID = selectedConversationID {
-            documents.add(name: name, text: text, conversationID: convoID)
+            documentStore.add(name: name, text: text, conversationID: convoID)
             return true
         }
         draftAttachments.append(Attachment(name: name, text: text))
@@ -1618,12 +1563,12 @@ final class AppModel {
 
     func removeIndexedDocument(_ id: UUID) {
         guard let convoID = selectedConversationID else { return }
-        documents.delete(id: id, conversationID: convoID)
+        documentStore.delete(id: id, conversationID: convoID)
     }
 
-    /// Retrieve the most relevant passages from this conversation's indexed documents.
+    /// Retrieve the most relevant passages from this conversation's indexed documentStore.
     private func documentContext(conversationID: UUID, history: [ChatMessage]) async -> String {
-        let docs = documents.documents(for: conversationID)
+        let docs = documentStore.documents(for: conversationID)
         guard !docs.isEmpty, let query = history.last(where: { $0.role == .user })?.content else { return "" }
         var chunks: [(label: String, text: String)] = []
         for doc in docs {
@@ -1812,7 +1757,7 @@ final class AppModel {
         let toFold = Array(msgs[start..<foldEnd])
         guard !toFold.isEmpty else { return }
 
-        let persona = persona(for: conversations[idx])
+        let persona = personaStore.persona(for: conversations[idx])
         let existing = conversations[idx].summary ?? ""
         let transcript = toFold
             .filter { !$0.content.isEmpty }
@@ -1990,7 +1935,7 @@ final class AppModel {
         let convo = hydratedIDs.contains(conversation.id)
             ? conversation
             : (Self.loadConversationBody(conversation.id) ?? conversation)
-        let persona = persona(for: convo)
+        let persona = personaStore.persona(for: convo)
         var out = "# \(convo.title)\n\n"
         for m in convo.messages {
             switch m.role {
@@ -2355,7 +2300,7 @@ final class AppModel {
         conversations[idx].messages.append(ChatMessage(role: .user, content: text))
         touch(idx)
         maybeAutoTitle(conversationID: convoID)
-        let persona = persona(for: conversations[idx])
+        let persona = personaStore.persona(for: conversations[idx])
         let allHistory = conversations[idx].messages
         let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
         let history = Array(allHistory.dropFirst(folded))
@@ -2374,7 +2319,7 @@ final class AppModel {
             defer {
                 if generation == self.conversationGeneration { self.conversationResponseTask = nil }
             }
-            let systemText = self.stableSystemPrompt(persona: persona)
+            let systemText = personaStore.stableSystemPrompt(persona: persona, injectDateContext: settings.injectDateContext, mode: mode)
             let memoryText = await self.memoryContext(conversationID: convoID, persona: persona, history: history)
             let documentText = await self.documentContext(conversationID: convoID, history: history)
             guard !Task.isCancelled, generation == self.conversationGeneration, self.conversationActive else { return }
@@ -2641,8 +2586,8 @@ final class AppModel {
         let fresh = Array(convo.messages[start...])
         let newUserTurns = fresh.filter { $0.role == .user && !$0.content.isEmpty }.count
         guard newUserTurns >= max(1, settings.autoMemoryEvery) else { return }
-        let scope = persona(for: convo).memoryScope
-        let bullets = memory.bulletCount(in: MemoryStore.globalScope) + memory.bulletCount(in: scope)
+        let scope = personaStore.persona(for: convo).memoryScope
+        let bullets = memoryStore.bulletCount(in: MemoryStore.globalScope) + memoryStore.bulletCount(in: scope)
         let consolidate = settings.autoConsolidate
             && bullets >= max(10, settings.autoConsolidateThreshold)
             && bullets > (lastConsolidatedBullets[scope] ?? 0)
@@ -2669,7 +2614,7 @@ final class AppModel {
     /// Consolidation rewrites the full profile; incremental maintenance applies typed deltas.
     private func runMemoryMaintenance(conversationID: UUID, messages: [ChatMessage], upTo: Int, consolidate: Bool) {
         guard let idx = conversationIndex(conversationID) else { return }
-        let persona = persona(for: conversations[idx])
+        let persona = personaStore.persona(for: conversations[idx])
         let personaScope = persona.memoryScope
         let globalScope = MemoryStore.globalScope
         let transcript = messages
@@ -2678,11 +2623,11 @@ final class AppModel {
             .joined(separator: "\n\n")
         guard !transcript.isEmpty else { return }
 
-        let snapshot = MemoryProfile.snapshot(store: memory, global: globalScope, persona: personaScope)
-        let beforeMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: memory, global: globalScope, persona: personaScope))
+        let snapshot = MemoryProfile.snapshot(store: memoryStore, global: globalScope, persona: personaScope)
+        let beforeMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: memoryStore, global: globalScope, persona: personaScope))
         let extra = settings.reflectionCustomPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let assistant = assistantName(for: persona)
-        let now = Self.dateContext()
+        let assistant = personaStore.assistantName(for: persona)
+        let now = DateContext.current()
         let instruction = consolidate
             ? MemoryProfile.consolidatePrompt(current: snapshot, transcript: transcript, extra: extra, assistantName: assistant, now: now)
             : MemoryProfile.maintainerPrompt(current: snapshot, transcript: transcript, extra: extra, assistantName: assistant, now: now)
@@ -2718,7 +2663,7 @@ final class AppModel {
                     self.trace(conversationID, .error, "memory consolidation skipped: could not parse category sections from output")
                     return
                 }
-                if let backupURL = self.memory.backup(scopes: [globalScope, personaScope]) {
+                if let backupURL = self.memoryStore.backup(scopes: [globalScope, personaScope]) {
                     self.trace(conversationID, .memory, "backed up memory before cleanup → \(backupURL.lastPathComponent)")
                 }
                 var lintFixes: [String] = []
@@ -2727,14 +2672,14 @@ final class AppModel {
                     let raw = (sections[cat] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     let clean = MemoryProfile.canonical(raw)
                     if clean.isEmpty {
-                        self.memory.delete(scope: target, name: cat.fileName)
+                        self.memoryStore.delete(scope: target, name: cat.fileName)
                     } else {
                         if clean != raw { lintFixes.append(cat.header) }
-                        self.memory.write(scope: target, name: cat.fileName, content: clean)
+                        self.memoryStore.write(scope: target, name: cat.fileName, content: clean)
                     }
                 }
                 if !lintFixes.isEmpty { operationSummary = "; fixed formatting (\(lintFixes.joined(separator: ", ")))" }
-                let afterMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: self.memory, global: globalScope, persona: personaScope))
+                let afterMemory = Dictionary(uniqueKeysWithValues: MemoryProfile.contents(store: self.memoryStore, global: globalScope, persona: personaScope))
                 let changes = MemoryProfile.diff(before: beforeMemory, after: afterMemory)
                 traceDetail = changes.isEmpty ? "(no file changes)" : changes
             } else {
@@ -2742,13 +2687,13 @@ final class AppModel {
                     self.trace(conversationID, .error, "memory update skipped: could not parse typed operations from output")
                     return
                 }
-                let application = MemoryProfile.apply(delta, store: self.memory, global: globalScope, persona: personaScope)
+                let application = MemoryProfile.apply(delta, store: self.memoryStore, global: globalScope, persona: personaScope)
                 for (cat, body) in application.changedBodies {
                     let target = cat.targetScope(global: globalScope, persona: personaScope)
                     if body.isEmpty {
-                        self.memory.delete(scope: target, name: cat.fileName)
+                        self.memoryStore.delete(scope: target, name: cat.fileName)
                     } else {
-                        self.memory.write(scope: target, name: cat.fileName, content: body)
+                        self.memoryStore.write(scope: target, name: cat.fileName, content: body)
                     }
                 }
                 operationSummary = "; \(application.appliedCount) applied, \(application.skippedCount) skipped"
@@ -2758,7 +2703,7 @@ final class AppModel {
                 self.conversations[i].memorizedCount = min(upTo, self.conversations[i].messages.count)
                 self.touch(i)
             }
-            if consolidate { self.lastConsolidatedBullets[personaScope] = self.memory.bulletCount(in: globalScope) + self.memory.bulletCount(in: personaScope) }
+            if consolidate { self.lastConsolidatedBullets[personaScope] = self.memoryStore.bulletCount(in: globalScope) + self.memoryStore.bulletCount(in: personaScope) }
             let how = consolidate ? "cleaned up" : "updated"
             self.trace(
                 conversationID, .memory,
@@ -2891,69 +2836,26 @@ final class AppModel {
 
     // MARK: - Persona management
 
-    func addPersona() {
-        let p = Persona(
-            name: "New Persona",
-            systemPrompt: "",
-            memoryScope: "persona-\(UUID().uuidString.prefix(8))"
-        )
-        personas.append(p)
-        savePersonas()
-    }
-
-    func updatePersona(_ persona: Persona) {
-        guard let idx = personas.firstIndex(where: { $0.id == persona.id }) else { return }
-        personas[idx] = persona
-        savePersonas()
-    }
-
     func deletePersona(_ id: UUID) {
-        guard personas.count > 1 else { return }
-        personas.removeAll { $0.id == id }
+        guard let fallback = personaStore.deletePersona(id) else { return }
         for i in conversations.indices where conversations[i].personaID == id {
-            conversations[i].personaID = personas.first?.id
+            conversations[i].personaID = fallback
         }
-        savePersonas()
     }
 
     // MARK: - Persistence
 
-    /// Reused across all persistence calls (allocating a coder per write is wasteful).
-    private static let jsonEncoder = JSONEncoder()
-    private static let jsonDecoder = JSONDecoder()
-    private static let isoFormatter = ISO8601DateFormatter()
-    /// Serial queue for disk writes: encode on the main actor (correct snapshot), write off-main
-    /// in submission order so the UI never stalls on JSON I/O and saves/deletes stay consistent.
-    nonisolated private static let ioQueue = DispatchQueue(label: "konishi.persistence", qos: .utility)
+    // static let isoFormatter = ISO8601DateFormatter()
 
     /// Block until all queued writes have flushed (called on app termination).
     nonisolated private static func flushPendingWrites() {
-        ioQueue.sync {}
+        Persistence.ioQueue.sync {}
     }
 
     private func save(_ conversation: Conversation) {
         // Only hydrated conversations hold a real body; skip so we never clobber a file with empties.
         guard hydratedIDs.contains(conversation.id) else { return }
         Self.saveConversation(conversation)
-    }
-
-    func savePersonas() {
-        guard let data = try? Self.jsonEncoder.encode(personas) else { return }
-        Self.ioQueue.async { try? data.write(to: Paths.personasFile, options: .atomic) }
-    }
-
-    private static func loadPersonas() -> [Persona] {
-        guard let data = try? Data(contentsOf: Paths.personasFile),
-              let decoded = try? jsonDecoder.decode([Persona].self, from: data),
-              !decoded.isEmpty
-        else {
-            let defaults = Persona.defaults
-            if let data = try? jsonEncoder.encode(defaults) {
-                try? data.write(to: Paths.personasFile, options: .atomic)
-            }
-            return defaults
-        }
-        return decoded
     }
 
     /// Load only metadata for every conversation at launch; bodies are paged in on demand.
@@ -2982,7 +2884,7 @@ final class AppModel {
     private static func loadConversationBody(_ id: UUID) -> Conversation? {
         let url = Paths.conversations.appendingPathComponent("\(id.uuidString).json")
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? jsonDecoder.decode(Conversation.self, from: data)
+        return try? Persistence.decoder.decode(Conversation.self, from: data)
     }
 
     /// Off-main content search across all conversation files; returns ids whose body matches.
@@ -2990,7 +2892,7 @@ final class AppModel {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: Paths.conversations, includingPropertiesForKeys: nil
         )) ?? []
-        let decoder = JSONDecoder()
+        let decoder = Persistence.decoder
         var ids: Set<UUID> = []
         for url in urls where url.pathExtension == "json" {
             guard let data = try? Data(contentsOf: url),
@@ -3004,27 +2906,27 @@ final class AppModel {
 
     private static func saveConversation(_ conversation: Conversation) {
         let url = Paths.conversations.appendingPathComponent("\(conversation.id.uuidString).json")
-        guard let data = try? jsonEncoder.encode(conversation) else { return }
-        ioQueue.async { try? data.write(to: url, options: .atomic) }
+        guard let data = try? Persistence.encoder.encode(conversation) else { return }
+        Persistence.ioQueue.async { try? data.write(to: url, options: .atomic) }
     }
 
     private static func deleteConversationFile(_ id: UUID) {
         let url = Paths.conversations.appendingPathComponent("\(id.uuidString).json")
         // Same serial queue as saves so a delete never races ahead of a queued write for this id.
-        ioQueue.async { try? FileManager.default.removeItem(at: url) }
+        Persistence.ioQueue.async { try? FileManager.default.removeItem(at: url) }
     }
 
     nonisolated private static func saveTrace(_ id: UUID, _ entries: [TraceEntry]) {
         let url = Paths.traceFile(id)
         if entries.isEmpty { try? FileManager.default.removeItem(at: url); return }
-        guard let data = try? JSONEncoder().encode(entries) else { return }
+        guard let data = try? Persistence.encoder.encode(entries) else { return }
         try? data.write(to: url, options: .atomic)
     }
 
     nonisolated private static func loadTrace(_ id: UUID) -> [TraceEntry] {
         let url = Paths.traces.appendingPathComponent("\(id.uuidString).json")
         guard let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([TraceEntry].self, from: data)
+              let decoded = try? Persistence.decoder.decode([TraceEntry].self, from: data)
         else { return [] }
         return decoded
     }

@@ -1,0 +1,92 @@
+import Foundation
+import Observation
+
+@Observable
+final class PersonaStore {
+    private let fileURL: URL
+    var personas: [Persona] = []
+
+    init(fileURL: URL = Paths.personasFile) {
+        self.fileURL = fileURL
+        personas = Self.loadPersonas(from: fileURL)
+    }
+
+    func persona(for conversation: Conversation?) -> Persona {
+        if let pid = conversation?.personaID, let p = personas.first(where: { $0.id == pid }) {
+            return p
+        }
+        return personas.first ?? Persona.defaults[0]
+    }
+
+    /// The assistant's display name: its own name if set, else the persona/mode label.
+    func assistantName(for persona: Persona) -> String {
+        if let n = persona.assistantName?.trimmingCharacters(in: .whitespaces), !n.isEmpty {
+            return n
+        }
+        return persona.name
+    }
+
+    func savePersonas() {
+        guard let data = try? Persistence.encoder.encode(personas) else { return }
+        let url = fileURL  // capture the current fileURL to use inside the async block
+        Persistence.ioQueue.async { try? data.write(to: url, options: .atomic) }
+    }
+
+    private static func loadPersonas(from fileURL: URL) -> [Persona] {
+        guard let data = try? Data(contentsOf: fileURL),
+            let decoded = try? Persistence.decoder.decode([Persona].self, from: data),
+            !decoded.isEmpty
+        else {
+            let defaults = Persona.defaults
+            if let data = try? Persistence.encoder.encode(defaults) {
+                try? data.write(to: fileURL, options: .atomic)
+            }
+            return defaults
+        }
+        return decoded
+    }
+
+    func addPersona() {
+        let p = Persona(
+            name: "New Persona",
+            systemPrompt: "",
+            memoryScope: "persona-\(UUID().uuidString.prefix(8))"
+        )
+        personas.append(p)
+        savePersonas()
+    }
+
+    func updatePersona(_ persona: Persona) {
+        guard let idx = personas.firstIndex(where: { $0.id == persona.id }) else { return }
+        personas[idx] = persona
+        savePersonas()
+    }
+
+    func deletePersona(_ id: UUID) -> UUID? {
+        guard personas.count > 1 else { return nil }
+        personas.removeAll { $0.id == id }
+        savePersonas()
+        return personas.first?.id
+    }
+
+    /// Stable across turns for a persona → keeps the server's prompt/KV prefix cache valid.
+    func stableSystemPrompt(persona: Persona, injectDateContext: Bool, mode: AppMode)
+        -> String
+    {
+        var text = persona.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let name = persona.assistantName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
+            text = "Your name is \(name).\n\n" + text
+        }
+        if injectDateContext {
+            text +=
+                (text.isEmpty ? "" : "\n\n")
+                + "For context, it is currently \(DateContext.current())."
+        }
+        if mode == .conversational {
+            text +=
+                (text.isEmpty ? "" : "\n\n")
+                + "This is a spoken voice conversation. Keep replies natural and concise. When the user clearly wants to stop (says goodbye, 'that's all', 'we're done'), say a brief farewell and call the end_conversation tool to hang up."
+        }
+        return text
+    }
+}

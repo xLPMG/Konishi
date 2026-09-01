@@ -32,7 +32,7 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func row(_ convo: Conversation) -> some View {
-        let persona = model.persona(for: convo)
+        let persona = model.personaStore.persona(for: convo)
         HStack(spacing: 8) {
             Image(systemName: persona.iconSymbol)
                 .foregroundStyle(persona.accentColorHex.map { Color(hex: $0) } ?? .accentColor)

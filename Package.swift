@@ -20,10 +20,14 @@ let package = Package(
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",
                     "-Xlinker", "__info_plist",
-                    "-Xlinker", "Info.plist"
+                    "-Xlinker", "Info.plist",
                 ]),
-                .linkedLibrary("sqlite3")
+                .linkedLibrary("sqlite3"),
             ]
+        ),
+        .testTarget(
+            name: "KonishiTests",
+            dependencies: ["Konishi"]
         )
     ]
 )

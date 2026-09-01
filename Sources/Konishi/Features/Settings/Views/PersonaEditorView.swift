@@ -48,6 +48,6 @@ struct PersonaEditorView: View {
             }
         }
         .formStyle(.grouped)
-        .onChange(of: draft) { model.updatePersona(draft) }
+        .onChange(of: draft) { model.personaStore.updatePersona(draft) }
     }
 }

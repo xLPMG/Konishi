@@ -427,14 +427,14 @@ private struct PersonaSettings: View {
     var body: some View {
         HSplitView {
             List(selection: $selection) {
-                ForEach(model.personas) { persona in
+                ForEach(model.personaStore.personas) { persona in
                     Label(persona.name, systemImage: persona.iconSymbol).tag(persona.id)
                 }
             }
             .frame(minWidth: 150, idealWidth: 190, maxWidth: 240)
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 4) {
-                    Button { model.addPersona() } label: {
+                    Button { model.personaStore.addPersona() } label: {
                         Image(systemName: "plus").frame(width: 24, height: 24).contentShape(Rectangle())
                     }
                     Button {
@@ -442,15 +442,15 @@ private struct PersonaSettings: View {
                     } label: {
                         Image(systemName: "minus").frame(width: 24, height: 24).contentShape(Rectangle())
                     }
-                    .disabled(selection == nil || model.personas.count <= 1)
+                    .disabled(selection == nil || model.personaStore.personas.count <= 1)
                     Spacer()
                 }
                 .buttonStyle(.borderless).padding(6)
             }
 
             Group {
-                if let id = selection ?? model.personas.first?.id,
-                   let persona = model.personas.first(where: { $0.id == id }) {
+                if let id = selection ?? model.personaStore.personas.first?.id,
+                   let persona = model.personaStore.personas.first(where: { $0.id == id }) {
                     PersonaEditorView(persona: persona).id(persona.id)
                 } else {
                     Text("Select a persona").foregroundStyle(.secondary)
@@ -459,7 +459,7 @@ private struct PersonaSettings: View {
             }
             .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear { if selection == nil { selection = model.personas.first?.id } }
+        .onAppear { if selection == nil { selection = model.personaStore.personas.first?.id } }
     }
 }
 

@@ -59,7 +59,7 @@ struct MemoryView: View {
         _ = version
         let categoryNames = Set(MemoryCategory.allCases.map(\.fileName))
         return [globalScope, personaScope].flatMap { scope in
-            model.memory.files(in: scope).filter { !categoryNames.contains($0.name) }
+            model.memoryStore.files(in: scope).filter { !categoryNames.contains($0.name) }
         }
     }
 
@@ -220,9 +220,9 @@ struct MemoryView: View {
                             Image(systemName: "doc").foregroundStyle(.secondary)
                             Text("\(f.scope)/\(f.name)")
                             Spacer()
-                            Button { rawText = model.memory.read(f); rawFile = f } label: { Image(systemName: "square.and.pencil") }
+                            Button { rawText = model.memoryStore.read(f); rawFile = f } label: { Image(systemName: "square.and.pencil") }
                                 .buttonStyle(.borderless).help("Edit")
-                            Button(role: .destructive) { model.memory.delete(f); version += 1 } label: { Image(systemName: "trash") }
+                            Button(role: .destructive) { model.memoryStore.delete(f); version += 1 } label: { Image(systemName: "trash") }
                                 .buttonStyle(.borderless).help("Delete")
                         }
                         .padding(8)
@@ -250,7 +250,7 @@ struct MemoryView: View {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { rawFile = nil } }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Save") {
-                            model.memory.write(scope: file.scope, name: file.name, content: rawText)
+                            model.memoryStore.write(scope: file.scope, name: file.name, content: rawText)
                             version += 1
                             rawFile = nil
                         }
@@ -263,15 +263,15 @@ struct MemoryView: View {
     // MARK: - Mutations (all go through the schema canonicalizer)
 
     private func fullBullets(_ c: MemoryCategory, _ scope: String) -> [String] {
-        MemoryStore.blocks(model.memory.read(file(c, scope))).map(Self.strip)
+        MemoryStore.blocks(model.memoryStore.read(file(c, scope))).map(Self.strip)
     }
 
     private func save(_ c: MemoryCategory, _ scope: String, _ bullets: [String]) {
         let clean = MemoryProfile.canonical(bullets.map { "- \($0)" }.joined(separator: "\n"))
         if clean.isEmpty {
-            model.memory.delete(scope: scope, name: c.fileName)
+            model.memoryStore.delete(scope: scope, name: c.fileName)
         } else {
-            model.memory.write(scope: scope, name: c.fileName, content: clean)
+            model.memoryStore.write(scope: scope, name: c.fileName, content: clean)
         }
         version += 1
     }
@@ -303,7 +303,7 @@ struct MemoryView: View {
         let name = newNote.trimmingCharacters(in: .whitespaces)
         guard !name.isEmpty else { return }
         let fileName = name.hasSuffix(".md") ? name : name + ".md"
-        model.memory.write(scope: personaScope, name: fileName, content: "- ")
+        model.memoryStore.write(scope: personaScope, name: fileName, content: "- ")
         newNote = ""
         version += 1
     }

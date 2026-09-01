@@ -124,7 +124,7 @@ private struct PersonaPicker: View {
 
     var body: some View {
         Menu {
-            ForEach(model.personas) { persona in
+            ForEach(model.personaStore.personas) { persona in
                 Button {
                     if let id = model.selectedConversationID {
                         model.setPersona(persona.id, for: id)

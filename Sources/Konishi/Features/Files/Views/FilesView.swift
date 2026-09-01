@@ -57,7 +57,7 @@ struct FilesView: View {
                 Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
                 Button("Open") { NSWorkspace.shared.open(entry.url) }
                 Button(role: .destructive) {
-                    model.files.delete(entry.url)
+                    model.fileStore.delete(entry.url)
                     selection = nil
                     reload()
                 } label: { Image(systemName: "trash") }
@@ -99,7 +99,7 @@ struct FilesView: View {
 
     private func reload() {
         guard let id = conversationID else { entries = []; return }
-        entries = model.files.entries(conversation: id)
+        entries = model.fileStore.entries(conversation: id)
     }
 
     /// Text content for small, likely-text files (skip large or binary).

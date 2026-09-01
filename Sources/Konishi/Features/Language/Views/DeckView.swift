@@ -96,8 +96,8 @@ struct DeckView: View {
 
     private func reload() {
         guard let pid = model.activeLanguageProfile?.id else { items = []; stats = .init(); return }
-        items = model.language.items(profileID: pid, kind: kindFilter)
-        stats = model.language.stats(profileID: pid)
+        items = model.languageStore.items(profileID: pid, kind: kindFilter)
+        stats = model.languageStore.stats(profileID: pid)
     }
 }
 

@@ -150,7 +150,7 @@ struct LanguageView: View {
     }
 
     private func refresh() {
-        due = model.activeLanguageProfile.map { model.language.stats(profileID: $0.id).due } ?? 0
-        cardCounts = model.language.cardCounts()
+        due = model.activeLanguageProfile.map { model.languageStore.stats(profileID: $0.id).due } ?? 0
+        cardCounts = model.languageStore.cardCounts()
     }
 }
