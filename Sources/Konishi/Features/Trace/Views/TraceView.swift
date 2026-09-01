@@ -17,7 +17,9 @@ struct TraceView: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
                 } label: { Label("Copy", systemImage: "doc.on.doc") }
-                Button("Clear") { model.clearTrace() }
+                Button("Clear") {
+                    if let id = model.selectedConversationID { model.traceStore.clearTrace(conversationID: id) }
+                }
                 Button("Done") { dismiss() }
             }
             .padding(10)
@@ -48,10 +50,10 @@ struct TraceView: View {
         }
         .frame(minWidth: 560, minHeight: 460)
         .onAppear {
-            if let id = model.selectedConversationID { model.ensureTraceLoaded(id) }
+            if let id = model.selectedConversationID { model.traceStore.ensureTraceLoaded(conversationID: id) }
         }
         .onChange(of: model.selectedConversationID) { _, id in
-            if let id { model.ensureTraceLoaded(id) }
+            if let id { model.traceStore.ensureTraceLoaded(conversationID: id) }
         }
     }
 

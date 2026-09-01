@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 
+@MainActor
 @Observable
 final class PersonaStore {
     private let fileURL: URL
@@ -63,8 +64,10 @@ final class PersonaStore {
     }
 
     func deletePersona(_ id: UUID) -> UUID? {
-        guard personas.count > 1 else { return nil }
-        personas.removeAll { $0.id == id }
+        guard personas.count > 1,
+              let index = personas.firstIndex(where: { $0.id == id })
+        else { return nil }
+        personas.remove(at: index)
         savePersonas()
         return personas.first?.id
     }

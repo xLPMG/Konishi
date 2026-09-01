@@ -4,10 +4,11 @@ import Testing
 @testable import Konishi
 
 @Suite("PersonaStore")
+@MainActor
 struct PersonaStoreTests {
 
     /// Fresh temp file per test so tests never touch real app data or race each other.
-    private func tempFileURL() -> URL {
+    nonisolated private func tempFileURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("personas-\(UUID().uuidString).json")
     }
@@ -40,25 +41,31 @@ struct PersonaStoreTests {
 
     @Test("updatePersona edits the matching persona in place")
     func updatePersonaEdits() {
-        let store = PersonaStore(fileURL: tempFileURL())
+        let url = tempFileURL()
+        let store = PersonaStore(fileURL: url)
         var first = store.personas[0]
         first.name = "Renamed"
 
         store.updatePersona(first)
+        Persistence.ioQueue.sync {}
 
         #expect(store.personas[0].name == "Renamed")
+        #expect(PersonaStore(fileURL: url).personas[0].name == "Renamed")
     }
 
     @Test("deletePersona removes it and returns a fallback id")
     func deletePersonaReturnsFallback() {
-        let store = PersonaStore(fileURL: tempFileURL())
+        let url = tempFileURL()
+        let store = PersonaStore(fileURL: url)
         store.addPersona()  // ensure 2+, since deletePersona refuses to empty the list
         let target = store.personas[0]
 
         let fallback = store.deletePersona(target.id)
+        Persistence.ioQueue.sync {}
 
         #expect(fallback != nil)
         #expect(!store.personas.contains { $0.id == target.id })
+        #expect(!PersonaStore(fileURL: url).personas.contains { $0.id == target.id })
     }
 
     @Test("deletePersona refuses to remove the last remaining persona")
@@ -73,5 +80,16 @@ struct PersonaStoreTests {
 
         #expect(fallback == nil)
         #expect(store.personas.count == 1)
+    }
+
+    @Test("deletePersona does nothing for an unknown id")
+    func deletePersonaRejectsUnknownID() {
+        let store = PersonaStore(fileURL: tempFileURL())
+        let original = store.personas
+
+        let fallback = store.deletePersona(UUID())
+
+        #expect(fallback == nil)
+        #expect(store.personas == original)
     }
 }

@@ -38,8 +38,6 @@ final class AppModel {
     var languageInputTarget = true
     /// Ephemeral one-line status for tool activity (e.g. "Thinking…", "Calling web_search…").
     var activity: String?
-    /// Live request/response trace per conversation (in-memory, cleared with the chat).
-    var traces: [UUID: [TraceEntry]] = [:]
 
     // Server info
     var models: [ModelInfo] = []
@@ -56,6 +54,7 @@ final class AppModel {
     let voice = VoiceManager()
     let embeddingCache = EmbeddingCache()
     let languageStore = LanguageStore()
+    let traceStore = TraceStore()
     private var streamTask: Task<Void, Never>?
     /// Resumed with the tool result once the user answers a pending multiple-choice prompt.
     private var interactionContinuation: CheckedContinuation<String, Never>?
@@ -275,11 +274,9 @@ final class AppModel {
         hydratedIDs.remove(id)
         hydrationOrder.removeAll { $0 == id }
         if streamingConversationID == id { streamingConversationID = nil }
-        traces[id] = nil
-        traceSaveTasks[id]?.cancel()
-        traceSaveTasks[id] = nil
-        loadedTraceIDs.remove(id)
-        Self.deleteTraceFile(id)
+        traceStore.traces[id] = nil
+        traceStore.cancelTraceSave(conversationID: id)
+        traceStore.deleteTraceFile(conversationID: id)
         documentStore.deleteAll(conversationID: id)
         Self.deleteConversationFile(id)
         try? FileManager.default.removeItem(at: Paths.conversationFiles(id))
@@ -307,57 +304,15 @@ final class AppModel {
         stop()
         conversations[idx].messages.removeAll()
         reconcileFoldCounters(idx)
-        traces[id] = nil
-        Self.deleteTraceFile(id)
+        traceStore.deleteTraceFile(conversationID: id)
         errorMessage = nil
         touch(idx)
     }
 
     // MARK: - Trace
 
-    /// Conversations whose persisted trace has already been pulled into `traces` this session.
-    private var loadedTraceIDs: Set<UUID> = []
-    /// Debounced per-conversation trace writers.
-    private var traceSaveTasks: [UUID: Task<Void, Never>] = [:]
-
     var currentTrace: [TraceEntry] {
-        selectedConversationID.flatMap { traces[$0] } ?? []
-    }
-
-    func clearTrace() {
-        guard let id = selectedConversationID else { return }
-        traces[id] = nil
-        Self.deleteTraceFile(id)
-    }
-
-    /// Load a conversation's trace from disk on first view (traces from earlier sessions).
-    func ensureTraceLoaded(_ id: UUID) {
-        guard loadedTraceIDs.insert(id).inserted else { return }
-        guard traces[id] == nil else { return }   // never clobber this session's in-memory trace
-        let disk = Self.loadTrace(id)
-        if !disk.isEmpty { traces[id] = disk }
-    }
-
-    private func trace(_ conversationID: UUID, _ kind: TraceEntry.Kind, _ text: String, detail: String? = nil) {
-        ensureTraceLoaded(conversationID)   // merge with a prior session's trace before appending
-        traces[conversationID, default: []].append(TraceEntry(kind: kind, text: text, detail: detail))
-        if let count = traces[conversationID]?.count, count > 600 {
-            traces[conversationID]?.removeFirst(count - 600)
-        }
-        scheduleTraceSave(conversationID)
-    }
-
-    /// Persist the trace shortly after the last event so streaming bursts coalesce into one write.
-    private func scheduleTraceSave(_ id: UUID) {
-        guard settings.saveTraces else { return }
-        traceSaveTasks[id]?.cancel()
-        let snapshot = traces[id] ?? []
-        traceSaveTasks[id] = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(1200))
-            guard !Task.isCancelled else { return }
-            await Task.detached { Self.saveTrace(id, snapshot) }.value
-            self?.traceSaveTasks[id] = nil
-        }
+        selectedConversationID.flatMap { traceStore.traces[$0] } ?? []
     }
 
     private func requestSummary(config: RequestConfig, wire: [WireMessage], tools: [ToolDef]?, memory: String, summary: String) -> String {
@@ -527,7 +482,12 @@ final class AppModel {
             let documentText = await self.documentContext(conversationID: conversationID, history: history)
             let wire = self.buildWire(systemText: systemText, summary: summary, memoryText: memoryText, documentText: documentText, history: history)
 
-            self.trace(conversationID, .request, self.requestSummary(config: config, wire: wire, tools: tools, memory: memoryText, summary: summary), detail: self.requestDetail(wire: wire))
+            traceStore.trace(
+                conversationID: conversationID, kind: .request,
+                text: self.requestSummary(
+                    config: config, wire: wire, tools: tools, memory: memoryText, summary: summary),
+                saveTraces: settings.saveTraces,
+                detail: self.requestDetail(wire: wire))
 
             var firstTokenAt: Date?
             var charCount = 0
@@ -546,7 +506,12 @@ final class AppModel {
                         if firstTokenAt == nil {
                             firstTokenAt = Date()
                             self.activity = nil
-                            self.trace(conversationID, .token, String(format: "First token after %.0f ms", Date().timeIntervalSince(start) * 1000))
+                            traceStore.trace(
+                                conversationID: conversationID, kind: .token,
+                                text: String(
+                                    format: "First token after %.0f ms",
+                                    Date().timeIntervalSince(start) * 1000),
+                                saveTraces: settings.saveTraces)
                         }
                         let out = stripper.consume(d)
                         if !out.reasoning.isEmpty {
@@ -564,15 +529,25 @@ final class AppModel {
                         self.appendReasoning(r, conversationID: conversationID, assistantID: assistantID)
                     case let .usage(u):
                         usage = u
-                        self.trace(conversationID, .usage, "prompt=\(u.promptTokens ?? 0), completion=\(u.completionTokens ?? 0), total=\(u.totalTokens ?? 0)")
+                        traceStore.trace(
+                            conversationID: conversationID, kind: .usage,
+                            text:
+                                "prompt=\(u.promptTokens ?? 0), completion=\(u.completionTokens ?? 0), total=\(u.totalTokens ?? 0)",
+                            saveTraces: settings.saveTraces)
                     case let .toolCalls(calls):
                         toolCalls = calls
                         for c in calls {
-                            self.trace(conversationID, .tool, "\(c.function.name ?? "tool")(\(c.function.arguments))")
+                            traceStore.trace(
+                                conversationID: conversationID, kind: .tool,
+                                text: "\(c.function.name ?? "tool")(\(c.function.arguments))",
+                                saveTraces: settings.saveTraces)
                         }
                     case let .finish(reason):
                         finishReason = reason
-                        self.trace(conversationID, .finish, "finish_reason=\(reason ?? "nil"), deltas=\(deltaCount), chars=\(charCount)")
+                        traceStore.trace(
+                            conversationID: conversationID, kind: .finish,
+                            text: "finish_reason=\(reason ?? "nil"), deltas=\(deltaCount), chars=\(charCount)",
+                            saveTraces: settings.saveTraces)
                     }
                 }
                 let tail = stripper.finish()
@@ -581,27 +556,45 @@ final class AppModel {
                     deltaCount += 1
                     charCount += tail.visible.count
                     answer += tail.visible
-                    self.appendDelta(tail.visible, conversationID: conversationID, assistantID: assistantID)
+                    self.appendDelta(
+                        tail.visible, conversationID: conversationID, assistantID: assistantID)
                 }
                 if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.trace(conversationID, .reasoning, reasoning)
+                    traceStore.trace(
+                        conversationID: conversationID, kind: .reasoning,
+                        text: reasoning,
+                        saveTraces: settings.saveTraces)
                 }
                 if !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.trace(conversationID, .result, answer)
+                    traceStore.trace(
+                        conversationID: conversationID, kind: .result,
+                        text: answer,
+                        saveTraces: settings.saveTraces)
                 }
                 if deltaCount == 0 && (toolCalls?.isEmpty ?? true) {
                     if finishReason == "length" {
-                        let hint = "The model hit the token limit while reasoning and produced no answer. Raise Max tokens in Settings › Generation."
-                        self.trace(conversationID, .info, hint)
+                        let hint =
+                            "The model hit the token limit while reasoning and produced no answer. Raise Max tokens in Settings › Generation."
+                        traceStore.trace(
+                            conversationID: conversationID, kind: .info,
+                            text: hint,
+                            saveTraces: settings.saveTraces)
                         self.errorMessage = hint
                     } else {
-                        self.trace(conversationID, .info, "No content received (empty reply). finish_reason=\(finishReason ?? "nil").")
+                        traceStore.trace(
+                            conversationID: conversationID, kind: .info,
+                            text:
+                                "No content received (empty reply). finish_reason=\(finishReason ?? "nil").",
+                            saveTraces: settings.saveTraces)
                     }
                 }
             } catch {
                 caughtError = true
                 self.errorMessage = error.localizedDescription
-                self.trace(conversationID, .error, error.localizedDescription)
+                traceStore.trace(
+                    conversationID: conversationID, kind: .error,
+                    text: error.localizedDescription,
+                    saveTraces: settings.saveTraces)
             }
             self.finishStream(
                 conversationID: conversationID,
@@ -948,7 +941,10 @@ final class AppModel {
                     result = await self.executeTool(call, conversationID: batch.conversationID)
                 }
                 self.loopSignatures.append(sig)
-                self.trace(batch.conversationID, .result, "\(name) → \(result.prefix(400))")
+                traceStore.trace(
+                    conversationID: batch.conversationID, kind: .result,
+                    text: "\(name) → \(result.prefix(400))",
+                    saveTraces: settings.saveTraces)
                 if let i = self.ensureHydratedIndex(batch.conversationID) {
                     self.conversations[i].messages.append(
                         ChatMessage(role: .tool, content: result, toolCallId: call.id, toolName: call.function.name)
@@ -1480,10 +1476,10 @@ final class AppModel {
                 .sorted { $0.score > $1.score }
                 .prefix(max(1, settings.memoryTopK))
             appendMemorySections(Array(scored), to: &sections)
-            trace(
-                conversationID,
-                .memory,
-                "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", settings.memoryThreshold)) injected",
+            traceStore.trace(
+                conversationID: conversationID, kind: .memory,
+                text: "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", settings.memoryThreshold)) injected",
+                saveTraces: settings.saveTraces,
                 detail: memoryRetrievalTraceDetail(Array(scored))
             )
         } catch {
@@ -1502,10 +1498,10 @@ final class AppModel {
                 .sorted { $0.score > $1.score }
                 .prefix(max(1, settings.memoryTopK))
             appendMemorySections(Array(scored), to: &sections)
-            trace(
-                conversationID,
-                .error,
-                "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(Self.embedErrorHint(error))",
+            traceStore.trace(
+                conversationID: conversationID, kind: .error,
+                text: "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(Self.embedErrorHint(error))",
+                saveTraces: settings.saveTraces,
                 detail: memoryRetrievalTraceDetail(Array(scored))
             )
         }
@@ -1587,7 +1583,10 @@ final class AppModel {
                 .map { "## \($0.chunk.label)\n\($0.chunk.text)" }
                 .joined(separator: "\n\n")
         } catch {
-            trace(conversationID, .error, "document retrieval failed: \(Self.embedErrorHint(error))")
+            traceStore.trace(
+                conversationID: conversationID, kind: .error,
+                text: "document retrieval failed: \(Self.embedErrorHint(error))",
+                saveTraces: settings.saveTraces)
             return ""
         }
     }
@@ -1818,7 +1817,11 @@ final class AppModel {
             ── new summary ──
             \(clean)
             """
-            self.trace(conversationID, .compress, "folded \(toFold.count) old messages into summary (\(clean.count) chars); \(self.conversations[i].messages.count - foldEnd) kept live", detail: detail)
+            traceStore.trace(
+                conversationID: conversationID, kind: .compress,
+                text: "folded \(toFold.count) old messages into summary (\(clean.count) chars); \(self.conversations[i].messages.count - foldEnd) kept live",
+                saveTraces: settings.saveTraces,
+                detail: detail)
             self.touch(i)
         }
     }
@@ -1924,7 +1927,10 @@ final class AppModel {
             self.conversations[i].title = title
             self.conversations[i].lastTitledMessageCount = currentMsgs.count
             self.touch(i)
-            trace(conversationID, .info, "refined conversation title")
+            traceStore.trace(
+                conversationID: conversationID, kind: .info,
+                text: "refined conversation title",
+                saveTraces: settings.saveTraces)
         }
     }
 
@@ -2180,7 +2186,10 @@ final class AppModel {
         let convoID = conversationSessionID
         guard settings.conversationBackchannelANE, OnDeviceLLM.isAvailable else {
             if let convoID {
-                trace(convoID, .info, "backchannel classifier unavailable or disabled; using interruption fallback")
+                traceStore.trace(
+                    conversationID: convoID, kind: .info,
+                    text: "backchannel classifier unavailable or disabled; using interruption fallback",
+                    saveTraces: settings.saveTraces)
             }
             confirmBargeIn(expectedGeneration: generation, convoID: convoID)
             return
@@ -2203,13 +2212,19 @@ final class AppModel {
             let isBackchannel = unchanged && isBackchannelAnswer == true
             if isBackchannel {
                 if let convoID {
-                    self.trace(convoID, .info, "backchannel classifier (ANE): BACKCHANNEL in \(elapsed)ms; assistant continued")
+                    traceStore.trace(
+                        conversationID: convoID, kind: .info,
+                        text: "backchannel classifier (ANE): BACKCHANNEL in \(elapsed)ms; assistant continued",
+                        saveTraces: settings.saveTraces)
                 }
                 self.dismissBackchannel()
             } else {
                 if let convoID {
                     let outcome = unchanged ? "INTERRUPT" : "transcript changed"
-                    self.trace(convoID, .info, "backchannel classifier (ANE): \(outcome) in \(elapsed)ms")
+                    traceStore.trace(
+                        conversationID: convoID, kind: .info,
+                        text: "backchannel classifier (ANE): \(outcome) in \(elapsed)ms",
+                        saveTraces: settings.saveTraces)
                 }
                 self.confirmBargeIn(expectedGeneration: generation, convoID: convoID)
             }
@@ -2225,7 +2240,10 @@ final class AppModel {
             self.bargeInClassificationTask?.cancel(); self.bargeInClassificationTask = nil
             self.bargeInFallbackTask = nil
             if let convoID {
-                self.trace(convoID, .info, "backchannel classifier (ANE): timed out after 1000ms; treating as interruption")
+                traceStore.trace(
+                    conversationID: convoID, kind: .info,
+                    text: "backchannel classifier (ANE): timed out after 1000ms; treating as interruption",
+                    saveTraces: settings.saveTraces)
             }
             self.confirmBargeIn(expectedGeneration: generation, convoID: convoID)
         }
@@ -2268,7 +2286,10 @@ final class AppModel {
         endConversationRequested = false
         if let convoID {
             markConversationReplyInterrupted(convoID: convoID)
-            trace(convoID, .info, "barge-in detected; cancelled reply and resumed listening")
+            traceStore.trace(
+                conversationID: convoID, kind: .info,
+                text: "barge-in detected; cancelled reply and resumed listening",
+                saveTraces: settings.saveTraces)
         }
         bargeInCandidate = ""
         bargeInCandidateFinal = false
@@ -2326,7 +2347,11 @@ final class AppModel {
             let wire = self.buildWire(systemText: systemText, summary: summary, memoryText: memoryText, documentText: documentText, history: history)
             // The voice-only hang-up tool is offered on every conversational turn.
             let tools = [Tools.endConversationDef]
-            self.trace(convoID, .request, self.requestSummary(config: config, wire: wire, tools: tools, memory: memoryText, summary: summary), detail: self.requestDetail(wire: wire))
+            traceStore.trace(
+                conversationID: convoID, kind: .request,
+                text: self.requestSummary(config: config, wire: wire, tools: tools, memory: memoryText, summary: summary),
+                saveTraces: settings.saveTraces,
+                detail: self.requestDetail(wire: wire))
             // Server TTS streams sentence-by-sentence so speech starts before the whole reply lands;
             // native TTS still speaks the completed reply.
             if self.settings.ttsSource == .server {
@@ -2353,7 +2378,10 @@ final class AppModel {
     /// (the voice path has no general tool loop); returns true if the session should hang up.
     private func handleConversationalToolCalls(_ calls: [ToolCall], convoID: UUID) {
         for call in calls where call.function.name == "end_conversation" {
-            trace(convoID, .tool, "end_conversation() — hanging up after this reply")
+            traceStore.trace(
+                conversationID: convoID, kind: .tool,
+                text: "end_conversation() — hanging up after this reply",
+                saveTraces: settings.saveTraces)
             endConversationRequested = true
         }
     }
@@ -2380,7 +2408,10 @@ final class AppModel {
             }
         } catch {
             guard !Task.isCancelled, generation == conversationGeneration else { return }
-            self.trace(convoID, .error, "conversational reply failed: \(error.localizedDescription)")
+            traceStore.trace(
+                conversationID: convoID, kind: .error,
+                text: "conversational reply failed: \(error.localizedDescription)",
+                saveTraces: settings.saveTraces)
             guard self.conversationActive else { return }
             self.speakThenListen("", generation: generation)
             return
@@ -2391,10 +2422,16 @@ final class AppModel {
         reasoning += tail.reasoning
         conversationReplyDraft = reply
         if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            trace(convoID, .reasoning, reasoning)
+            traceStore.trace(
+                conversationID: convoID, kind: .reasoning,
+                text: reasoning,
+                saveTraces: settings.saveTraces)
         }
         if !toolCalls.isEmpty { handleConversationalToolCalls(toolCalls, convoID: convoID) }
-        self.trace(convoID, .finish, "reply in \(Int(Date().timeIntervalSince(start) * 1000))ms, chars=\(reply.count)")
+        traceStore.trace(
+            conversationID: convoID, kind: .finish,
+            text: "reply in \(Int(Date().timeIntervalSince(start) * 1000))ms, chars=\(reply.count)",
+            saveTraces: settings.saveTraces)
         guard self.conversationActive else { return }
         self.finishConversationTurn(convoID: convoID, reply: reply)
         self.speakThenListen(reply, generation: generation)
@@ -2470,7 +2507,10 @@ final class AppModel {
             }
         } catch {
             guard !Task.isCancelled, generation == conversationGeneration else { return }
-            trace(convoID, .error, "conversational reply failed: \(error.localizedDescription)")
+            traceStore.trace(
+                conversationID: convoID, kind: .error,
+                text: "conversational reply failed: \(error.localizedDescription)",
+                saveTraces: settings.saveTraces)
         }
         guard !Task.isCancelled, generation == conversationGeneration else { return }
         let tail = stripper.finish()
@@ -2479,14 +2519,20 @@ final class AppModel {
         conversationReplyDraft = full
         buffer += tail.visible
         if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            trace(convoID, .reasoning, reasoning)
+            traceStore.trace(
+                conversationID: convoID, kind: .reasoning,
+                text: reasoning,
+                saveTraces: settings.saveTraces)
         }
         let rest = buffer.strippedForSpeech
         if !rest.isEmpty { segCont.yield(rest) }
         segCont.finish()
         conversationSegmentContinuation = nil
         if !toolCalls.isEmpty { handleConversationalToolCalls(toolCalls, convoID: convoID) }
-        trace(convoID, .finish, "reply in \(Int(Date().timeIntervalSince(start) * 1000))ms, chars=\(full.count)")
+        traceStore.trace(
+            conversationID: convoID, kind: .finish,
+            text: "reply in \(Int(Date().timeIntervalSince(start) * 1000))ms, chars=\(full.count)",
+            saveTraces: settings.saveTraces)
         guard conversationActive else { return }
         finishConversationTurn(convoID: convoID, reply: full)
     }
@@ -2638,9 +2684,12 @@ final class AppModel {
 
         isReflecting = true
         isMemorizing = true
-        trace(conversationID, .memory, consolidate
-            ? "consolidating memory (\(personaScope))…"
-            : "auto memory: updating (\(personaScope))…")
+        traceStore.trace(
+            conversationID: conversationID, kind: .memory,
+            text: consolidate
+                ? "consolidating memory (\(personaScope))…"
+                : "auto memory: updating (\(personaScope))…",
+            saveTraces: settings.saveTraces)
         Task { [weak self] in
             guard let self else { return }
             defer { self.isReflecting = false; self.isMemorizing = false }
@@ -2648,11 +2697,17 @@ final class AppModel {
             do {
                 result = try await ChatService.completeStreaming(config: config, messages: [WireMessage(role: Role.user.rawValue, text: instruction)])
             } catch {
-                self.trace(conversationID, .error, "\(consolidate ? "memory cleanup" : "auto memory") failed: \(error.localizedDescription)")
+                traceStore.trace(
+                    conversationID: conversationID, kind: .error,
+                    text: "\(consolidate ? "memory cleanup" : "auto memory") failed: \(error.localizedDescription)",
+                    saveTraces: settings.saveTraces)
                 return
             }
             guard let result, !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                self.trace(conversationID, .error, "memory update produced no output (model returned an empty reply)")
+                traceStore.trace(
+                    conversationID: conversationID, kind: .error,
+                    text: "memory update produced no output (model returned an empty reply)",
+                    saveTraces: settings.saveTraces)
                 return
             }
             var traceDetail: String?
@@ -2660,11 +2715,17 @@ final class AppModel {
             if consolidate {
                 let sections = MemoryProfile.parse(result)
                 guard !sections.isEmpty else {
-                    self.trace(conversationID, .error, "memory consolidation skipped: could not parse category sections from output")
+                    traceStore.trace(
+                        conversationID: conversationID, kind: .error,
+                        text: "memory consolidation skipped: could not parse category sections from output",
+                        saveTraces: settings.saveTraces)
                     return
                 }
                 if let backupURL = self.memoryStore.backup(scopes: [globalScope, personaScope]) {
-                    self.trace(conversationID, .memory, "backed up memory before cleanup → \(backupURL.lastPathComponent)")
+                    traceStore.trace(
+                        conversationID: conversationID, kind: .memory,
+                        text: "backed up memory before cleanup → \(backupURL.lastPathComponent)",
+                        saveTraces: settings.saveTraces)
                 }
                 var lintFixes: [String] = []
                 for cat in MemoryCategory.allCases {
@@ -2684,7 +2745,10 @@ final class AppModel {
                 traceDetail = changes.isEmpty ? "(no file changes)" : changes
             } else {
                 guard let delta = MemoryProfile.parseDelta(result) else {
-                    self.trace(conversationID, .error, "memory update skipped: could not parse typed operations from output")
+                    traceStore.trace(
+                        conversationID: conversationID, kind: .error,
+                        text: "memory update skipped: could not parse typed operations from output",
+                        saveTraces: settings.saveTraces)
                     return
                 }
                 let application = MemoryProfile.apply(delta, store: self.memoryStore, global: globalScope, persona: personaScope)
@@ -2705,9 +2769,10 @@ final class AppModel {
             }
             if consolidate { self.lastConsolidatedBullets[personaScope] = self.memoryStore.bulletCount(in: globalScope) + self.memoryStore.bulletCount(in: personaScope) }
             let how = consolidate ? "cleaned up" : "updated"
-            self.trace(
-                conversationID, .memory,
-                "\(how) long-term memory (\(personaScope)) from \(messages.count) messages\(operationSummary)",
+            traceStore.trace(
+                conversationID: conversationID, kind: .memory,
+                text: "\(how) long-term memory (\(personaScope)) from \(messages.count) messages\(operationSummary)",
+                saveTraces: settings.saveTraces,
                 detail: traceDetail
             )
         }
@@ -2838,8 +2903,14 @@ final class AppModel {
 
     func deletePersona(_ id: UUID) {
         guard let fallback = personaStore.deletePersona(id) else { return }
-        for i in conversations.indices where conversations[i].personaID == id {
-            conversations[i].personaID = fallback
+        let affectedConversationIDs = conversations.compactMap { conversation in
+            conversation.personaID == id ? conversation.id : nil
+        }
+        for conversationID in affectedConversationIDs {
+            ensureHydrated(conversationID)
+            guard let index = conversationIndex(conversationID) else { continue }
+            conversations[index].personaID = fallback
+            save(conversations[index])
         }
     }
 
@@ -2914,25 +2985,5 @@ final class AppModel {
         let url = Paths.conversations.appendingPathComponent("\(id.uuidString).json")
         // Same serial queue as saves so a delete never races ahead of a queued write for this id.
         Persistence.ioQueue.async { try? FileManager.default.removeItem(at: url) }
-    }
-
-    nonisolated private static func saveTrace(_ id: UUID, _ entries: [TraceEntry]) {
-        let url = Paths.traceFile(id)
-        if entries.isEmpty { try? FileManager.default.removeItem(at: url); return }
-        guard let data = try? Persistence.encoder.encode(entries) else { return }
-        try? data.write(to: url, options: .atomic)
-    }
-
-    nonisolated private static func loadTrace(_ id: UUID) -> [TraceEntry] {
-        let url = Paths.traces.appendingPathComponent("\(id.uuidString).json")
-        guard let data = try? Data(contentsOf: url),
-              let decoded = try? Persistence.decoder.decode([TraceEntry].self, from: data)
-        else { return [] }
-        return decoded
-    }
-
-    nonisolated private static func deleteTraceFile(_ id: UUID) {
-        let url = Paths.traces.appendingPathComponent("\(id.uuidString).json")
-        try? FileManager.default.removeItem(at: url)
     }
 }
