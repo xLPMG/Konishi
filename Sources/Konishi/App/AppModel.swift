@@ -194,12 +194,6 @@ final class AppModel {
     var contentMatchIDs: Set<UUID> = []
     var searchTask: Task<Void, Never>?
 
-    func touch(_ idx: Int) {
-        conversations[idx].updatedAt = .now
-        ensureHydrated(conversations[idx].id)   // never persist an evicted (empty) body over the file
-        save(conversations[idx])
-    }
-
     // MARK: - Sending & streaming
 
     var canSend: Bool {
@@ -218,99 +212,13 @@ final class AppModel {
     /// Only the unspoken tail is held, so we never rescan the whole (growing) message each flush.
     var ttsPending = ""
     var ttsMessageID: UUID?
-    private static let sentenceTerminators: Set<Character> = [".", "!", "?", "。", "！", "？", "…", "\n"]
+    static let sentenceTerminators: Set<Character> = [".", "!", "?", "。", "！", "？", "…", "\n"]
     /// Serial server-TTS pipeline for streamed chat replies: sentences synthesized in order.
     var speechSegCont: AsyncStream<String>.Continuation?
     var speechSynthTask: Task<Void, Never>?
     /// True once we've surfaced a server-TTS failure this session, so we don't nag on every reply.
     /// Reset when TTS succeeds again or the audio endpoint/source changes.
     var warnedServerTTSFailure = false
-
-    var nativeTTS: Bool { mode == .language || settings.ttsSource == .native }
-
-    /// Speaks newly-completed sentences as the reply streams in (native and server TTS), so speech
-    /// starts almost immediately instead of waiting for the whole message. Only the unspoken tail
-    /// is scanned (via `ttsPending`), not the whole growing message.
-    func streamSpeak(delta: String, assistantID: UUID) {
-        guard settings.autoSpeak else { return }
-        if ttsMessageID != assistantID { ttsMessageID = assistantID; ttsPending = "" }
-        ttsPending += delta
-        guard let cut = ttsPending.lastIndex(where: { Self.sentenceTerminators.contains($0) }) else { return }
-        let chunk = String(ttsPending[...cut])
-        ttsPending = String(ttsPending[ttsPending.index(after: cut)...])
-        enqueueSpeech(chunk)
-    }
-
-    /// At end of stream: speak whatever sentence tail wasn't already streamed. Works for both
-    /// native and server TTS (server sentences flow through the same serial synth pipeline).
-    func emitFinalSpeech(assistantID: UUID, content: String) {
-        guard settings.autoSpeak else { return }
-        // If streaming never accumulated this message (e.g. auto-speak toggled on late), speak it whole.
-        if ttsMessageID != assistantID { ttsMessageID = assistantID; ttsPending = content }
-        let tail = ttsPending
-        ttsPending = ""
-        guard !tail.isEmpty else { return }
-        enqueueSpeech(tail)
-    }
-
-    private func enqueueSpeech(_ text: String) {
-        let clean = text.strippedForSpeech
-        guard !clean.isEmpty else { return }
-        if mode == .language, let p = activeLanguageProfile {
-            voice.enqueueBilingual(clean, targetLocale: p.targetLocale, baseLocale: p.baseLocale,
-                                   targetVoiceID: p.targetVoiceID, baseVoiceID: p.baseVoiceID, rate: settings.speechRate)
-        } else if nativeTTS {
-            voice.enqueueNative(clean, voiceID: settings.voiceIdentifier, rate: settings.speechRate)
-        } else {
-            beginServerSpeechIfNeeded()
-            speechSegCont?.yield(clean)
-        }
-    }
-
-    /// Lazily starts the serial server-TTS pipeline for the current reply: each sentence is
-    /// synthesized in order and its audio queued for gapless playback.
-    private func beginServerSpeechIfNeeded() {
-        guard speechSegCont == nil else { return }
-        voice.startOutputKeepAlive()   // keep the device warm so the first sentence isn't clipped
-        voice.beginAudioStream()
-        let ttsConfig = settings.requestConfig(modelOverride: nil)
-        let (segs, cont) = AsyncStream.makeStream(of: String.self)
-        speechSegCont = cont
-        speechSynthTask = Task { [weak self] in
-            for await seg in segs {
-                guard let self else { break }
-                do {
-                    let data = try await ChatService.speech(config: ttsConfig, text: seg)
-                    self.warnedServerTTSFailure = false
-                    self.voice.enqueueAudioData(data)
-                } catch {
-                    self.warnServerTTSFailure(error)
-                    break   // audio endpoint unreachable — stop hammering it
-                }
-            }
-            self?.voice.sealAudioStream()
-        }
-    }
-
-    /// Stops any current speech and resets streaming-TTS progress for a fresh reply.
-    func resetSpeech() {
-        voice.stopSpeaking()
-        speechSegCont?.finish()
-        speechSegCont = nil
-        speechSynthTask?.cancel()
-        speechSynthTask = nil
-        if !conversationActive { voice.stopOutputKeepAlive() }
-        ttsMessageID = nil
-        ttsPending = ""
-    }
-
-    /// Surfaces a server-TTS failure only the first time this session; afterwards it stays silent
-    /// (audio is just skipped) so the banner doesn't reappear on every reply once you've seen it.
-    func warnServerTTSFailure(_ error: Error) {
-        guard !warnedServerTTSFailure else { return }
-        warnedServerTTSFailure = true
-        voice.lastError = "Server TTS unavailable — replies won't be spoken this session. \(error.localizedDescription)"
-    }
 
     // MARK: - Tool approval & execution
 
@@ -380,19 +288,4 @@ final class AppModel {
     var isMemorizing = false
     /// Bullet count of each scope at its last consolidation, to avoid re-consolidating repeatedly.
     var lastConsolidatedBullets: [String: Int] = [:]
-
-    // MARK: - Persona management
-
-    func deletePersona(_ id: UUID) {
-        guard let fallback = personaStore.deletePersona(id) else { return }
-        let affectedConversationIDs = conversations.compactMap { conversation in
-            conversation.personaID == id ? conversation.id : nil
-        }
-        for conversationID in affectedConversationIDs {
-            ensureHydrated(conversationID)
-            guard let index = conversationIndex(conversationID) else { continue }
-            conversations[index].personaID = fallback
-            save(conversations[index])
-        }
-    }
 }

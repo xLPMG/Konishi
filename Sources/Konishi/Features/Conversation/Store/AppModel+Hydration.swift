@@ -48,6 +48,12 @@ extension AppModel {
         conversations.firstIndex { $0.id == id }
     }
 
+    func touch(_ idx: Int) {
+        conversations[idx].updatedAt = .now
+        ensureHydrated(conversations[idx].id)   // never persist an evicted (empty) body over the file
+        save(conversations[idx])
+    }
+
     func scheduleSearch() {
         searchTask?.cancel()
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
