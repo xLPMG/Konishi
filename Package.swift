@@ -6,13 +6,9 @@ let package = Package(
     platforms: [
         .macOS(.v26)
     ],
-    dependencies: [
-        .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.7.0")
-    ],
     targets: [
         .executableTarget(
             name: "Konishi",
-            dependencies: ["SwiftSoup"],
             path: "Sources/Konishi",
             linkerSettings: [
                 // Embed Info.plist so TCC can read mic/speech usage strings when run via `swift run`.
