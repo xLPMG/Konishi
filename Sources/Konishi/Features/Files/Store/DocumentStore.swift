@@ -81,7 +81,7 @@ struct DocumentStore {
     @MainActor
     func context(
         for conversationID: UUID, query: String,
-        cache: EmbeddingCache, model: String, topK: Int, requestConfig: RequestConfig
+        cache: EmbeddingCache, topK: Int, requestConfig: RequestConfig
     ) async -> Result<String, Error> {
         let docs = self.documents(for: conversationID)
         guard !docs.isEmpty, !query.isEmpty else {
@@ -100,7 +100,7 @@ struct DocumentStore {
 
         do {
             let (q, blockEmb) = try await cache.embedWithCache(
-                query: query, blocks: chunks.map(\.text), model: model, requestConfig: requestConfig
+                query: query, blocks: chunks.map(\.text), requestConfig: requestConfig
             )
             let scored = zip(chunks, blockEmb)
                 .map { (chunk: $0.0, score: EmbeddingCache.cosine(q, $0.1)) }

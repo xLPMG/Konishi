@@ -49,14 +49,14 @@ final class EmbeddingCache {
 
     /// Embeds the query plus only the memory blocks not already cached (blocks are stable).
     func embedWithCache(
-        query: String, blocks: [String], model: String, requestConfig: RequestConfig
+        query: String, blocks: [String], requestConfig: RequestConfig
     ) async throws -> (
         query: [Double], blocks: [[Double]]
     ) {
         var blockEmb = [[Double]?](repeating: nil, count: blocks.count)
         var missing: [Int] = []
         for (i, b) in blocks.enumerated() {
-            if let e = self.get(model: model, text: b) {
+            if let e = self.get(model: requestConfig.embeddingModel, text: b) {
                 blockEmb[i] = e
             } else {
                 missing.append(i)
@@ -68,7 +68,7 @@ final class EmbeddingCache {
         for (k, idx) in missing.enumerated() {
             let e = result[k + 1]
             blockEmb[idx] = e
-            self.set(model: model, text: blocks[idx], embedding: e)
+            self.set(model: requestConfig.embeddingModel, text: blocks[idx], embedding: e)
         }
         self.save()
         return (result[0], blockEmb.map { $0 ?? [] })

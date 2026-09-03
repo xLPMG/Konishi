@@ -1,6 +1,28 @@
 import Foundation
 
 extension AppModel {
+    /// Dynamic memory for this turn (attached to the latest user message, not the system prompt).
+    func memoryContext(conversationID: UUID, persona: Persona, history: [ChatMessage]) async
+        -> String
+    {
+        // Language sessions get a compact deck summary instead of personal memory (the deck is the memory).
+        if isLanguageConversation(conversationID) { return languageDeckContext() }
+        guard settings.injectMemory else { return "" }
+        let scopes = [MemoryStore.globalScope, persona.memoryScope]
+        let query = history.last(where: { $0.role == .user })?.content ?? ""
+        let result = await memoryStore.retrieve(
+            scopes: scopes, query: query, cache: embeddingCache,
+            requestConfig: settings.requestConfig(modelOverride: nil),
+            threshold: settings.memoryThreshold, topK: settings.memoryTopK
+        )
+        if let trace = result.trace {
+            traceStore.trace(
+                conversationID: conversationID, kind: trace.kind, text: trace.text,
+                saveTraces: settings.saveTraces, detail: trace.detail)
+        }
+        return result.text
+    }
+
     /// After a completed turn, fold new messages into memory once enough fresh user turns
     /// have accumulated. The extractor itself decides whether anything is worth saving (it
     /// returns no operations when nothing is durable). Escalates to a full consolidation once

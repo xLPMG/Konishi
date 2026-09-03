@@ -13,11 +13,13 @@ struct MemoryStore {
 
     func files(in scope: String) -> [File] {
         let dir = Paths.memoryScope(scope)
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: nil
-        )) ?? []
-        return contents
+        let contents =
+            (try? FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: nil
+            )) ?? []
+        return
+            contents
             .filter { $0.pathExtension.lowercased() == "md" }
             .map { File(scope: scope, name: $0.lastPathComponent, url: $0) }
             .sorted { $0.name < $1.name }
@@ -34,7 +36,10 @@ struct MemoryStore {
     }
 
     func append(scope: String, name: String, content: String) {
-        let existing = read(File(scope: scope, name: name, url: Paths.memoryScope(scope).appendingPathComponent(name)))
+        let existing = read(
+            File(
+                scope: scope, name: name, url: Paths.memoryScope(scope).appendingPathComponent(name)
+            ))
         let separator = existing.isEmpty ? "" : "\n\n"
         write(scope: scope, name: name, content: existing + separator + content)
     }
@@ -67,7 +72,8 @@ struct MemoryStore {
         var parts: [String] = []
         for scope in scopes {
             for file in files(in: scope) {
-                let mtime = (try? file.url.resourceValues(forKeys: [.contentModificationDateKey])
+                let mtime =
+                    (try? file.url.resourceValues(forKeys: [.contentModificationDateKey])
                     .contentModificationDate)?.timeIntervalSince1970 ?? 0
                 parts.append("\(scope)/\(file.name):\(mtime)")
             }
@@ -113,5 +119,105 @@ struct MemoryStore {
     /// Total number of bullet lines across all memory files in a scope (memory "size").
     func bulletCount(in scope: String) -> Int {
         files(in: scope).reduce(0) { $0 + Self.blocks(read($1)).count }
+    }
+
+    /// Result of a retrieval pass: the injected context, plus enough to let the caller record a trace.
+    struct Retrieval {
+        struct Trace {
+            let kind: TraceEntry.Kind
+            let text: String
+            let detail: String
+        }
+        let text: String
+        let trace: Trace?
+    }
+
+    /// Injects the user's identity (global profile) in full plus the top-K bullets most relevant
+    /// to the current query, so memory can grow large without flooding the context.  When an
+    /// embeddings endpoint is available, lexical BM25 and semantic similarity are combined;
+    /// otherwise BM25 remains a useful fully-local fallback.
+    @MainActor
+    func retrieve(
+        scopes: [String], query: String, cache: EmbeddingCache,
+        requestConfig: RequestConfig, threshold: Double, topK: Int
+    ) async -> Retrieval {
+        let profileName = MemoryCategory.profile.fileName
+        let profileScope = MemoryStore.globalScope
+        let profileURL = Paths.memoryScope(profileScope).appendingPathComponent(profileName)
+        let profileBody = self.read(
+            MemoryStore.File(scope: profileScope, name: profileName, url: profileURL)
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        var sections: [String] = []
+        if !profileBody.isEmpty {
+            sections.append("## \(profileScope)/\(profileName)\n\(profileBody)")
+        }
+
+        // Every other bullet is a retrieval candidate.
+        var chunks: [(label: String, text: String)] = []
+        for scope in scopes {
+            for file in self.files(in: scope) {
+                if scope == profileScope, file.name == profileName { continue }
+                for block in MemoryStore.blocks(self.read(file)) {
+                    chunks.append((label: "\(scope)/\(file.name)", text: block))
+                }
+            }
+        }
+        guard !chunks.isEmpty, !query.isEmpty else {
+            return Retrieval(text: sections.joined(separator: "\n\n"), trace: nil)
+        }
+        let rawLexicalScores = MemoryRetrieval.bm25(query: query, documents: chunks.map(\.text))
+        let lexicalScores = rawLexicalScores.map(MemoryRetrieval.boundedBM25)
+        do {
+            let (q, blockEmb) = try await cache.embedWithCache(
+                query: query, blocks: chunks.map(\.text),
+                requestConfig: requestConfig)
+            let semanticScores = blockEmb.map { (EmbeddingCache.cosine(q, $0) + 1.0) / 2.0 }  // map cosine to [0, 1] range for comparison with BM25
+            let scored = chunks.indices
+                .map { index in
+                    MemoryRetrieval.ScoredChunk(
+                        chunk: chunks[index],
+                        score: MemoryRetrieval.hybridScore(
+                            semantic: semanticScores[index], lexical: lexicalScores[index]),
+                        semanticScore: semanticScores[index],
+                        lexicalScore: lexicalScores[index],
+                        rawLexicalScore: rawLexicalScores[index]
+                    )
+                }
+                .filter { $0.score >= threshold }
+                .sorted { $0.score > $1.score }
+                .prefix(max(1, topK))
+            sections.append(contentsOf: MemoryRetrieval.groupedSections(Array(scored)))
+            let trace = Retrieval.Trace(
+                kind: .memory,
+                text:
+                    "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", threshold)) injected",
+                detail: MemoryRetrieval.traceDetail(Array(scored))
+            )
+            return Retrieval(text: sections.joined(separator: "\n\n"), trace: trace)
+        } catch {
+            // An embeddings server is optional: retain targeted lexical retrieval when it is down.
+            let scored = chunks.indices
+                .map { index in
+                    MemoryRetrieval.ScoredChunk(
+                        chunk: chunks[index],
+                        score: lexicalScores[index],
+                        semanticScore: nil,
+                        lexicalScore: lexicalScores[index],
+                        rawLexicalScore: rawLexicalScores[index]
+                    )
+                }
+                .filter { $0.score >= 0.2 }  // magic number :)
+                .sorted { $0.score > $1.score }
+                .prefix(max(1, topK))
+            sections.append(contentsOf: MemoryRetrieval.groupedSections(Array(scored)))
+            let trace = Retrieval.Trace(
+                kind: .error,
+                text:
+                    "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(error.localizedDescription)",
+                detail: MemoryRetrieval.traceDetail(Array(scored))
+            )
+            return Retrieval(text: sections.joined(separator: "\n\n"), trace: trace)
+        }
     }
 }

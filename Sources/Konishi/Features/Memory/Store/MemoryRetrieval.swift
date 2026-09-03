@@ -2,6 +2,47 @@ import Foundation
 
 /// Local lexical retrieval primitives for long-term memory.
 enum MemoryRetrieval {
+    struct ScoredChunk {
+        // label is the memory chunk's identifier (scope/file), text is the content of the chunk.
+        let chunk: (label: String, text: String)
+        let score: Double
+        let semanticScore: Double?
+        let lexicalScore: Double
+        let rawLexicalScore: Double
+    }
+
+    /// Combines normalized BM25 with semantic cosine similarity (mapped to [0, 1]) into one score.
+    static func hybridScore(semantic: Double, lexical: Double) -> Double {
+        0.7 * semantic + 0.3 * lexical
+    }
+
+    /// Groups scored chunks by source file, preserving score order between files.
+    static func groupedSections(_ scored: [ScoredChunk]) -> [String] {
+        var order: [String] = []
+        var byLabel: [String: [String]] = [:]
+        for item in scored {
+            if byLabel[item.chunk.label] == nil { order.append(item.chunk.label) }
+            byLabel[item.chunk.label, default: []].append(item.chunk.text)
+        }
+        return order.map { "## \($0)\n\((byLabel[$0] ?? []).joined(separator: "\n"))" }
+    }
+
+    /// Trace details for the exact bullets injected this turn, in retrieval order.
+    static func traceDetail(_ scored: [ScoredChunk]) -> String {
+        guard !scored.isEmpty else { return "No memory bullets met the retrieval criteria." }
+        return scored.enumerated().map { rank, item in
+            let scores: String
+            if let semantic = item.semanticScore {
+                scores =
+                    "hybrid \(String(format: "%.3f", item.score))  semantic \(String(format: "%.3f", semantic))  BM25 \(String(format: "%.3f", item.lexicalScore)) (raw \(String(format: "%.3f", item.rawLexicalScore)))"
+            } else {
+                scores =
+                    "BM25 \(String(format: "%.3f", item.score)) (raw \(String(format: "%.3f", item.rawLexicalScore)))"
+            }
+            return "\(rank + 1). \(scores)\n   \(item.chunk.label)\n   \(item.chunk.text)"
+        }.joined(separator: "\n\n")
+    }
+
     /// Raw BM25 scores for each document.
     static func bm25(query: String, documents: [String]) -> [Double] {
         let queryTerms = tokenize(query)

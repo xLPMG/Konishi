@@ -195,7 +195,7 @@ final class AppModel {
         do {
             return try await documentStore.context(
                 for: conversationID, query: query, cache: embeddingCache,
-                model: settings.embeddingModel, topK: settings.ragTopK,
+                topK: settings.ragTopK,
                 requestConfig: settings.requestConfig(modelOverride: nil)
             ).get()
         } catch {
