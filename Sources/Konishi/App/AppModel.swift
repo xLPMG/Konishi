@@ -1,6 +1,6 @@
-import SwiftUI
-import Observation
 import AppKit
+import Observation
+import SwiftUI
 
 @Observable
 @MainActor
@@ -16,8 +16,8 @@ final class AppModel {
         }
     }
     var draft: String = ""
-    var draftImages: [String] = []          // base64 data URLs pending send
-    var draftAttachments: [Attachment] = [] // extracted-text documents pending send
+    var draftImages: [String] = []  // base64 data URLs pending send
+    var draftAttachments: [Attachment] = []  // extracted-text documents pending send
     var isStreaming = false
     var errorMessage: String?
     var isReflecting = false
@@ -73,11 +73,11 @@ final class AppModel {
         self.conversations = Self.loadConversations().sorted { $0.updatedAt > $1.updatedAt }
         self.languageProfiles = languageStore.allProfiles()
         self.selectedConversationID = conversations.first(where: { $0.isLanguage != true })?.id
-        VoiceManager.warmVoices()   // preload the slow system voice catalog off-main
+        VoiceManager.warmVoices()  // preload the slow system voice catalog off-main
         if conversations.isEmpty {
             newConversation()
         } else if let id = selectedConversationID {
-            ensureHydrated(id)   // property observers don't fire during init
+            ensureHydrated(id)  // property observers don't fire during init
         }
         // Ensure the last queued disk writes are flushed before the process exits.
         NotificationCenter.default.addObserver(
@@ -105,9 +105,11 @@ final class AppModel {
 
     var contextWindow: Int? {
         if settings.contextWindowOverride > 0 { return settings.contextWindowOverride }
-        let modelID = currentPersona.model?.isEmpty == false ? currentPersona.model! : settings.model
+        let modelID =
+            currentPersona.model?.isEmpty == false ? currentPersona.model! : settings.model
         if let info = (models.first { $0.id == modelID } ?? models.first),
-           let ctx = info.loadedContextLength ?? info.maxContextLength {
+            let ctx = info.loadedContextLength ?? info.maxContextLength
+        {
             return ctx
         }
         // mlx-lm reports the model as a local path; read its config.json.
@@ -120,9 +122,10 @@ final class AppModel {
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         let url = URL(fileURLWithPath: path).appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        let ctx = (obj["max_position_embeddings"] as? Int)
+        let ctx =
+            (obj["max_position_embeddings"] as? Int)
             ?? (obj["text_config"] as? [String: Any])?["max_position_embeddings"] as? Int
         if let ctx { contextConfigCache[path] = ctx }
         return ctx
@@ -149,20 +152,26 @@ final class AppModel {
 
     /// Heuristic model shortlists for the embedding / audio pickers (fall back to all).
     var embeddingCandidates: [ModelInfo] {
-        let e = models.filter { ($0.type ?? "").lowercased().contains("embed") || $0.id.lowercased().contains("embed") }
+        let e = models.filter {
+            ($0.type ?? "").lowercased().contains("embed") || $0.id.lowercased().contains("embed")
+        }
         return e.isEmpty ? models : e
     }
     var sttCandidates: [ModelInfo] {
         let s = audioModels.filter {
-            let t = ($0.type ?? "").lowercased(), id = $0.id.lowercased()
-            return t.contains("whisper") || t.contains("stt") || t.contains("transcri") || t.contains("parakeet") || id.contains("whisper") || id.contains("parakeet")
+            let t = ($0.type ?? "").lowercased()
+            let id = $0.id.lowercased()
+            return t.contains("whisper") || t.contains("stt") || t.contains("transcri")
+                || t.contains("parakeet") || id.contains("whisper") || id.contains("parakeet")
         }
         return s.isEmpty ? audioModels : s
     }
     var ttsCandidates: [ModelInfo] {
         let t = audioModels.filter {
-            let ty = ($0.type ?? "").lowercased(), id = $0.id.lowercased()
-            return ty.contains("tts") || id.contains("tts") || id.contains("kokoro") || id.contains("piper") || id.contains("speech")
+            let ty = ($0.type ?? "").lowercased()
+            let id = $0.id.lowercased()
+            return ty.contains("tts") || id.contains("tts") || id.contains("kokoro")
+                || id.contains("piper") || id.contains("speech")
         }
         return t.isEmpty ? audioModels : t
     }
@@ -174,6 +183,28 @@ final class AppModel {
         guard !q.isEmpty else { return inMode }
         return inMode.filter { convo in
             convo.title.lowercased().contains(q) || contentMatchIDs.contains(convo.id)
+        }
+    }
+
+    // MARK: - Documents
+
+    func documentContext(conversationID: UUID, history: [ChatMessage]) async -> String {
+        guard let query = history.last(where: { $0.role == .user })?.content, !query.isEmpty else {
+            return ""
+        }
+        do {
+            return try await documentStore.context(
+                for: conversationID, query: query, cache: embeddingCache,
+                model: settings.embeddingModel, topK: settings.ragTopK,
+                requestConfig: settings.requestConfig(modelOverride: nil)
+            ).get()
+        } catch {
+            traceStore.trace(
+                conversationID: conversationID, kind: .error,
+                text:
+                    "Document retrieval failed: \(error.localizedDescription). Is your embedding model reachable?",
+                saveTraces: settings.saveTraces)
+            return ""
         }
     }
 
@@ -197,7 +228,8 @@ final class AppModel {
     // MARK: - Sending & streaming
 
     var canSend: Bool {
-        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty || !draftAttachments.isEmpty) && !isStreaming
+        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
+            || !draftAttachments.isEmpty) && !isStreaming
     }
 
     // Streamed tokens are buffered and flushed on a timer so the UI re-renders (and re-parses
@@ -230,13 +262,13 @@ final class AppModel {
     static let readOnlyTools: Set<String> = [
         "memory_list", "memory_read", "file_read", "list_dir",
         "git_status", "git_diff", "git_log", "web_search", "web_fetch", "web_research",
-        "search_deck", "get_due_items", "calculate"
+        "search_deck", "get_due_items", "calculate",
     ]
     /// Tools whose OUTPUT the model must read to finish its reply, so a continuation turn is warranted.
     /// After fire-and-forget writes (e.g. banking a card) with a written reply, the turn is complete.
     static let continuationTools: Set<String> = [
         "get_due_items", "search_deck", "web_search", "web_fetch", "web_research", "file_read",
-        "memory_list", "memory_read", "calculate", "python_exec", "ask_multiple_choice"
+        "memory_list", "memory_read", "calculate", "python_exec", "ask_multiple_choice",
     ]
 
     /// How many trailing tool results are kept verbatim in the wire; older ones are stubbed.

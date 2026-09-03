@@ -55,9 +55,10 @@ extension AppModel {
         let rawLexicalScores = MemoryRetrieval.bm25(query: query, documents: chunks.map(\.text))
         let lexicalScores = rawLexicalScores.map(MemoryRetrieval.boundedBM25)
         do {
-            let (q, blockEmb) = try await embedWithCache(
-                query: query, blocks: chunks.map(\.text), model: settings.embeddingModel)
-            let semanticScores = blockEmb.map { (Self.cosine(q, $0) + 1.0) / 2.0 }  // map cosine to [0, 1] range for comparison with BM25
+            let (q, blockEmb) = try await embeddingCache.embedWithCache(
+                query: query, blocks: chunks.map(\.text), model: settings.embeddingModel,
+                requestConfig: settings.requestConfig(modelOverride: nil))
+            let semanticScores = blockEmb.map { (EmbeddingCache.cosine(q, $0) + 1.0) / 2.0 }  // map cosine to [0, 1] range for comparison with BM25
             let scored = chunks.indices
                 .map { index in
                     ScoredMemoryChunk(
@@ -98,7 +99,7 @@ extension AppModel {
             traceStore.trace(
                 conversationID: conversationID, kind: .error,
                 text:
-                    "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(Self.embedErrorHint(error))",
+                    "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(error.localizedDescription)",
                 saveTraces: settings.saveTraces,
                 detail: memoryRetrievalTraceDetail(Array(scored))
             )

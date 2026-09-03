@@ -1,5 +1,5 @@
-import Foundation
 import CryptoKit
+import Foundation
 
 /// Disk-backed cache of text embeddings, keyed by (model, text) hash.
 /// Memory blocks are stable, so this avoids re-embedding them every turn.
@@ -47,6 +47,47 @@ final class EmbeddingCache {
         }
     }
 
+    /// Embeds the query plus only the memory blocks not already cached (blocks are stable).
+    func embedWithCache(
+        query: String, blocks: [String], model: String, requestConfig: RequestConfig
+    ) async throws -> (
+        query: [Double], blocks: [[Double]]
+    ) {
+        var blockEmb = [[Double]?](repeating: nil, count: blocks.count)
+        var missing: [Int] = []
+        for (i, b) in blocks.enumerated() {
+            if let e = self.get(model: model, text: b) {
+                blockEmb[i] = e
+            } else {
+                missing.append(i)
+            }
+        }
+        let inputs = [query] + missing.map { blocks[$0] }
+        let result = try await ChatService.embed(config: requestConfig, inputs: inputs)
+        guard result.count == inputs.count else { throw ChatServiceError.invalidURL }
+        for (k, idx) in missing.enumerated() {
+            let e = result[k + 1]
+            blockEmb[idx] = e
+            self.set(model: model, text: blocks[idx], embedding: e)
+        }
+        self.save()
+        return (result[0], blockEmb.map { $0 ?? [] })
+    }
+
+    static func cosine(_ a: [Double], _ b: [Double]) -> Double {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        var dot = 0.0
+        var na = 0.0
+        var nb = 0.0
+        for i in a.indices {
+            dot += a[i] * b[i]
+            na += a[i] * a[i]
+            nb += b[i] * b[i]
+        }
+        let denom = na.squareRoot() * nb.squareRoot()
+        return denom == 0 ? 0 : dot / denom
+    }
+
     // MARK: Binary codec
 
     nonisolated private static func write(_ store: [String: [Float]], to url: URL) {
@@ -72,13 +113,15 @@ final class EmbeddingCache {
 
     nonisolated private static func load(from url: URL) -> [String: [Float]] {
         guard let data = try? Data(contentsOf: url), data.count >= 9,
-              Array(data.prefix(4)) == magic
+            Array(data.prefix(4)) == magic
         else { return [:] }
         var offset = 5  // magic(4) + version(1)
         func read<T>(_ type: T.Type) -> T? where T: FixedWidthInteger {
             let size = MemoryLayout<T>.size
             guard offset + size <= data.count else { return nil }
-            let value = data.subdata(in: offset..<offset + size).withUnsafeBytes { $0.loadUnaligned(as: T.self) }
+            let value = data.subdata(in: offset..<offset + size).withUnsafeBytes {
+                $0.loadUnaligned(as: T.self)
+            }
             offset += size
             return T(littleEndian: value)
         }
@@ -87,10 +130,12 @@ final class EmbeddingCache {
         result.reserveCapacity(Int(count))
         for _ in 0..<count {
             guard let keyLen = read(UInt16.self), offset + Int(keyLen) <= data.count else { break }
-            let key = String(decoding: data.subdata(in: offset..<offset + Int(keyLen)), as: UTF8.self)
+            let key = String(
+                decoding: data.subdata(in: offset..<offset + Int(keyLen)), as: UTF8.self)
             offset += Int(keyLen)
             guard let dim = read(UInt32.self) else { break }
-            var vec = [Float](); vec.reserveCapacity(Int(dim))
+            var vec = [Float]()
+            vec.reserveCapacity(Int(dim))
             for _ in 0..<dim {
                 guard let bits = read(UInt32.self) else { break }
                 vec.append(Float(bitPattern: bits))

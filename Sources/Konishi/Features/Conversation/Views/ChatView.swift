@@ -47,6 +47,11 @@ struct ChatView: View {
         }
     }
 
+    /// Documents indexed for retrieval (RAG) in the current conversation.
+    private var indexedDocuments: [StoredDocument] {
+        model.selectedConversationID.map { model.documentStore.documents(for: $0) } ?? []
+    }
+
     /// Text/code replies are shown as messages; tool calls and their results are collapsed
     /// into the single replacing `activityLine` and remain visible in the Trace.
     private var messages: [ChatMessage] {
@@ -133,7 +138,7 @@ struct ChatView: View {
 
     @ViewBuilder
     private var attachmentStrip: some View {
-        if !model.draftImages.isEmpty || !model.draftAttachments.isEmpty || !model.indexedDocuments.isEmpty {
+        if !model.draftImages.isEmpty || !model.draftAttachments.isEmpty || !indexedDocuments.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(Array(model.draftImages.enumerated()), id: \.offset) { idx, dataURL in
@@ -161,11 +166,15 @@ struct ChatView: View {
                         .background(.quaternary.opacity(0.6), in: Capsule())
                         .help("\(doc.text.count) characters")
                     }
-                    ForEach(model.indexedDocuments) { doc in
+                    ForEach(indexedDocuments) { doc in
                         HStack(spacing: 6) {
                             Image(systemName: "doc.text.magnifyingglass").foregroundStyle(.blue)
                             Text(doc.name).font(.caption).lineLimit(1)
-                            Button { model.removeIndexedDocument(doc.id) } label: {
+                            Button {
+                                if let convoID = model.selectedConversationID {
+                                    model.documentStore.delete(id: doc.id, conversationID: convoID)
+                                }
+                            } label: {
                                 Image(systemName: "xmark.circle.fill")
                             }
                             .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -265,7 +274,14 @@ struct ChatView: View {
         if extracted.count > maxChars {
             extracted = String(extracted.prefix(maxChars)) + "\n\n[truncated \(extracted.count - maxChars) more characters]"
         }
-        model.addDocument(name: url.lastPathComponent, text: extracted)
+        // Inline small attachments; index large ones for retrieval.
+        if model.settings.ragThresholdChars > 0, extracted.count > model.settings.ragThresholdChars,
+            let convoID = model.selectedConversationID
+        {
+            model.documentStore.add(name: url.lastPathComponent, text: extracted, conversationID: convoID)
+        } else {
+            model.draftAttachments.append(Attachment(name: url.lastPathComponent, text: extracted))
+        }
     }
 
     static func nsImage(from dataURL: String) -> NSImage? {

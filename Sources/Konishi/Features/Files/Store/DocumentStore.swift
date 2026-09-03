@@ -12,19 +12,25 @@ struct StoredDocument: Codable, Identifiable, Sendable, Equatable {
 
 /// Persists retrieval documents under `~/Konishi/documents/<conversationID>/<docID>.json`.
 struct DocumentStore {
+
     private func dir(_ conversationID: UUID) -> URL {
-        let url = Paths.documents.appendingPathComponent(conversationID.uuidString, isDirectory: true)
+        let url = Paths.documents.appendingPathComponent(
+            conversationID.uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 
     func documents(for conversationID: UUID) -> [StoredDocument] {
-        let contents = (try? FileManager.default.contentsOfDirectory(
-            at: dir(conversationID), includingPropertiesForKeys: nil
-        )) ?? []
-        return contents
+        let contents =
+            (try? FileManager.default.contentsOfDirectory(
+                at: dir(conversationID), includingPropertiesForKeys: nil
+            )) ?? []
+        return
+            contents
             .filter { $0.pathExtension == "json" }
-            .compactMap { try? JSONDecoder().decode(StoredDocument.self, from: Data(contentsOf: $0)) }
+            .compactMap {
+                try? JSONDecoder().decode(StoredDocument.self, from: Data(contentsOf: $0))
+            }
             .sorted { $0.addedAt < $1.addedAt }
     }
 
@@ -32,13 +38,15 @@ struct DocumentStore {
     func add(name: String, text: String, conversationID: UUID) -> StoredDocument {
         let doc = StoredDocument(name: name, chunks: Self.chunks(text))
         if let data = try? JSONEncoder().encode(doc) {
-            try? data.write(to: dir(conversationID).appendingPathComponent("\(doc.id.uuidString).json"))
+            try? data.write(
+                to: dir(conversationID).appendingPathComponent("\(doc.id.uuidString).json"))
         }
         return doc
     }
 
     func delete(id: UUID, conversationID: UUID) {
-        try? FileManager.default.removeItem(at: dir(conversationID).appendingPathComponent("\(id.uuidString).json"))
+        try? FileManager.default.removeItem(
+            at: dir(conversationID).appendingPathComponent("\(id.uuidString).json"))
     }
 
     func deleteAll(conversationID: UUID) {
@@ -67,5 +75,43 @@ struct DocumentStore {
         }
         if !current.isEmpty { chunks.append(current) }
         return chunks
+    }
+
+    /// Retrieve the most relevant passages.
+    @MainActor
+    func context(
+        for conversationID: UUID, query: String,
+        cache: EmbeddingCache, model: String, topK: Int, requestConfig: RequestConfig
+    ) async -> Result<String, Error> {
+        let docs = self.documents(for: conversationID)
+        guard !docs.isEmpty, !query.isEmpty else {
+            return .success("")
+        }
+
+        /// Collect all chunks from all documents, filtering out too short ones.
+        var chunks: [(label: String, text: String)] = []
+        for doc in docs {
+            for chunk in doc.chunks {
+                let t = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.count >= 3 { chunks.append((label: doc.name, text: t)) }
+            }
+        }
+        guard !chunks.isEmpty else { return .success("") }
+
+        do {
+            let (q, blockEmb) = try await cache.embedWithCache(
+                query: query, blocks: chunks.map(\.text), model: model, requestConfig: requestConfig
+            )
+            let scored = zip(chunks, blockEmb)
+                .map { (chunk: $0.0, score: EmbeddingCache.cosine(q, $0.1)) }
+                .sorted { $0.score > $1.score }
+            return .success(
+                scored.prefix(max(1, topK))
+                    .map { "## \($0.chunk.label)\n\($0.chunk.text)" }
+                    .joined(separator: "\n\n")
+            )
+        } catch {
+            return .failure(error)
+        }
     }
 }
