@@ -43,18 +43,6 @@ enum Paths {
         }
     }
 
-    static func memoryScope(_ scope: String) -> URL {
-        let url = memory.appendingPathComponent(scope, isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-
-    static func memoryBackup(_ name: String) -> URL {
-        let url = memoryBackups.appendingPathComponent(name, isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-
     /// Per-conversation folder for files the agent creates (e.g. plots, CSVs, exports).
     static func conversationFiles(_ id: UUID) -> URL {
         let url = filesRoot.appendingPathComponent(id.uuidString, isDirectory: true)

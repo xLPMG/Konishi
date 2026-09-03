@@ -48,7 +48,7 @@ struct MemoryView: View {
     // MARK: - Model
 
     private func file(_ c: MemoryCategory, _ scope: String) -> MemoryStore.File {
-        MemoryStore.File(scope: scope, name: c.fileName, url: Paths.memoryScope(scope).appendingPathComponent(c.fileName))
+        model.memoryStore.file(scope: scope, name: c.fileName)
     }
 
     private func scope(_ c: MemoryCategory) -> String {

@@ -104,8 +104,7 @@ enum MemoryProfile {
     static func contents(store: MemoryStore, global: String, persona: String) -> [(MemoryCategory, String)] {
         MemoryCategory.allCases.map { category in
             let scope = category.targetScope(global: global, persona: persona)
-            let url = Paths.memoryScope(scope).appendingPathComponent(category.fileName)
-            let file = MemoryStore.File(scope: scope, name: category.fileName, url: url)
+            let file = store.file(scope: scope, name: category.fileName)
             let body = store.read(file).trimmingCharacters(in: .whitespacesAndNewlines)
             return (category, body)
         }

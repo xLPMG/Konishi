@@ -8,14 +8,15 @@ import Foundation
 @MainActor
 final class EmbeddingCache {
     private var store: [String: [Float]]
-    private let url = Paths.cache.appendingPathComponent("embeddings.bin")
+    private let url: URL
     private var dirty = false
     private var saveTask: Task<Void, Never>?
 
     nonisolated private static let magic: [UInt8] = [0x4B, 0x45, 0x4D, 0x42]  // "KEMB"
     nonisolated private static let version: UInt8 = 1
 
-    init() {
+    init(url: URL = Paths.cache.appendingPathComponent("embeddings.bin")) {
+        self.url = url
         store = Self.load(from: url)
     }
 

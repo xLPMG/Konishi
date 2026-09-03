@@ -1,8 +1,16 @@
 import Foundation
 
-/// Manages the Markdown memory files under `~/Konishi/memory/<scope>/`.
+/// Manages the Markdown memory files under `~/Konishi/memory/<scope>/` (or `root`, when injected for tests).
 struct MemoryStore {
     static let globalScope = "global"
+
+    private let root: URL
+    private let backupsRoot: URL
+
+    init(root: URL = Paths.memory, backupsRoot: URL = Paths.memoryBackups) {
+        self.root = root
+        self.backupsRoot = backupsRoot
+    }
 
     struct File: Identifiable, Hashable {
         var id: String { scope + "/" + name }
@@ -11,8 +19,19 @@ struct MemoryStore {
         let url: URL
     }
 
+    private func scopeDir(_ scope: String) -> URL {
+        let url = root.appendingPathComponent(scope, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// Builds a `File` for a scope/name without requiring it to already exist on disk.
+    func file(scope: String, name: String) -> File {
+        File(scope: scope, name: name, url: scopeDir(scope).appendingPathComponent(name))
+    }
+
     func files(in scope: String) -> [File] {
-        let dir = Paths.memoryScope(scope)
+        let dir = scopeDir(scope)
         let contents =
             (try? FileManager.default.contentsOfDirectory(
                 at: dir,
@@ -31,14 +50,14 @@ struct MemoryStore {
 
     func write(scope: String, name: String, content: String) {
         let fileName = name.hasSuffix(".md") ? name : name + ".md"
-        let url = Paths.memoryScope(scope).appendingPathComponent(fileName)
+        let url = scopeDir(scope).appendingPathComponent(fileName)
         try? content.write(to: url, atomically: true, encoding: .utf8)
     }
 
     func append(scope: String, name: String, content: String) {
         let existing = read(
             File(
-                scope: scope, name: name, url: Paths.memoryScope(scope).appendingPathComponent(name)
+                scope: scope, name: name, url: scopeDir(scope).appendingPathComponent(name)
             ))
         let separator = existing.isEmpty ? "" : "\n\n"
         write(scope: scope, name: name, content: existing + separator + content)
@@ -49,7 +68,7 @@ struct MemoryStore {
     }
 
     func delete(scope: String, name: String) {
-        let url = Paths.memoryScope(scope).appendingPathComponent(name)
+        let url = scopeDir(scope).appendingPathComponent(name)
         try? FileManager.default.removeItem(at: url)
     }
 
@@ -86,19 +105,20 @@ struct MemoryStore {
     @discardableResult
     func backup(scopes: [String]) -> URL? {
         let fm = FileManager.default
-        let root = Paths.memoryBackup(Self.backupStamp())
+        let dest = backupsRoot.appendingPathComponent(Self.backupStamp(), isDirectory: true)
+        try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
         var copied = false
         for scope in scopes {
             let scopeFiles = files(in: scope)
             guard !scopeFiles.isEmpty else { continue }
-            let dir = root.appendingPathComponent(scope, isDirectory: true)
+            let dir = dest.appendingPathComponent(scope, isDirectory: true)
             try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
             for file in scopeFiles {
                 try? fm.copyItem(at: file.url, to: dir.appendingPathComponent(file.name))
                 copied = true
             }
         }
-        return copied ? root : nil
+        return copied ? dest : nil
     }
 
     private static func backupStamp() -> String {
@@ -143,7 +163,7 @@ struct MemoryStore {
     ) async -> Retrieval {
         let profileName = MemoryCategory.profile.fileName
         let profileScope = MemoryStore.globalScope
-        let profileURL = Paths.memoryScope(profileScope).appendingPathComponent(profileName)
+        let profileURL = scopeDir(profileScope).appendingPathComponent(profileName)
         let profileBody = self.read(
             MemoryStore.File(scope: profileScope, name: profileName, url: profileURL)
         )

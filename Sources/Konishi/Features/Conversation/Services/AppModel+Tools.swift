@@ -132,7 +132,7 @@ extension AppModel {
                 return "Error: missing or invalid name"
             }
             let scope = args.scope ?? persona.memoryScope
-            let file = MemoryStore.File(scope: scope, name: args.name, url: Paths.memoryScope(scope).appendingPathComponent(args.name))
+            let file = memoryStore.file(scope: scope, name: args.name)
             let content = memoryStore.read(file)
             return content.isEmpty ? "(empty or not found)" : content
         case "memory_write":
@@ -149,7 +149,7 @@ extension AppModel {
             }
             let scope = args.scope ?? persona.memoryScope
             if MemoryCategory.isCategoryFile(args.name) {
-                let existing = memoryStore.read(MemoryStore.File(scope: scope, name: args.name, url: Paths.memoryScope(scope).appendingPathComponent(args.name)))
+                let existing = memoryStore.read(memoryStore.file(scope: scope, name: args.name))
                 let merged = existing.isEmpty ? args.content : existing + "\n" + args.content
                 memoryStore.write(scope: scope, name: args.name, content: MemoryProfile.canonical(merged))
             } else {
