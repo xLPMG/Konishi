@@ -55,7 +55,7 @@ final class AppModel {
     let embeddingCache = EmbeddingCache()
     let languageStore = LanguageStore()
     let traceStore = TraceStore()
-    private var streamTask: Task<Void, Never>?
+    var streamTask: Task<Void, Never>?
     /// Resumed with the tool result once the user answers a pending multiple-choice prompt.
     private var interactionContinuation: CheckedContinuation<String, Never>?
 
@@ -200,7 +200,7 @@ final class AppModel {
         selectedConversationID.flatMap { traceStore.traces[$0] } ?? []
     }
 
-    private func requestSummary(config: RequestConfig, wire: [WireMessage], tools: [ToolDef]?, memory: String, summary: String) -> String {
+    func requestSummary(config: RequestConfig, wire: [WireMessage], tools: [ToolDef]?, memory: String, summary: String) -> String {
         let roles = wire.map { $0.role }.reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
             .map { "\($0.key):\($0.value)" }.sorted().joined(separator: " ")
         var lines = ["model=\(config.model)  temp=\(config.temperature)  maxTokens=\(config.maxTokens.map(String.init) ?? "default")"]
@@ -212,7 +212,7 @@ final class AppModel {
     }
 
     /// The full assembled request (every message, in order) for on-demand display in the Trace.
-    private func requestDetail(wire: [WireMessage]) -> String {
+    func requestDetail(wire: [WireMessage]) -> String {
         var out: [String] = []
         for msg in wire {
             out.append("── \(msg.role) ──")
@@ -252,226 +252,14 @@ final class AppModel {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty || !draftAttachments.isEmpty) && !isStreaming
     }
 
-    func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard (!text.isEmpty || !draftImages.isEmpty || !draftAttachments.isEmpty), !isStreaming,
-              let convoID = selectedConversationID, let idx = conversationIndex(convoID)
-        else { return }
-
-        errorMessage = nil
-        resetSpeech()
-        let images = draftImages
-        let attachments = draftAttachments
-        draft = ""
-        draftImages = []
-        draftAttachments = []
-        loopSignatures.removeAll()
-        turnSources.removeAll()
-        conversations[idx].messages.append(ChatMessage(role: .user, content: text, images: images, attachments: attachments))
-
-        if conversations[idx].title == "New Chat", !text.isEmpty {
-            conversations[idx].title = String(text.prefix(40))
-        }
-        touch(idx)
-        startTurn(conversationID: convoID)
-        maybeAutoTitle(conversationID: convoID)
-    }
-
-    func regenerate(messageID: UUID) {
-        guard let convoID = selectedConversationID, let idx = conversationIndex(convoID),
-              let msgIdx = conversations[idx].messages.firstIndex(where: { $0.id == messageID })
-        else { return }
-        conversations[idx].messages.removeSubrange(msgIdx...)
-        reconcileFoldCounters(idx)
-        loopSignatures.removeAll()
-        turnSources.removeAll()
-        resetSpeech()
-        touch(idx)
-        startTurn(conversationID: convoID)
-    }
-
-    func deleteMessage(_ id: UUID) {
-        guard let convoID = selectedConversationID, let idx = conversationIndex(convoID) else { return }
-        conversations[idx].messages.removeAll { $0.id == id }
-        reconcileFoldCounters(idx)
-        touch(idx)
-    }
-
-    private func startTurn(conversationID: UUID) {
-        guard let idx = conversationIndex(conversationID) else { return }
-        streamingConversationID = conversationID
-        let assistant = ChatMessage(role: .assistant, content: "")
-        conversations[idx].messages.append(assistant)
-        runStream(conversationID: conversationID, assistantID: assistant.id)
-    }
-
-    private func runStream(conversationID: UUID, assistantID: UUID) {
-        guard let idx = conversationIndex(conversationID) else { return }
-        let persona = personaStore.persona(for: conversations[idx])
-        let allHistory = conversations[idx].messages.filter { $0.id != assistantID }
-        let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
-        let history = Array(allHistory.dropFirst(folded))
-        let summary = conversations[idx].summary ?? ""
-        var config = settings.requestConfig(modelOverride: persona.model)
-        config.enableThinking = settings.reasoningEnabled
-        let tools: [ToolDef]?
-        if mode == .language {
-            tools = Tools.definitions(enabled: settings.enabledTools(for: .language))
-        } else if settings.toolsEnabled {
-            tools = Tools.definitions(enabled: settings.enabledTools(for: mode))
-        } else {
-            tools = nil
-        }
-
-        isStreaming = true
-        activity = "Thinking…"
-        streamTask?.cancel()   // never run two loops against one conversation
-        let start = Date()
-
-        streamTask = Task { [weak self] in
-            guard let self else { return }
-            let systemText = self.mode == .language
-                ? languageSystemPrompt(persona: persona)
-                : personaStore.stableSystemPrompt(persona: persona, injectDateContext: settings.injectDateContext, mode: mode)
-            let memoryText = await self.memoryContext(conversationID: conversationID, persona: persona, history: history)
-            let documentText = await self.documentContext(conversationID: conversationID, history: history)
-            let wire = self.buildWire(systemText: systemText, summary: summary, memoryText: memoryText, documentText: documentText, history: history)
-
-            traceStore.trace(
-                conversationID: conversationID, kind: .request,
-                text: self.requestSummary(
-                    config: config, wire: wire, tools: tools, memory: memoryText, summary: summary),
-                saveTraces: settings.saveTraces,
-                detail: self.requestDetail(wire: wire))
-
-            var firstTokenAt: Date?
-            var charCount = 0
-            var deltaCount = 0
-            var reasoning = ""
-            var answer = ""
-            var finishReason: String?
-            var usage: Usage?
-            var toolCalls: [ToolCall]?
-            var caughtError = false
-            var stripper = ThinkStripper()   // strip inline chain-of-thought some models emit as content
-            do {
-                for try await event in ChatService.stream(config: config, messages: wire, tools: tools, toolChoice: nil) {
-                    switch event {
-                    case let .delta(d):
-                        if firstTokenAt == nil {
-                            firstTokenAt = Date()
-                            self.activity = nil
-                            traceStore.trace(
-                                conversationID: conversationID, kind: .token,
-                                text: String(
-                                    format: "First token after %.0f ms",
-                                    Date().timeIntervalSince(start) * 1000),
-                                saveTraces: settings.saveTraces)
-                        }
-                        let out = stripper.consume(d)
-                        if !out.reasoning.isEmpty {
-                            reasoning += out.reasoning
-                            self.appendReasoning(out.reasoning, conversationID: conversationID, assistantID: assistantID)
-                        }
-                        if !out.visible.isEmpty {
-                            deltaCount += 1
-                            charCount += out.visible.count
-                            answer += out.visible
-                            self.appendDelta(out.visible, conversationID: conversationID, assistantID: assistantID)
-                        }
-                    case let .reasoning(r):
-                        reasoning += r
-                        self.appendReasoning(r, conversationID: conversationID, assistantID: assistantID)
-                    case let .usage(u):
-                        usage = u
-                        traceStore.trace(
-                            conversationID: conversationID, kind: .usage,
-                            text:
-                                "prompt=\(u.promptTokens ?? 0), completion=\(u.completionTokens ?? 0), total=\(u.totalTokens ?? 0)",
-                            saveTraces: settings.saveTraces)
-                    case let .toolCalls(calls):
-                        toolCalls = calls
-                        for c in calls {
-                            traceStore.trace(
-                                conversationID: conversationID, kind: .tool,
-                                text: "\(c.function.name ?? "tool")(\(c.function.arguments))",
-                                saveTraces: settings.saveTraces)
-                        }
-                    case let .finish(reason):
-                        finishReason = reason
-                        traceStore.trace(
-                            conversationID: conversationID, kind: .finish,
-                            text: "finish_reason=\(reason ?? "nil"), deltas=\(deltaCount), chars=\(charCount)",
-                            saveTraces: settings.saveTraces)
-                    }
-                }
-                let tail = stripper.finish()
-                if !tail.reasoning.isEmpty { reasoning += tail.reasoning }
-                if !tail.visible.isEmpty {
-                    deltaCount += 1
-                    charCount += tail.visible.count
-                    answer += tail.visible
-                    self.appendDelta(
-                        tail.visible, conversationID: conversationID, assistantID: assistantID)
-                }
-                if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    traceStore.trace(
-                        conversationID: conversationID, kind: .reasoning,
-                        text: reasoning,
-                        saveTraces: settings.saveTraces)
-                }
-                if !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    traceStore.trace(
-                        conversationID: conversationID, kind: .result,
-                        text: answer,
-                        saveTraces: settings.saveTraces)
-                }
-                if deltaCount == 0 && (toolCalls?.isEmpty ?? true) {
-                    if finishReason == "length" {
-                        let hint =
-                            "The model hit the token limit while reasoning and produced no answer. Raise Max tokens in Settings › Generation."
-                        traceStore.trace(
-                            conversationID: conversationID, kind: .info,
-                            text: hint,
-                            saveTraces: settings.saveTraces)
-                        self.errorMessage = hint
-                    } else {
-                        traceStore.trace(
-                            conversationID: conversationID, kind: .info,
-                            text:
-                                "No content received (empty reply). finish_reason=\(finishReason ?? "nil").",
-                            saveTraces: settings.saveTraces)
-                    }
-                }
-            } catch {
-                caughtError = true
-                self.errorMessage = error.localizedDescription
-                traceStore.trace(
-                    conversationID: conversationID, kind: .error,
-                    text: error.localizedDescription,
-                    saveTraces: settings.saveTraces)
-            }
-            self.finishStream(
-                conversationID: conversationID,
-                assistantID: assistantID,
-                start: start,
-                firstTokenAt: firstTokenAt,
-                charCount: charCount,
-                usage: usage,
-                toolCalls: toolCalls,
-                failed: caughtError
-            )
-        }
-    }
-
     // Streamed tokens are buffered and flushed on a timer so the UI re-renders (and re-parses
     // markdown) a few times per second instead of once per token.
-    private var deltaBuffer = ""
-    private var flushTask: Task<Void, Never>?
+    var deltaBuffer = ""
+    var flushTask: Task<Void, Never>?
     /// Buffered reasoning tokens, flushed on the same cadence as content so the disclosure updates
     /// a few times per second instead of once per token.
-    private var reasoningBuffer = ""
-    private var reasoningFlushTask: Task<Void, Never>?
+    var reasoningBuffer = ""
+    var reasoningFlushTask: Task<Void, Never>?
     /// Streaming TTS: text of the current assistant message not yet flushed to the speaker.
     /// Only the unspoken tail is held, so we never rescan the whole (growing) message each flush.
     private var ttsPending = ""
@@ -484,66 +272,12 @@ final class AppModel {
     /// Reset when TTS succeeds again or the audio endpoint/source changes.
     private var warnedServerTTSFailure = false
 
-    private func appendDelta(_ delta: String, conversationID: UUID, assistantID: UUID) {
-        deltaBuffer += delta
-        let interval = settings.streamFlushMs
-        if interval <= 0 {
-            flushDeltas(conversationID: conversationID, assistantID: assistantID)
-            return
-        }
-        guard flushTask == nil else { return }
-        flushTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(interval))
-            guard let self, !Task.isCancelled else { return }
-            self.flushTask = nil
-            self.flushDeltas(conversationID: conversationID, assistantID: assistantID)
-        }
-    }
-
-    /// Apply the buffered tokens to the assistant message in a single mutation.
-    private func flushDeltas(conversationID: UUID, assistantID: UUID) {
-        guard !deltaBuffer.isEmpty else { return }
-        let pending = deltaBuffer
-        deltaBuffer = ""
-        guard let idx = conversationIndex(conversationID),
-              let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
-        else { return }
-        conversations[idx].messages[mIdx].content += pending
-        streamSpeak(delta: pending, assistantID: assistantID)
-    }
-
-    private func appendReasoning(_ chunk: String, conversationID: UUID, assistantID: UUID) {
-        reasoningBuffer += chunk
-        let interval = settings.streamFlushMs
-        if interval <= 0 {
-            flushReasoning(conversationID: conversationID, assistantID: assistantID)
-            return
-        }
-        guard reasoningFlushTask == nil else { return }
-        reasoningFlushTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(interval))
-            guard let self, !Task.isCancelled else { return }
-            self.reasoningFlushTask = nil
-            self.flushReasoning(conversationID: conversationID, assistantID: assistantID)
-        }
-    }
-
-    private func flushReasoning(conversationID: UUID, assistantID: UUID) {
-        guard !reasoningBuffer.isEmpty else { return }
-        let pending = reasoningBuffer
-        reasoningBuffer = ""
-        guard let idx = conversationIndex(conversationID),
-              let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
-        else { return }
-        conversations[idx].messages[mIdx].reasoning = (conversations[idx].messages[mIdx].reasoning ?? "") + pending
-    }
-
     private var nativeTTS: Bool { mode == .language || settings.ttsSource == .native }
 
     /// Speaks newly-completed sentences as the reply streams in (native and server TTS), so speech
     /// starts almost immediately instead of waiting for the whole message. Only the unspoken tail
     /// is scanned (via `ttsPending`), not the whole growing message.
-    private func streamSpeak(delta: String, assistantID: UUID) {
+    func streamSpeak(delta: String, assistantID: UUID) {
         guard settings.autoSpeak else { return }
         if ttsMessageID != assistantID { ttsMessageID = assistantID; ttsPending = "" }
         ttsPending += delta
@@ -555,7 +289,7 @@ final class AppModel {
 
     /// At end of stream: speak whatever sentence tail wasn't already streamed. Works for both
     /// native and server TTS (server sentences flow through the same serial synth pipeline).
-    private func emitFinalSpeech(assistantID: UUID, content: String) {
+    func emitFinalSpeech(assistantID: UUID, content: String) {
         guard settings.autoSpeak else { return }
         // If streaming never accumulated this message (e.g. auto-speak toggled on late), speak it whole.
         if ttsMessageID != assistantID { ttsMessageID = assistantID; ttsPending = content }
@@ -605,7 +339,7 @@ final class AppModel {
     }
 
     /// Stops any current speech and resets streaming-TTS progress for a fresh reply.
-    private func resetSpeech() {
+    func resetSpeech() {
         voice.stopSpeaking()
         speechSegCont?.finish()
         speechSegCont = nil
@@ -624,123 +358,12 @@ final class AppModel {
         voice.lastError = "Server TTS unavailable — replies won't be spoken this session. \(error.localizedDescription)"
     }
 
-    private func finishStream(
-        conversationID: UUID,
-        assistantID: UUID,
-        start: Date,
-        firstTokenAt: Date?,
-        charCount: Int,
-        usage: Usage?,
-        toolCalls: [ToolCall]?,
-        failed: Bool = false
-    ) {
-        streamTask = nil
-        flushTask?.cancel()
-        flushTask = nil
-        flushDeltas(conversationID: conversationID, assistantID: assistantID)
-        reasoningFlushTask?.cancel()
-        reasoningFlushTask = nil
-        flushReasoning(conversationID: conversationID, assistantID: assistantID)
-        guard let idx = conversationIndex(conversationID),
-              let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
-        else { isStreaming = false; streamingConversationID = nil; return }
-
-        let hasTools = !(toolCalls?.isEmpty ?? true)
-        let hasReasoning = !(conversations[idx].messages[mIdx].reasoning?.isEmpty ?? true)
-        if conversations[idx].messages[mIdx].content.isEmpty, !hasTools, !hasReasoning {
-            conversations[idx].messages.remove(at: mIdx)
-            touch(idx)
-            activity = nil
-            isStreaming = false
-            streamingConversationID = nil
-            return
-        }
-
-        conversations[idx].messages[mIdx].stats = makeStats(
-            start: start, firstTokenAt: firstTokenAt, charCount: charCount, usage: usage
-        )
-
-        if let toolCalls, hasTools {
-            conversations[idx].messages[mIdx].toolCalls = toolCalls
-            touch(idx)
-            let content = conversations[idx].messages[mIdx].content
-            emitFinalSpeech(assistantID: assistantID, content: content)
-            // Only loop back for another turn if the model must act on a tool's OUTPUT. A written
-            // reply plus fire-and-forget writes (e.g. banking a card) is already a complete answer.
-            let hasContent = !content.trimmingCharacters(in: .whitespaces).isEmpty
-            let needsMore = !hasContent || toolCalls.contains { Self.continuationTools.contains($0.function.name ?? "") }
-            let batch = PendingToolBatch(conversationID: conversationID, calls: toolCalls, continueAfter: needsMore)
-            let names = toolCalls.compactMap { $0.function.name }
-            if !names.isEmpty && toolCalls.allSatisfy({ toolCallIsAutoApproved($0, mode: mode) }) {
-                activity = "Calling \(names.joined(separator: ", "))…"
-                executeAndContinue(batch: batch, approved: true)   // auto-approved: keeps streaming
-            } else {
-                activity = nil
-                isStreaming = false
-                streamingConversationID = nil
-                pendingApproval = batch
-            }
-            return
-        }
-
-        touch(idx)
-        if !turnSources.isEmpty {
-            conversations[idx].messages[mIdx].sources = turnSources
-            turnSources.removeAll()
-            touch(idx)
-        }
-        activity = nil
-        isStreaming = false
-        streamingConversationID = nil
-        compressIfNeeded(conversationID: conversationID)
-        updateMemoryIfNeeded(conversationID: conversationID)
-        maybeRefineTitle(conversationID: conversationID)
-        emitFinalSpeech(assistantID: assistantID, content: conversations[idx].messages[mIdx].content)
-    }
-
-    private func makeStats(start: Date, firstTokenAt: Date?, charCount: Int, usage: Usage?) -> MessageStats {
-        let end = Date()
-        let duration = end.timeIntervalSince(start)
-        let ttft = firstTokenAt?.timeIntervalSince(start)
-        let completion = usage?.completionTokens
-        let genSeconds = firstTokenAt.map { end.timeIntervalSince($0) } ?? duration
-        let tps: Double? = {
-            if let completion, genSeconds > 0 { return Double(completion) / genSeconds }
-            if genSeconds > 0 { return (Double(charCount) / 4.0) / genSeconds }
-            return nil
-        }()
-        return MessageStats(
-            timeToFirstToken: ttft,
-            tokensPerSecond: tps,
-            promptTokens: usage?.promptTokens,
-            completionTokens: completion,
-            totalTokens: usage?.totalTokens,
-            duration: duration
-        )
-    }
-
-    func stop() {
-        streamTask?.cancel()
-        streamTask = nil
-        cancelInteraction()   // resume/clear any paused multiple-choice prompt
-        resetSpeech()
-        flushTask?.cancel()
-        flushTask = nil
-        deltaBuffer = ""
-        reasoningFlushTask?.cancel()
-        reasoningFlushTask = nil
-        reasoningBuffer = ""
-        streamingConversationID = nil
-        activity = nil
-        isStreaming = false
-    }
-
     // MARK: - Tool approval & execution
 
     /// Signatures (name+args) of tool calls in the current user turn, for dedupe + loop detection.
-    private var loopSignatures: [String] = []
+    var loopSignatures: [String] = []
     /// Web sources (search results / fetched pages) gathered this turn, attached to the reply.
-    private var turnSources: [Source] = []
+    var turnSources: [Source] = []
     /// Read-only tools whose identical repeat within a turn can be skipped safely.
     private static let readOnlyTools: Set<String> = [
         "memory_list", "memory_read", "file_read", "list_dir",
@@ -749,12 +372,12 @@ final class AppModel {
     ]
     /// Tools whose OUTPUT the model must read to finish its reply, so a continuation turn is warranted.
     /// After fire-and-forget writes (e.g. banking a card) with a written reply, the turn is complete.
-    private static let continuationTools: Set<String> = [
+    static let continuationTools: Set<String> = [
         "get_due_items", "search_deck", "web_search", "web_fetch", "web_research", "file_read",
         "memory_list", "memory_read", "calculate", "python_exec", "ask_multiple_choice"
     ]
 
-    private func toolCallIsAutoApproved(_ call: ToolCall, mode: AppMode) -> Bool {
+    func toolCallIsAutoApproved(_ call: ToolCall, mode: AppMode) -> Bool {
         guard let name = call.function.name else { return false }
         if settings.autoApproveTools(for: mode).contains(name) { return true }
         guard name == "run_shell", let args: ToolArguments.Shell = Self.decodeToolArgs(call) else { return false }
@@ -773,7 +396,7 @@ final class AppModel {
         executeAndContinue(batch: batch, approved: false)
     }
 
-    private func executeAndContinue(batch: PendingToolBatch, approved: Bool) {
+    func executeAndContinue(batch: PendingToolBatch, approved: Bool) {
         isStreaming = true
         streamingConversationID = batch.conversationID   // protect across the tool loop
         Task { [weak self] in
@@ -1055,9 +678,9 @@ final class AppModel {
     }
 
     /// How many trailing tool results are kept verbatim in the wire; older ones are stubbed.
-    private static let maxFullToolResults = 4
+    static let maxFullToolResults = 4
 
-    private static func stubToolResult(_ msg: ChatMessage) -> String {
+    static func stubToolResult(_ msg: ChatMessage) -> String {
         let head = msg.content.prefix(100).replacingOccurrences(of: "\n", with: " ")
         return "[earlier \(msg.toolName ?? "tool") result trimmed to save context — \(head)…]"
     }
@@ -1121,7 +744,7 @@ final class AppModel {
 
     /// System prompt for language mode: pedagogy + profile + session config.
     /// (Deck/tool instructions are appended once the language tools land.)
-    private func languageSystemPrompt(persona: Persona) -> String {
+    func languageSystemPrompt(persona: Persona) -> String {
         var lines: [String] = []
         if let name = persona.assistantName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
             lines.append("Your name is \(name).")
@@ -1270,7 +893,7 @@ final class AppModel {
     }
 
     /// Dynamic memory for this turn (attached to the latest user message, not the system prompt).
-    private func memoryContext(conversationID: UUID, persona: Persona, history: [ChatMessage]) async -> String {
+    func memoryContext(conversationID: UUID, persona: Persona, history: [ChatMessage]) async -> String {
         // Language sessions get a compact deck summary instead of personal memory (the deck is the memory).
         if isLanguageConversation(conversationID) { return languageDeckContext() }
         guard settings.injectMemory else { return "" }
@@ -1418,7 +1041,7 @@ final class AppModel {
     }
 
     /// Retrieve the most relevant passages from this conversation's indexed documentStore.
-    private func documentContext(conversationID: UUID, history: [ChatMessage]) async -> String {
+    func documentContext(conversationID: UUID, history: [ChatMessage]) async -> String {
         let docs = documentStore.documents(for: conversationID)
         guard !docs.isEmpty, let query = history.last(where: { $0.role == .user })?.content else { return "" }
         var chunks: [(label: String, text: String)] = []
@@ -1472,97 +1095,6 @@ final class AppModel {
         for i in a.indices { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i] }
         let denom = na.squareRoot() * nb.squareRoot()
         return denom == 0 ? 0 : dot / denom
-    }
-
-    private func buildWire(
-        systemText: String,
-        summary: String,
-        memoryText: String,
-        documentText: String = "",
-        history: [ChatMessage]
-    ) -> [WireMessage] {
-        var wire: [WireMessage] = []
-        if !systemText.isEmpty {
-            wire.append(WireMessage(role: Role.system.rawValue, text: systemText))
-        }
-        let summaryText = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !summaryText.isEmpty {
-            wire.append(WireMessage(role: Role.system.rawValue, text: "# Summary of earlier conversation\n\(summaryText)"))
-        }
-        let budgeted = budget(history: history)
-        let memory = memoryText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let retrievedDocs = documentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lastUserIdx = budgeted.lastIndex(where: { $0.role == .user })
-        // Keep only the most recent tool outputs verbatim; older ones are re-sent every
-        // turn otherwise, so collapse them to a stub to save context.
-        let keepFullTool = Set(budgeted.indices.filter { budgeted[$0].role == .tool }.suffix(Self.maxFullToolResults))
-        for (i, msg) in budgeted.enumerated() {
-            switch msg.role {
-            case .system:
-                continue
-            case .tool:
-                let content = keepFullTool.contains(i) ? msg.content : Self.stubToolResult(msg)
-                wire.append(.toolResult(id: msg.toolCallId ?? "", name: msg.toolName ?? "tool", content: content))
-            case .assistant:
-                let assistantText = msg.interrupted
-                    ? msg.content + "\n\n[Response interrupted by the user.]"
-                    : msg.content
-                if let calls = msg.toolCalls, !calls.isEmpty {
-                    wire.append(WireMessage(
-                        role: "assistant",
-                        content: assistantText.isEmpty ? nil : .text(assistantText),
-                        toolCalls: calls
-                    ))
-                } else {
-                    wire.append(WireMessage(role: "assistant", text: assistantText))
-                }
-            case .user:
-                // Attach memory to the latest user turn only → stable prefix, cache-friendly.
-                var text = msg.content
-                if !msg.attachments.isEmpty {
-                    let docs = msg.attachments
-                        .map { "# Attached file: \($0.name)\n\($0.text)" }
-                        .joined(separator: "\n\n")
-                    text = text.isEmpty ? docs : docs + "\n\n---\n\n" + text
-                }
-                if i == lastUserIdx, !retrievedDocs.isEmpty {
-                    text = "# Relevant excerpts from attached documents\n\(retrievedDocs)\n\n---\n\n" + text
-                }
-                if i == lastUserIdx, !memory.isEmpty {
-                    text = "# Relevant memory\n\(memory)\n\n---\n\n" + text
-                }
-                if msg.images.isEmpty || !settings.sendImagesToModel {
-                    wire.append(WireMessage(role: "user", text: text))
-                } else {
-                    var parts: [ContentPart] = []
-                    if !text.isEmpty { parts.append(.text(text)) }
-                    parts.append(contentsOf: msg.images.map { .image($0) })
-                    wire.append(WireMessage(role: "user", parts: parts))
-                }
-            }
-        }
-        return wire
-    }
-
-    /// Keep the most recent turns that fit the model's context window.
-    private func budget(history: [ChatMessage]) -> [ChatMessage] {
-        guard let window = contextWindow else { return history }
-        let reserve = max(settings.effectiveMaxTokens ?? 1024, 512)
-        let budgetTokens = max(1000, window - reserve - 256)
-        var total = 0
-        var kept: [ChatMessage] = []
-        for msg in history.reversed() {
-            let est = msg.content.utf8.count / 4 + msg.attachmentBytes / 4 + msg.images.count * 600
-            if total + est > budgetTokens, !kept.isEmpty { break }
-            total += est
-            kept.insert(msg, at: 0)
-        }
-        // Never start the window on an orphaned tool result: its assistant `tool_calls` parent may
-        // have been dropped, and servers reject a `tool` message with no preceding `tool_calls`.
-        while let first = kept.first, first.role == .tool {
-            kept.removeFirst()
-        }
-        return kept
     }
 
     // MARK: - Compression
@@ -2242,7 +1774,7 @@ final class AppModel {
     /// have accumulated. The extractor itself decides whether anything is worth saving (it
     /// returns no operations when nothing is durable). Escalates to a full consolidation once
     /// the memory has grown large, so it stays deduped and compact without manual effort.
-    private func updateMemoryIfNeeded(conversationID: UUID) {
+    func updateMemoryIfNeeded(conversationID: UUID) {
         guard settings.autoMemory, !settings.pauseMemoryWrites, !isMemorizing, !isReflecting,
               let idx = conversationIndex(conversationID) else { return }
         let convo = conversations[idx]
