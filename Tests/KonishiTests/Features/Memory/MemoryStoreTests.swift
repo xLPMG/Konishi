@@ -4,11 +4,10 @@ import Testing
 @testable import Konishi
 
 @Suite("MemoryStore")
-@MainActor
 struct MemoryStoreTests {
 
     /// Fresh temp root per test so tests never touch real memory files or race each other.
-    private func withStore(_ body: (MemoryStore, URL) async throws -> Void) async rethrows {
+    private func withStore(_ body: @Sendable (MemoryStore, URL) async throws -> Void) async rethrows {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("memory-store-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -116,6 +115,7 @@ struct MemoryStoreTests {
     }
 
     @Test("retrieve returns no context and no trace when there are no candidate bullets")
+    @MainActor
     func retrieveWithNoBulletsReturnsEmpty() async throws {
         try await withStore { store, _ in
             let result = await store.retrieve(
@@ -128,6 +128,7 @@ struct MemoryStoreTests {
     }
 
     @Test("retrieve always injects the full global profile")
+    @MainActor
     func retrieveInjectsProfileInFull() async throws {
         try await withStore { store, _ in
             store.write(
@@ -144,6 +145,7 @@ struct MemoryStoreTests {
     }
 
     @Test("retrieve falls back to lexical scoring and reports an .error trace when embeddings are unavailable")
+    @MainActor
     func retrieveFallsBackToLexicalScoring() async throws {
         try await withStore { store, _ in
             store.write(
