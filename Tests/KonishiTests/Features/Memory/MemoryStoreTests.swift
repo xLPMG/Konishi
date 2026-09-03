@@ -25,8 +25,8 @@ struct MemoryStoreTests {
     }
 
     @Test("write then read round-trips content")
-    func writeReadRoundTrips() async throws {
-        try await withStore { store, _ in
+    func writeReadRoundTrips() async {
+        await withStore { store, _ in
             store.write(scope: "global", name: "notes", content: "- likes tea")
             let file = MemoryStore.File(
                 scope: "global", name: "notes.md",
@@ -50,8 +50,8 @@ struct MemoryStoreTests {
     }
 
     @Test("append adds to existing content with a blank-line separator")
-    func appendAddsSeparator() async throws {
-        try await withStore { store, _ in
+    func appendAddsSeparator() async {
+        await withStore { store, _ in
             store.write(scope: "global", name: "notes.md", content: "- first")
             store.append(scope: "global", name: "notes.md", content: "- second")
 
@@ -61,8 +61,8 @@ struct MemoryStoreTests {
     }
 
     @Test("delete(scope:name:) removes the file")
-    func deleteByScopeAndNameRemoves() async throws {
-        try await withStore { store, _ in
+    func deleteByScopeAndNameRemoves() async {
+        await withStore { store, _ in
             store.write(scope: "global", name: "notes.md", content: "- gone soon")
             #expect(store.files(in: "global").count == 1)
 
@@ -73,8 +73,8 @@ struct MemoryStoreTests {
     }
 
     @Test("combined(scopes:) concatenates non-empty files across scopes as headed markdown")
-    func combinedConcatenatesNonEmptyFiles() async throws {
-        try await withStore { store, _ in
+    func combinedConcatenatesNonEmptyFiles() async {
+        await withStore { store, _ in
             store.write(scope: "global", name: "profile", content: "- name: Luca")
             store.write(scope: "persona-a", name: "notes", content: "- likes Swift")
             store.write(scope: "persona-a", name: "empty", content: "")
@@ -88,8 +88,8 @@ struct MemoryStoreTests {
     }
 
     @Test("signature(scopes:) changes when a file is added")
-    func signatureChangesOnAdd() async throws {
-        try await withStore { store, _ in
+    func signatureChangesOnAdd() async {
+        await withStore { store, _ in
             let before = store.signature(scopes: ["global"])
             store.write(scope: "global", name: "notes", content: "- something")
             let after = store.signature(scopes: ["global"])
@@ -105,8 +105,8 @@ struct MemoryStoreTests {
     }
 
     @Test("bulletCount(in:) sums blocks across every file in a scope")
-    func bulletCountSumsAcrossFiles() async throws {
-        try await withStore { store, _ in
+    func bulletCountSumsAcrossFiles() async {
+        await withStore { store, _ in
             store.write(scope: "global", name: "a", content: "- one\n- two")
             store.write(scope: "global", name: "b", content: "- three")
 
@@ -116,8 +116,8 @@ struct MemoryStoreTests {
 
     @Test("retrieve returns no context and no trace when there are no candidate bullets")
     @MainActor
-    func retrieveWithNoBulletsReturnsEmpty() async throws {
-        try await withStore { store, _ in
+    func retrieveWithNoBulletsReturnsEmpty() async {
+        await withStore { store, _ in
             let result = await store.retrieve(
                 scopes: ["global"], query: "anything", cache: EmbeddingCache(url: tempCacheURL()),
                 requestConfig: offlineConfig(), threshold: 0.5, topK: 3)
@@ -129,8 +129,8 @@ struct MemoryStoreTests {
 
     @Test("retrieve always injects the full global profile")
     @MainActor
-    func retrieveInjectsProfileInFull() async throws {
-        try await withStore { store, _ in
+    func retrieveInjectsProfileInFull() async {
+        await withStore { store, _ in
             store.write(
                 scope: "global", name: MemoryCategory.profile.fileName,
                 content: "- name: Luca\n- likes Swift")
@@ -146,8 +146,8 @@ struct MemoryStoreTests {
 
     @Test("retrieve falls back to lexical scoring and reports an .error trace when embeddings are unavailable")
     @MainActor
-    func retrieveFallsBackToLexicalScoring() async throws {
-        try await withStore { store, _ in
+    func retrieveFallsBackToLexicalScoring() async {
+        await withStore { store, _ in
             store.write(
                 scope: "global", name: "notes",
                 content: "- loves hiking in the mountains\n- prefers tea over coffee")
