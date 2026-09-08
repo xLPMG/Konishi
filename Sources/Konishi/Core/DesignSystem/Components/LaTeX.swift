@@ -11,6 +11,45 @@ enum LaTeX {
     /// decoded output from being re-interpreted by the Markdown parser. LaTeX commands
     /// that appear outside any math delimiters (a common model quirk) are decoded too.
     static func render(_ text: String) -> String {
+        scan(text,
+             decodeSpan: { inner in
+                 var decoder = Decoder(Array(inner), mathMode: true, spoken: false)
+                 return "`" + Decoder.normalizeMathSpacing(decoder.parse()) + "`"
+             },
+             decodePlain: { slice in
+                 var decoder = Decoder(Array(slice), mathMode: false, spoken: false)
+                 return decoder.parse()
+             })
+    }
+
+    /// Rewrites text for text-to-speech: math spans and bare LaTeX commands become spoken
+    /// words (`\approx` → "approximately", `x^2` → "x squared", `\frac{a}{b}` → "a over b")
+    /// with no delimiters, backticks or math symbols the synthesizer would mangle or skip.
+    static func speech(_ text: String) -> String {
+        scan(text,
+             decodeSpan: { inner in
+                 var decoder = Decoder(Array(inner), mathMode: true, spoken: true)
+                 return " " + decoder.parse() + " "
+             },
+             decodePlain: { slice in
+                 var decoder = Decoder(Array(slice), mathMode: false, spoken: true)
+                 return decoder.parse()
+             })
+    }
+
+    /// Decodes a bare LaTeX math expression (no surrounding delimiters) to Unicode.
+    static func decodeMath(_ expression: String) -> String {
+        var decoder = Decoder(Array(expression), mathMode: true, spoken: false)
+        return Decoder.normalizeMathSpacing(decoder.parse())
+    }
+
+    /// Walks `text`, decoding math delimiters (`$…$`, `$$…$$`, `\(…\)`, `\[…\]`) via
+    /// `decodeSpan` and the surrounding prose via `decodePlain`.
+    private static func scan(
+        _ text: String,
+        decodeSpan: (ArraySlice<Character>) -> String,
+        decodePlain: (ArraySlice<Character>) -> String
+    ) -> String {
         let chars = Array(text)
         let n = chars.count
         var out = ""
@@ -19,13 +58,7 @@ enum LaTeX {
 
         func flushPlain(upTo end: Int) {
             guard end > segmentStart else { return }
-            var decoder = Decoder(Array(chars[segmentStart..<end]), mathMode: false)
-            out += decoder.parse()
-        }
-
-        func emitMath(_ slice: ArraySlice<Character>) {
-            var decoder = Decoder(Array(slice), mathMode: true)
-            out += "`" + Decoder.normalizeMathSpacing(decoder.parse()) + "`"
+            out += decodePlain(chars[segmentStart..<end])
         }
 
         while i < n {
@@ -40,7 +73,7 @@ enum LaTeX {
                     let inner = chars[(i + open)..<close]
                     if double || looksLikeMath(inner) {
                         flushPlain(upTo: i)
-                        emitMath(inner)
+                        out += decodeSpan(inner)
                         i = close + open
                         segmentStart = i
                         continue
@@ -53,7 +86,7 @@ enum LaTeX {
                 let closer: Character = chars[i + 1] == "(" ? ")" : "]"
                 if let close = findBackslashClose(chars, from: i + 2, closer: closer) {
                     flushPlain(upTo: i)
-                    emitMath(chars[(i + 2)..<close])
+                    out += decodeSpan(chars[(i + 2)..<close])
                     i = close + 2
                     segmentStart = i
                     continue
@@ -67,11 +100,6 @@ enum LaTeX {
         return out
     }
 
-    /// Decodes a bare LaTeX math expression (no surrounding delimiters) to Unicode.
-    static func decodeMath(_ expression: String) -> String {
-        var decoder = Decoder(Array(expression), mathMode: true)
-        return Decoder.normalizeMathSpacing(decoder.parse())
-    }
 
     // MARK: Delimiter scanning
 
@@ -122,11 +150,13 @@ enum LaTeX {
 private struct Decoder {
     private let chars: [Character]
     private let mathMode: Bool
+    private let spoken: Bool
     private var i = 0
 
-    init(_ chars: [Character], mathMode: Bool) {
+    init(_ chars: [Character], mathMode: Bool, spoken: Bool = false) {
         self.chars = chars
         self.mathMode = mathMode
+        self.spoken = spoken
     }
 
     mutating func parse(stopAtBrace: Bool = false) -> String {
@@ -152,10 +182,14 @@ private struct Decoder {
             case "$" where mathMode:
                 i += 1
             case "~":
-                out += "\u{00A0}"
+                out += spoken ? " " : "\u{00A0}"
                 i += 1
             default:
-                out.append(c)
+                if spoken && mathMode, let word = Self.spokenLiterals[c] {
+                    out += word
+                } else {
+                    out.append(c)
+                }
                 i += 1
             }
         }
@@ -186,10 +220,12 @@ private struct Decoder {
         if !c.isLetter {
             i += 1
             switch c {
-            case "%", "$", "&", "#", "_", "{", "}": return String(c)
+            case "%": return spoken ? " percent" : "%"
+            case "&": return spoken ? " and " : "&"
+            case "$", "#", "_", "{", "}": return String(c)
             case " ", ",", ";", ":", "!": return " "
-            case "\\": return mathMode ? "\n" : "\\\\"
-            default: return mathMode ? String(c) : "\\" + String(c)
+            case "\\": return mathMode ? (spoken ? ". " : "\n") : (spoken ? " " : "\\\\")
+            default: return mathMode || spoken ? String(c) : "\\" + String(c)
             }
         }
 
@@ -198,8 +234,9 @@ private struct Decoder {
             name.append(chars[i])
             i += 1
         }
-        // LaTeX ignores whitespace after a control word; keep it in prose so words don't merge.
-        if mathMode {
+        // LaTeX ignores whitespace after a control word; keep it in prose so words don't
+        // merge, and keep it for speech so spoken words stay separate.
+        if mathMode && !spoken {
             while i < chars.count && chars[i] == " " { i += 1 }
         }
 
@@ -211,7 +248,7 @@ private struct Decoder {
         case "frac", "tfrac", "dfrac", "cfrac":
             let numerator = group()
             let denominator = group()
-            return fraction(numerator, denominator)
+            return spoken ? " " + numerator + " over " + denominator + " " : fraction(numerator, denominator)
         case "sqrt":
             var index = ""
             if i < chars.count && chars[i] == "[" {
@@ -220,19 +257,26 @@ private struct Decoder {
                 if i < chars.count { i += 1 }
             }
             let radicand = group()
+            if spoken {
+                let name = index.isEmpty ? "square root of " : index + "th root of "
+                return " " + name + radicand + " "
+            }
             let root = radicand.count > 1 ? "√(" + radicand + ")" : "√" + radicand
             return index.isEmpty ? root : superscript(index) + root
-        case "vec", "overrightarrow": return group() + "\u{20D7}"
-        case "hat", "widehat": return group() + "\u{0302}"
-        case "bar", "overline": return group() + "\u{0304}"
-        case "tilde", "widetilde": return group() + "\u{0303}"
-        case "dot": return group() + "\u{0307}"
-        case "ddot": return group() + "\u{0308}"
+        case "vec", "overrightarrow": return spoken ? group() : group() + "\u{20D7}"
+        case "hat", "widehat": return spoken ? group() : group() + "\u{0302}"
+        case "bar", "overline": return spoken ? group() : group() + "\u{0304}"
+        case "tilde", "widetilde": return spoken ? group() : group() + "\u{0303}"
+        case "dot": return spoken ? group() : group() + "\u{0307}"
+        case "ddot": return spoken ? group() : group() + "\u{0308}"
         case "left", "right", "big", "Big", "bigg", "Bigg", "bigl", "bigr",
              "displaystyle", "textstyle", "scriptstyle", "limits", "nolimits":
             return ""
         case "quad", "qquad": return "  "
         default:
+            if spoken {
+                return Self.spokenSymbols[name] ?? Self.spokenGreek[name] ?? " " + name + " "
+            }
             if let symbol = Self.symbols[name] { return symbol }
             // Unknown: in math keep the readable name; in prose keep the original command.
             return mathMode ? name : "\\" + name
@@ -273,11 +317,19 @@ private struct Decoder {
     }
 
     private func superscript(_ s: String) -> String {
+        if spoken {
+            switch s {
+            case "2": return " squared "
+            case "3": return " cubed "
+            default: return " to the power of " + s + " "
+            }
+        }
         if let mapped = mapAll(s, Self.superscripts) { return mapped }
         return s.count == 1 ? "^" + s : "^(" + s + ")"
     }
 
     private func subscriptText(_ s: String) -> String {
+        if spoken { return " sub " + s + " " }
         if let mapped = mapAll(s, Self.subscripts) { return mapped }
         return s.count == 1 ? "_" + s : "_(" + s + ")"
     }
@@ -303,6 +355,60 @@ private struct Decoder {
 
     /// Multiplicative operators that read better tight against their operands.
     private static let tightOps: Set<Character> = ["·", "×", "÷", "∗"]
+
+    /// Literal operator characters spoken as words inside math spans.
+    private static let spokenLiterals: [Character: String] = [
+        "=": " equals ", "+": " plus ", "-": " minus ", "−": " minus ",
+        "*": " times ", "/": " over ", "<": " less than ", ">": " greater than ",
+    ]
+
+    /// Command symbols spoken as words (Greek letters fall back to their command name).
+    private static let spokenSymbols: [String: String] = [
+        "cdot": " times ", "times": " times ", "div": " divided by ", "ast": " times ",
+        "pm": " plus or minus ", "mp": " minus or plus ", "star": " star ",
+        "leq": " less than or equal to ", "le": " less than or equal to ",
+        "geq": " greater than or equal to ", "ge": " greater than or equal to ",
+        "neq": " not equal to ", "ne": " not equal to ", "approx": " approximately ",
+        "equiv": " equivalent to ", "sim": " similar to ", "simeq": " approximately equal to ",
+        "cong": " approximately equal to ", "propto": " proportional to ",
+        "ll": " much less than ", "gg": " much greater than ",
+        "subset": " subset of ", "supset": " superset of ",
+        "subseteq": " subset of or equal to ", "supseteq": " superset of or equal to ",
+        "in": " in ", "notin": " not in ", "ni": " contains ",
+        "cup": " union ", "cap": " intersection ", "setminus": " minus ",
+        "emptyset": " empty set ", "varnothing": " empty set ",
+        "forall": " for all ", "exists": " there exists ", "nexists": " there does not exist ",
+        "neg": " not ", "land": " and ", "wedge": " and ", "lor": " or ", "vee": " or ",
+        "oplus": " plus ", "otimes": " times ", "perp": " perpendicular to ",
+        "parallel": " parallel to ", "angle": " angle ", "infty": " infinity ",
+        "partial": " partial ", "nabla": " del ", "sum": " sum of ", "prod": " product of ",
+        "int": " integral of ", "oint": " contour integral of ", "iint": " double integral of ",
+        "to": " to ", "rightarrow": " to ", "gets": " from ", "leftarrow": " left arrow ",
+        "Rightarrow": " implies ", "implies": " implies ", "Leftarrow": " implied by ",
+        "leftrightarrow": " if and only if ", "Leftrightarrow": " if and only if ",
+        "iff": " if and only if ", "mapsto": " maps to ",
+        "uparrow": " up arrow ", "downarrow": " down arrow ",
+        "cdots": " and so on ", "ldots": " and so on ", "dots": " and so on ",
+        "vdots": " and so on ", "ddots": " and so on ",
+        "prime": " prime ", "circ": " degrees ", "degree": " degrees ", "bullet": " ",
+        "hbar": " h bar ", "ell": " l ", "percent": " percent ",
+    ]
+
+    /// Greek letters spoken as spaced words, with phonetic forms for the ones the
+    /// synthesizer otherwise mispronounces or glues to a neighbour ("pi" → "pie").
+    private static let spokenGreek: [String: String] = [
+        "alpha": " alpha ", "beta": " beta ", "gamma": " gamma ", "delta": " delta ",
+        "epsilon": " epsilon ", "varepsilon": " epsilon ", "zeta": " zeta ", "eta": " eta ",
+        "theta": " theta ", "vartheta": " theta ", "iota": " iota ", "kappa": " kappa ",
+        "lambda": " lambda ", "mu": " mew ", "nu": " new ", "xi": " ksai ",
+        "omicron": " omicron ", "pi": " pie ", "varpi": " pie ", "rho": " row ",
+        "varrho": " row ", "sigma": " sigma ", "varsigma": " sigma ", "tau": " tau ",
+        "upsilon": " upsilon ", "phi": " fie ", "varphi": " fie ", "chi": " kai ",
+        "psi": " sigh ", "omega": " omega ",
+        "Gamma": " gamma ", "Delta": " delta ", "Theta": " theta ", "Lambda": " lambda ",
+        "Xi": " ksai ", "Pi": " pie ", "Sigma": " sigma ", "Upsilon": " upsilon ",
+        "Phi": " fie ", "Psi": " sigh ", "Omega": " omega ",
+    ]
 
     private static let superscripts: [Character: Character] = [
         "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹",

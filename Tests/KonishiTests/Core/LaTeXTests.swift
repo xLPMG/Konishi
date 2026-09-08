@@ -53,4 +53,27 @@ struct LaTeXTests {
         #expect(LaTeX.render("call some_function() now") == "call some_function() now")
         #expect(LaTeX.render("use **bold** and _italic_") == "use **bold** and _italic_")
     }
+
+    @Test("speech decodes math and commands to spoken words")
+    func speech() {
+        #expect(LaTeX.speech("about 50\\% done").contains("50 percent"))
+        #expect(LaTeX.speech("$x^2$").contains("squared"))
+        #expect(LaTeX.speech("$a \\approx b$").contains("approximately"))
+        #expect(LaTeX.speech("$\\frac{a}{b}$").contains("a over b"))
+        #expect(LaTeX.speech("$\\sqrt{2}$").contains("square root of 2"))
+        #expect(LaTeX.speech("value is $\\Delta x$").contains("delta"))
+        // no leftover math delimiters or backslashes
+        #expect(!LaTeX.speech("$\\Delta x \\approx 5 \\cdot 10^{-3}\\%$").contains("\\"))
+        #expect(!LaTeX.speech("$x^2$").contains("$"))
+    }
+
+    @Test("Greek letters stay separate words in speech")
+    func speechGreek() {
+        // e^{i\pi} must not glue into "ipi"
+        let s = LaTeX.speech("$e^{i\\pi} + 1 = 0$")
+        #expect(s.contains("i pie"))
+        #expect(!s.contains("ipi"))
+        let ab = LaTeX.speech("$\\alpha\\beta$")
+        #expect(!ab.contains("alphabeta"))
+    }
 }

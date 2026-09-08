@@ -7,6 +7,7 @@ extension String {
         s = s.replacingOccurrences(of: "```[\\s\\S]*?```", with: " ", options: .regularExpression)   // code fences
         s = s.replacingOccurrences(of: "!\\[[^\\]]*\\]\\([^\\)]*\\)", with: " ", options: .regularExpression) // images
         s = s.replacingOccurrences(of: "\\[([^\\]]+)\\]\\([^\\)]*\\)", with: "$1", options: .regularExpression) // links -> text
+        s = LaTeX.speech(s)                                                                             // LaTeX/math -> spoken words
         s = s.replacingOccurrences(of: "(?m)^\\s{0,3}#{1,6}\\s*", with: "", options: .regularExpression) // headings
         s = s.replacingOccurrences(of: "(?m)^\\s*[-*+]\\s+", with: "", options: .regularExpression)     // bullets
         s = s.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)         // quotes
