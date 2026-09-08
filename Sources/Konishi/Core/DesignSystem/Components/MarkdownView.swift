@@ -218,44 +218,11 @@ struct MarkdownView: View {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
         )
-        let displayText = Self.normalizeInlineMath(s)
+        let displayText = LaTeX.render(s)
         if let attr = try? AttributedString(markdown: displayText, options: options) {
             return Text(attr).font(.system(size: baseSize))
         }
         return Text(displayText).font(.system(size: baseSize))
-    }
-
-    /// SwiftUI Markdown has no math typesetter; render `$...$` spans as clean inline code
-    /// instead of exposing model-oriented delimiters in the conversation.
-    fileprivate static func normalizeInlineMath(_ text: String) -> String {
-        var result = ""
-        var index = text.startIndex
-        while index < text.endIndex {
-            guard text[index] == "$", index == text.startIndex || text[text.index(before: index)] != "\\" else {
-                result.append(text[index])
-                index = text.index(after: index)
-                continue
-            }
-            let contentStart = text.index(after: index)
-            guard contentStart < text.endIndex,
-                  let close = text[contentStart...].firstIndex(of: "$"),
-                  close > contentStart else {
-                result.append("$")
-                index = contentStart
-                continue
-            }
-            let expression = text[contentStart..<close]
-            if expression.contains("\n") {
-                result.append("$")
-                index = contentStart
-                continue
-            }
-            result.append("`")
-            result.append(contentsOf: expression)
-            result.append("`")
-            index = text.index(after: close)
-        }
-        return result
     }
 
     private func headingLevel(_ line: String) -> Int? {
@@ -326,7 +293,7 @@ private struct MarkdownTableView: View {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
         )
-        let displayText = MarkdownView.normalizeInlineMath(text)
+        let displayText = LaTeX.render(text)
         if let attributed = try? AttributedString(markdown: displayText, options: options) {
             return Text(attributed).font(.system(size: baseSize))
         }
