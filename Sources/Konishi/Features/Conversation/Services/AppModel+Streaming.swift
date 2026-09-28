@@ -109,6 +109,7 @@ extension AppModel {
                 detail: self.requestDetail(wire: wire))
 
             var firstTokenAt: Date?
+            var firstGenerationAt: Date?
             var charCount = 0
             var deltaCount = 0
             var reasoning = ""
@@ -124,6 +125,7 @@ extension AppModel {
                 {
                     switch event {
                     case .delta(let d):
+                        if firstGenerationAt == nil { firstGenerationAt = Date() }
                         if firstTokenAt == nil {
                             firstTokenAt = Date()
                             self.activity = nil
@@ -150,6 +152,7 @@ extension AppModel {
                                 assistantID: assistantID)
                         }
                     case .reasoning(let r):
+                        if !r.isEmpty && firstGenerationAt == nil { firstGenerationAt = Date() }
                         reasoning += r
                         self.appendReasoning(
                             r, conversationID: conversationID, assistantID: assistantID)
@@ -228,6 +231,7 @@ extension AppModel {
                 assistantID: assistantID,
                 start: start,
                 firstTokenAt: firstTokenAt,
+                firstGenerationAt: firstGenerationAt,
                 charCount: charCount,
                 usage: usage,
                 toolCalls: toolCalls,
@@ -296,6 +300,7 @@ extension AppModel {
         assistantID: UUID,
         start: Date,
         firstTokenAt: Date?,
+        firstGenerationAt: Date?,
         charCount: Int,
         usage: Usage?,
         toolCalls: [ToolCall]?,
@@ -327,8 +332,9 @@ extension AppModel {
             return
         }
 
-        conversations[idx].messages[mIdx].stats = makeStats(
-            start: start, firstTokenAt: firstTokenAt, charCount: charCount, usage: usage
+        conversations[idx].messages[mIdx].stats = Self.makeStats(
+            start: start, firstTokenAt: firstTokenAt, firstGenerationAt: firstGenerationAt,
+            charCount: charCount, usage: usage
         )
 
         if let toolCalls, hasTools {
@@ -375,14 +381,16 @@ extension AppModel {
             || calls.contains { continuationTools.contains($0.function.name ?? "") }
     }
 
-    private func makeStats(start: Date, firstTokenAt: Date?, charCount: Int, usage: Usage?)
+    static func makeStats(
+        start: Date, firstTokenAt: Date?, firstGenerationAt: Date?, charCount: Int,
+        usage: Usage?, end: Date = Date()
+    )
         -> MessageStats
     {
-        let end = Date()
         let duration = end.timeIntervalSince(start)
         let ttft = firstTokenAt?.timeIntervalSince(start)
         let completion = usage?.completionTokens
-        let genSeconds = firstTokenAt.map { end.timeIntervalSince($0) } ?? duration
+        let genSeconds = firstGenerationAt.map { end.timeIntervalSince($0) } ?? duration
         let tps: Double? = {
             if let completion, genSeconds > 0 { return Double(completion) / genSeconds }
             if genSeconds > 0 { return (Double(charCount) / 4.0) / genSeconds }
