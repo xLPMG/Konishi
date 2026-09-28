@@ -41,6 +41,11 @@ struct PersonaEditorView: View {
                 Text("Files live in ~/Konishi/memory/\(draft.memoryScope)/")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Research vault") {
+                Toggle("Research vault access", isOn: $draft.vaultAccessEnabled)
+                Text("When on, this persona searches, reads, and writes notes in your Obsidian vault (Settings › Vault), and relevant notes are injected into its replies. Keep it off for everyday personas so vault content stays out of those chats.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("System Prompt") {
                 TextEditor(text: $draft.systemPrompt)
                     .font(.system(size: 13, design: .monospaced))

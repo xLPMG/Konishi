@@ -291,6 +291,69 @@ extension AppModel {
                 self.activity = "Waiting for your answer…"
                 self.pendingInteraction = PendingInteraction(conversationID: conversationID, questions: questions)
             }
+        case "vault_search":
+            guard toolEnabled("vault_search"), persona.vaultAccessEnabled else {
+                return "Error: research vault access is off for this persona"
+            }
+            guard VaultStore.vaultURL(settings.vaultPath) != nil else {
+                return "Error: no research vault is configured (set it in Settings › Vault)"
+            }
+            guard let args: ToolArguments.VaultSearch = Self.decodeToolArgs(call),
+                  !args.query.trimmingCharacters(in: .whitespaces).isEmpty else {
+                return "Error: missing query"
+            }
+            let result = await vaultStore.context(
+                vaultPath: settings.vaultPath, query: args.query, cache: embeddingCache,
+                topK: min(max(1, args.maxResults ?? 6), 20),
+                requestConfig: settings.requestConfig(modelOverride: nil))
+            switch result {
+            case .success(let text): return text.isEmpty ? "No matching notes." : text
+            case .failure(let error): return "Error: \(error.localizedDescription)"
+            }
+        case "vault_read":
+            guard toolEnabled("vault_read"), persona.vaultAccessEnabled else {
+                return "Error: research vault access is off for this persona"
+            }
+            guard VaultStore.vaultURL(settings.vaultPath) != nil else {
+                return "Error: no research vault is configured (set it in Settings › Vault)"
+            }
+            guard let args: ToolArguments.VaultRead = Self.decodeToolArgs(call) else {
+                return "Error: missing note"
+            }
+            guard let text = vaultStore.read(vaultPath: settings.vaultPath, note: args.note) else {
+                return "Error: could not find note \(args.note)"
+            }
+            return text.count > 16_000 ? String(text.prefix(16_000)) + "\n… (truncated)" : text
+        case "vault_list":
+            guard toolEnabled("vault_list"), persona.vaultAccessEnabled else {
+                return "Error: research vault access is off for this persona"
+            }
+            guard VaultStore.vaultURL(settings.vaultPath) != nil else {
+                return "Error: no research vault is configured (set it in Settings › Vault)"
+            }
+            let args: ToolArguments.VaultList? = Self.decodeToolArgs(call)
+            let notes = vaultStore.list(vaultPath: settings.vaultPath, folder: args?.folder)
+            if notes.isEmpty { return "(no notes found)" }
+            let capped = notes.prefix(300)
+            return capped.joined(separator: "\n") + (notes.count > 300 ? "\n… \(notes.count - 300) more" : "")
+        case "vault_write", "vault_append":
+            let isAppend = call.function.name == "vault_append"
+            guard toolEnabled(call.function.name ?? ""), persona.vaultAccessEnabled else {
+                return "Error: research vault access is off for this persona"
+            }
+            guard VaultStore.vaultURL(settings.vaultPath) != nil else {
+                return "Error: no research vault is configured (set it in Settings › Vault)"
+            }
+            guard let args: ToolArguments.VaultWrite = Self.decodeToolArgs(call),
+                  !args.note.trimmingCharacters(in: .whitespaces).isEmpty else {
+                return "Error: missing note path"
+            }
+            guard let written = vaultStore.write(
+                vaultPath: settings.vaultPath, note: args.note, content: args.content, append: isAppend)
+            else {
+                return "Error: could not write \(args.note) (the path must stay inside the vault)"
+            }
+            return isAppend ? "Appended to \(written)." : "Saved \(written)."
         default:
             return "Unknown tool."
         }

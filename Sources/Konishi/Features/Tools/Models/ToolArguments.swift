@@ -33,6 +33,17 @@ enum ToolArguments {
     struct Calculation: Decodable { let expression: String }
     struct DueItems: Decodable { var limit: Int? }
 
+    struct VaultSearch: Decodable {
+        let query: String
+        var maxResults: Int?
+    }
+    struct VaultRead: Decodable { let note: String }
+    struct VaultList: Decodable { var folder: String? }
+    struct VaultWrite: Decodable {
+        let note: String
+        let content: String
+    }
+
     struct AddVocabulary: Decodable {
         let term: String
         let translation: String

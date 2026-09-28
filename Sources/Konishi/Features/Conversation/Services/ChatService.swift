@@ -159,6 +159,22 @@ enum ChatService {
         // Different servers mount the route differently (LM Studio: /v1/embeddings, infinity: /embeddings).
         // Try the configured path, then the alternate on a 404.
         let candidates = embedCandidates(primary)
+        // Embed in small batches: a single huge request makes the server run one padded forward
+        // pass whose peak memory grows with the batch size, and MLX caches those buffers instead
+        // of freeing them — so a whole-vault embed would pin gigabytes. Batching keeps it bounded.
+        var out: [[Double]] = []
+        out.reserveCapacity(inputs.count)
+        for start in stride(from: 0, to: inputs.count, by: maxEmbedBatch) {
+            let slice = Array(inputs[start..<min(start + maxEmbedBatch, inputs.count)])
+            out.append(contentsOf: try await embedSlice(candidates: candidates, config: config, inputs: slice))
+        }
+        return out
+    }
+
+    /// Max inputs per embedding request; caps the server's peak forward-pass memory.
+    private static let maxEmbedBatch = 16
+
+    private static func embedSlice(candidates: [URL], config: RequestConfig, inputs: [String]) async throws -> [[Double]] {
         var lastError: Error = ChatServiceError.invalidURL
         for url in candidates {
             do {

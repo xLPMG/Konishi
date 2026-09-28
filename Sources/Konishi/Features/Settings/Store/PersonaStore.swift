@@ -73,12 +73,17 @@ final class PersonaStore {
     }
 
     /// Stable across turns for a persona → keeps the server's prompt/KV prefix cache valid.
-    func stableSystemPrompt(persona: Persona, injectDateContext: Bool, mode: AppMode)
+    func stableSystemPrompt(persona: Persona, injectDateContext: Bool, mode: AppMode, vaultConfigured: Bool = false)
         -> String
     {
         var text = persona.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if let name = persona.assistantName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
             text = "Your name is \(name).\n\n" + text
+        }
+        if persona.vaultAccessEnabled, vaultConfigured {
+            text +=
+                (text.isEmpty ? "" : "\n\n")
+                + "You have access to the user's Obsidian research vault (a collection of Markdown notes). Relevant notes are retrieved into your context automatically; you can also call vault_search to find notes, vault_read to open one, and vault_list to browse. Ground your answers in the vault and cite the note paths you used. To save findings, use vault_write (or vault_append) with a vault-relative path, YAML frontmatter, and [[wikilinks]]."
         }
         if injectDateContext {
             text +=

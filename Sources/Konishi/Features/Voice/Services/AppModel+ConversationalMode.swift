@@ -335,16 +335,19 @@ extension AppModel {
                 if generation == self.conversationGeneration { self.conversationResponseTask = nil }
             }
             let systemText = personaStore.stableSystemPrompt(
-                persona: persona, injectDateContext: settings.injectDateContext, mode: mode)
+                persona: persona, injectDateContext: settings.injectDateContext, mode: mode,
+                vaultConfigured: !settings.vaultPath.isEmpty)
             let memoryText = await self.memoryContext(
                 conversationID: convoID, persona: persona, history: history)
             let documentText = await self.documentContext(conversationID: convoID, history: history)
+            let vaultText = await self.vaultContext(
+                conversationID: convoID, persona: persona, history: history)
             guard !Task.isCancelled, generation == self.conversationGeneration,
                 self.conversationActive
             else { return }
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
-                documentText: documentText, history: history)
+                documentText: documentText, vaultText: vaultText, history: history)
             // The voice-only hang-up tool is offered on every conversational turn.
             let tools = [Tools.endConversationDef]
             traceStore.trace(

@@ -49,6 +49,7 @@ final class AppModel {
     let memoryStore = MemoryStore()
     let fileStore = FileStore()
     let documentStore = DocumentStore()
+    let vaultStore = VaultStore()
     let personaStore = PersonaStore()
     let runtime = Runtime()
     let voice = VoiceManager()
@@ -208,6 +209,31 @@ final class AppModel {
         }
     }
 
+    // MARK: - Research vault
+
+    /// Vault passages injected into the prompt — only for personas granted vault access, so vault
+    /// content never reaches everyday chats.
+    func vaultContext(conversationID: UUID, persona: Persona, history: [ChatMessage]) async -> String {
+        guard persona.vaultAccessEnabled, !settings.vaultPath.isEmpty else { return "" }
+        guard let query = history.last(where: { $0.role == .user })?.content, !query.isEmpty else {
+            return ""
+        }
+        let result = await vaultStore.context(
+            vaultPath: settings.vaultPath, query: query, cache: embeddingCache,
+            topK: settings.vaultTopK, requestConfig: settings.requestConfig(modelOverride: nil))
+        switch result {
+        case .success(let text):
+            return text
+        case .failure(let error):
+            traceStore.trace(
+                conversationID: conversationID, kind: .error,
+                text:
+                    "Vault retrieval failed: \(error.localizedDescription). Is your embedding model reachable?",
+                saveTraces: settings.saveTraces)
+            return ""
+        }
+    }
+
     // MARK: - Lazy conversation bodies
 
     /// Conversations whose message bodies are resident in RAM. Everything else keeps only metadata
@@ -263,12 +289,14 @@ final class AppModel {
         "memory_list", "memory_read", "file_read", "list_dir",
         "git_status", "git_diff", "git_log", "web_search", "web_fetch", "web_research",
         "search_deck", "get_due_items", "calculate",
+        "vault_search", "vault_read", "vault_list",
     ]
     /// Tools whose OUTPUT the model must read to finish its reply, so a continuation turn is warranted.
     /// After fire-and-forget writes (e.g. banking a card) with a written reply, the turn is complete.
     static let continuationTools: Set<String> = [
         "get_due_items", "search_deck", "web_search", "web_fetch", "web_research", "file_read",
-        "memory_list", "memory_read", "calculate", "python_exec", "ask_multiple_choice",
+        "memory_list", "memory_read", "calculate", "python_exec", "run_shell", "ask_multiple_choice",
+        "vault_search", "vault_read", "vault_list",
     ]
 
     /// How many trailing tool results are kept verbatim in the wire; older ones are stubbed.

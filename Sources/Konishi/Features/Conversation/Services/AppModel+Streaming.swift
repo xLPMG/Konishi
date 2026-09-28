@@ -71,7 +71,9 @@ extension AppModel {
         if mode == .language {
             tools = Tools.definitions(enabled: settings.enabledTools(for: .language))
         } else if settings.toolsEnabled {
-            tools = Tools.definitions(enabled: settings.enabledTools(for: mode))
+            var enabled = settings.enabledTools(for: mode)
+            if !persona.vaultAccessEnabled { enabled.subtract(Tools.vaultToolNames) }
+            tools = Tools.definitions(enabled: enabled)
         } else {
             tools = nil
         }
@@ -87,14 +89,17 @@ extension AppModel {
                 self.mode == .language
                 ? languageSystemPrompt(persona: persona)
                 : personaStore.stableSystemPrompt(
-                    persona: persona, injectDateContext: settings.injectDateContext, mode: mode)
+                    persona: persona, injectDateContext: settings.injectDateContext, mode: mode,
+                    vaultConfigured: !settings.vaultPath.isEmpty)
             let memoryText = await self.memoryContext(
                 conversationID: conversationID, persona: persona, history: history)
             let documentText = await self.documentContext(
                 conversationID: conversationID, history: history)
+            let vaultText = await self.vaultContext(
+                conversationID: conversationID, persona: persona, history: history)
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
-                documentText: documentText, history: history)
+                documentText: documentText, vaultText: vaultText, history: history)
 
             traceStore.trace(
                 conversationID: conversationID, kind: .request,
@@ -333,12 +338,9 @@ extension AppModel {
             emitFinalSpeech(assistantID: assistantID, content: content)
             // Only loop back for another turn if the model must act on a tool's OUTPUT. A written
             // reply plus fire-and-forget writes (e.g. banking a card) is already a complete answer.
-            let hasContent = !content.trimmingCharacters(in: .whitespaces).isEmpty
-            let needsMore =
-                !hasContent
-                || toolCalls.contains { Self.continuationTools.contains($0.function.name ?? "") }
             let batch = PendingToolBatch(
-                conversationID: conversationID, calls: toolCalls, continueAfter: needsMore)
+                conversationID: conversationID, calls: toolCalls,
+                continueAfter: Self.needsToolContinuation(content: content, calls: toolCalls))
             let names = toolCalls.compactMap { $0.function.name }
             if !names.isEmpty && toolCalls.allSatisfy({ toolCallIsAutoApproved($0, mode: mode) }) {
                 activity = "Calling \(names.joined(separator: ", "))…"
@@ -366,6 +368,11 @@ extension AppModel {
         maybeRefineTitle(conversationID: conversationID)
         emitFinalSpeech(
             assistantID: assistantID, content: conversations[idx].messages[mIdx].content)
+    }
+
+    static func needsToolContinuation(content: String, calls: [ToolCall]) -> Bool {
+        content.trimmingCharacters(in: .whitespaces).isEmpty
+            || calls.contains { continuationTools.contains($0.function.name ?? "") }
     }
 
     private func makeStats(start: Date, firstTokenAt: Date?, charCount: Int, usage: Usage?)
@@ -412,6 +419,7 @@ extension AppModel {
         summary: String,
         memoryText: String,
         documentText: String = "",
+        vaultText: String = "",
         history: [ChatMessage]
     ) -> [WireMessage] {
         var wire: [WireMessage] = []
@@ -428,6 +436,7 @@ extension AppModel {
         let budgeted = budget(history: history)
         let memory = memoryText.trimmingCharacters(in: .whitespacesAndNewlines)
         let retrievedDocs = documentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let vaultNotes = vaultText.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastUserIdx = budgeted.lastIndex(where: { $0.role == .user })
         // Keep only the most recent tool outputs verbatim; older ones are re-sent every
         // turn otherwise, so collapse them to a stub to save context.
@@ -469,6 +478,11 @@ extension AppModel {
                 if i == lastUserIdx, !retrievedDocs.isEmpty {
                     text =
                         "# Relevant excerpts from attached documents\n\(retrievedDocs)\n\n---\n\n"
+                        + text
+                }
+                if i == lastUserIdx, !vaultNotes.isEmpty {
+                    text =
+                        "# Relevant notes from your research vault\n\(vaultNotes)\n\n---\n\n"
                         + text
                 }
                 if i == lastUserIdx, !memory.isEmpty {

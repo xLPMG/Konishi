@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import AppKit
 
 struct SettingsView: View {
     var body: some View {
@@ -8,6 +9,7 @@ struct SettingsView: View {
             RuntimeSettings().tabItem { Label("Local Servers", systemImage: "shippingbox") }
             GenerationSettings().tabItem { Label("Generation", systemImage: "slider.horizontal.3") }
             MemorySettings().tabItem { Label("Memory", systemImage: "brain") }
+            VaultSettings().tabItem { Label("Vault", systemImage: "books.vertical") }
             ToolsSettings().tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
             VoiceSettings().tabItem { Label("Voice", systemImage: "waveform") }
             PersonaSettings().tabItem { Label("Personas", systemImage: "person.2") }
@@ -209,6 +211,41 @@ private struct MemorySettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+private struct VaultSettings: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var settings = model.settings
+        Form {
+            Section("Research vault") {
+                HStack {
+                    TextField("Vault folder", text: $settings.vaultPath, prompt: Text("~/Documents/MyVault"))
+                    Button("Choose…") { chooseFolder(settings) }
+                }
+                if !settings.vaultPath.isEmpty, VaultStore.vaultURL(settings.vaultPath) == nil {
+                    Label("That folder doesn't exist.", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange).font(.caption)
+                }
+                Stepper(value: $settings.vaultTopK, in: 1...20) {
+                    LabeledContent("Passages per turn", value: "\(settings.vaultTopK)")
+                }
+                Text("Point Konishi at an Obsidian vault (a folder of Markdown notes). Only personas with “Research vault access” retrieve from it or can read and write notes, so vault content never leaks into your everyday chats. Needs an embedding model.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func chooseFolder(_ settings: AppSettings) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Vault"
+        if panel.runModal() == .OK, let url = panel.url { settings.vaultPath = url.path }
     }
 }
 

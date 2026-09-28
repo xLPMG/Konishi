@@ -179,6 +179,14 @@ final class AppSettings {
     var ragTopK: Int {
         didSet { defaults.set(ragTopK, forKey: Keys.ragTopK) }
     }
+    /// Filesystem path to an Obsidian research vault (a folder of Markdown notes). Empty = none.
+    var vaultPath: String {
+        didSet { defaults.set(vaultPath, forKey: Keys.vaultPath) }
+    }
+    /// Number of vault note passages retrieved per turn for research personas.
+    var vaultTopK: Int {
+        didSet { defaults.set(vaultTopK, forKey: Keys.vaultTopK) }
+    }
     /// Master switch for tool calling. Individual tools are toggled via `enabledTools`.
     var toolsEnabled: Bool {
         didSet { defaults.set(toolsEnabled, forKey: Keys.toolsEnabled) }
@@ -353,6 +361,8 @@ final class AppSettings {
         self.reasoningEnabled = defaults.object(forKey: Keys.reasoningEnabled) as? Bool ?? true
         self.ragThresholdChars = defaults.object(forKey: Keys.ragThresholdChars) as? Int ?? 12000
         self.ragTopK = defaults.object(forKey: Keys.ragTopK) as? Int ?? 6
+        self.vaultPath = defaults.string(forKey: Keys.vaultPath) ?? ""
+        self.vaultTopK = defaults.object(forKey: Keys.vaultTopK) as? Int ?? 6
         self.toolsEnabled = defaults.object(forKey: Keys.toolsEnabled) as? Bool ?? false
         var enabledByMode: [String: Set<String>] = [:]
         var autoByMode: [String: Set<String>] = [:]
@@ -383,6 +393,20 @@ final class AppSettings {
                 defaults.set(Array(approved), forKey: Keys.autoApproveKey(mode))
             }
             defaults.set(3, forKey: Keys.settingsVersion)
+        }
+        if defaults.integer(forKey: Keys.settingsVersion) < 4 {
+            // Make the research-vault tools available in text chat; the persona flag still gates them.
+            var enabled = enabledByMode[AppMode.chat.rawValue] ?? Tools.modeEnabledDefaults(.chat)
+            enabled.formUnion(Tools.vaultToolNames)
+            enabledByMode[AppMode.chat.rawValue] = enabled
+            defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(.chat))
+
+            var approved = autoByMode[AppMode.chat.rawValue] ?? Tools.modeAutoApproveDefaults(.chat)
+            approved.formUnion(["vault_search", "vault_read", "vault_list"])
+            autoByMode[AppMode.chat.rawValue] = approved
+            defaults.set(Array(approved), forKey: Keys.autoApproveKey(.chat))
+
+            defaults.set(4, forKey: Keys.settingsVersion)
         }
         self.enabledToolsByMode = enabledByMode
         self.autoApproveByMode = autoByMode
@@ -517,6 +541,8 @@ final class AppSettings {
         static let reasoningEnabled = "konishi.reasoningEnabled"
         static let ragThresholdChars = "konishi.ragThresholdChars"
         static let ragTopK = "konishi.ragTopK"
+        static let vaultPath = "konishi.vaultPath"
+        static let vaultTopK = "konishi.vaultTopK"
         static let toolsEnabled = "konishi.toolsEnabled"
         static let enabledTools = "konishi.enabledTools"
         static let autoApproveTools = "konishi.autoApproveTools"

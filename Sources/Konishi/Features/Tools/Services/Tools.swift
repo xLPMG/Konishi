@@ -9,6 +9,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
     case system
     case language
     case interactive
+    case vault
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
         case .system: "System"
         case .language: "Language deck"
         case .interactive: "Interactive"
+        case .vault: "Research vault"
         }
     }
 }
@@ -312,7 +314,83 @@ enum Tools {
         )
     ]
 
-    static let all: [ToolSpec] = baseSpecs + languageSpecs + interactiveSpecs
+    static let all: [ToolSpec] = baseSpecs + languageSpecs + interactiveSpecs + vaultSpecs
+
+    // MARK: Research vault (Obsidian) — gated per-persona by Persona.vaultAccessEnabled.
+
+    static let vaultSpecs: [ToolSpec] = [
+        ToolSpec(
+            name: "vault_search",
+            summary: "Search the research vault",
+            description: "Semantically search the Obsidian research vault; returns the most relevant note passages with their paths.",
+            parameters: .schema(
+                properties: [
+                    "query": .property("string", "what to look for"),
+                    "max_results": .property("integer", "passages to return (default 6, maximum 20)")
+                ],
+                required: ["query"]
+            ),
+            group: .vault, mutating: false,
+            defaultEnabled: true, defaultAutoApprove: true
+        ),
+        ToolSpec(
+            name: "vault_read",
+            summary: "Read a vault note",
+            description: "Read a note from the research vault by its vault-relative path or title.",
+            parameters: .schema(
+                properties: [
+                    "note": .property("string", "note path or title, e.g. Literature/Smith2020.md")
+                ],
+                required: ["note"]
+            ),
+            group: .vault, mutating: false,
+            defaultEnabled: true, defaultAutoApprove: true
+        ),
+        ToolSpec(
+            name: "vault_list",
+            summary: "List vault notes",
+            description: "List note paths in the research vault, optionally under a folder.",
+            parameters: .schema(
+                properties: [
+                    "folder": .property("string", "optional folder to list under, e.g. Literature/")
+                ],
+                required: []
+            ),
+            group: .vault, mutating: false,
+            defaultEnabled: true, defaultAutoApprove: true
+        ),
+        ToolSpec(
+            name: "vault_write",
+            summary: "Create or overwrite a vault note",
+            description: "Create or overwrite a note in the research vault (Markdown). Use a vault-relative path; include YAML frontmatter and [[wikilinks]] where appropriate.",
+            parameters: .schema(
+                properties: [
+                    "note": .property("string", "note path, e.g. Literature/Smith2020.md"),
+                    "content": .property("string", "the full Markdown content")
+                ],
+                required: ["note", "content"]
+            ),
+            group: .vault, mutating: true,
+            defaultEnabled: true, defaultAutoApprove: false
+        ),
+        ToolSpec(
+            name: "vault_append",
+            summary: "Append to a vault note",
+            description: "Append Markdown to a note in the research vault (creates it if missing).",
+            parameters: .schema(
+                properties: [
+                    "note": .property("string", "note path or title"),
+                    "content": .property("string", "the Markdown to append")
+                ],
+                required: ["note", "content"]
+            ),
+            group: .vault, mutating: true,
+            defaultEnabled: true, defaultAutoApprove: false
+        )
+    ]
+
+    /// Research-vault tool names, filtered out of a turn unless the persona has vault access.
+    static let vaultToolNames: Set<String> = Set(vaultSpecs.map(\.name))
 
     /// Voice-only control tool. Not part of `all` / the settings registry — it's injected directly
     /// into conversational requests so the model can hang up when the user says goodbye, and it's
@@ -323,7 +401,7 @@ enum Tools {
         parameters: .schema(properties: [:], required: [])
     )
 
-    static let defaultEnabled: Set<String> = Set(baseSpecs.filter(\.defaultEnabled).map(\.name))
+    static let defaultEnabled: Set<String> = Set((baseSpecs + vaultSpecs).filter(\.defaultEnabled).map(\.name))
     static let defaultAutoApprove: Set<String> = Set(all.filter(\.defaultAutoApprove).map(\.name))
 
     /// Every deck tool plus the interactive picker — the sensible default toolset for Learn mode.

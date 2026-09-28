@@ -57,7 +57,16 @@ def embed(texts):
     outputs = MODEL(enc["input_ids"], attention_mask=enc["attention_mask"])
     embs = _pool(outputs, enc["attention_mask"])
     mx.eval(embs)
-    return embs.tolist()
+    result = embs.tolist()
+    # Return the forward pass's cached Metal buffers to the OS; otherwise a big batch's peak
+    # allocation stays wired for the life of the process.
+    _clear = getattr(mx, "clear_cache", None) or getattr(getattr(mx, "metal", None), "clear_cache", None)
+    if _clear is not None:
+        try:
+            _clear()
+        except Exception:
+            pass
+    return result
 
 
 class Handler(BaseHTTPRequestHandler):
