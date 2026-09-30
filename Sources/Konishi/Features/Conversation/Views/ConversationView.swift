@@ -6,6 +6,7 @@ import SwiftUI
 struct VoiceOrb: View {
     let state: AppModel.VoiceState
     var accent: Color
+    @State private var time = Date().timeIntervalSinceReferenceDate
 
     /// Main internal glow colour.
     private var tint: Color {
@@ -48,11 +49,12 @@ struct VoiceOrb: View {
     }
 
     var body: some View {
-        TimelineView(.animation) { timeline in
-            content(t: timeline.date.timeIntervalSinceReferenceDate)
-        }
-        .frame(width: 260, height: 260)
-        .animation(.easeInOut(duration: 0.5), value: state)
+        content(t: time)
+            .frame(width: 260, height: 260)
+            .animation(.easeInOut(duration: 0.5), value: state)
+            .onReceive(Timer.publish(every: 1.0 / 30, on: .main, in: .common).autoconnect()) { date in
+                time = date.timeIntervalSinceReferenceDate
+            }
     }
 
     @ViewBuilder

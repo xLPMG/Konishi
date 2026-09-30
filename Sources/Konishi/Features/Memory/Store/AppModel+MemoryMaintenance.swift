@@ -15,6 +15,7 @@ extension AppModel {
             requestConfig: settings.requestConfig(modelOverride: nil),
             threshold: settings.memoryThreshold, topK: settings.memoryTopK
         )
+        guard !Task.isCancelled else { return "" }
         if let trace = result.trace {
             traceStore.trace(
                 conversationID: conversationID, kind: trace.kind, text: trace.text,

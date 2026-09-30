@@ -344,6 +344,23 @@ final class AppModel {
     /// instead of resuming listening.
     var endConversationRequested = false
 
+    // MARK: Speculative dispatch
+    /// Timer that fires the speculative LLM request after a short initial silence.
+    var speculativeFireTask: Task<Void, Never>?
+    /// The in-flight speculative LLM + TTS task (cancelled if the user resumes speaking).
+    var speculativeResponseTask: Task<Void, Never>?
+    /// Audio clips synthesized speculatively (native-TTS path), held until the turn is confirmed.
+    var speculativeAudioBuffer: [Data] = []
+    /// Text segments accumulated speculatively (server-TTS path), held until confirmed.
+    var speculativeSegmentBuffer: [String] = []
+    /// Full reply text built speculatively; committed to history on confirmation.
+    var speculativeReplyDraft = ""
+    var speculativeRequestTrace: (summary: String, detail: String)?
+    /// Tool calls accumulated during the speculative request.
+    var speculativeToolCalls: [ToolCall] = []
+    /// The transcript text the speculative request was fired for (stale-result guard).
+    var speculativeText = ""
+
     // MARK: - Long-term memory (structured, auto-updating)
 
     var isMemorizing = false

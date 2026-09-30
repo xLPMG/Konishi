@@ -21,6 +21,7 @@ extension AppModel {
         bargeInConfirmationTask?.cancel()
         bargeInConfirmationTask = nil
         cancelBackchannelDecision()
+        cancelSpeculativeRequest()
         conversationResponseTask?.cancel()
         conversationResponseTask = nil
         cancelInFlightSynthTasks()
@@ -80,6 +81,8 @@ extension AppModel {
         let text = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         liveTranscript = text
+        // New speech invalidates any in-flight speculative request.
+        if text != speculativeText { cancelSpeculativeRequest() }
         scheduleConversationEndpoint(text: text, isFinal: update.isFinal)
         if update.isFinal { resumeConversationDictation(after: text) }
     }
@@ -112,6 +115,30 @@ extension AppModel {
             else { return }
             self.endUserTurn()
         }
+
+        // Speculative fire: after a short initial silence start prefilling the LLM so that when
+        // the endpoint timer fires, the server has already processed most of the prompt and the
+        // first tokens / TTS audio are ready immediately.  The speculative task is automatically
+        // discarded if the user resumes speaking before the endpoint timer triggers.
+        speculativeFireTask?.cancel()
+        let speculativeDelay = Self.speculativeFireMilliseconds(text: text, isFinal: isFinal)
+        speculativeFireTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(speculativeDelay))
+            guard !Task.isCancelled else { return }
+            guard let self, self.conversationActive, self.voiceState == .listening,
+                self.liveTranscript == text, self.speculativeResponseTask == nil
+            else { return }
+            self.speculativeFireTask = nil
+            self.fireSpeculativeRequest(text: text)
+        }
+    }
+
+    /// Delay before a speculative request fires (always shorter than the endpoint confirmation delay).
+    private static func speculativeFireMilliseconds(text: String, isFinal: Bool) -> Int {
+        if isFinal { return 700 }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let last = trimmed.last, ".!?…。！？".contains(last) { return 700 }
+        return 800
     }
 
     private static func conversationEndpointMilliseconds(text: String, isFinal: Bool) -> Int {
@@ -297,15 +324,36 @@ extension AppModel {
     private func endUserTurn() {
         conversationEndpointTask?.cancel()
         conversationEndpointTask = nil
+        speculativeFireTask?.cancel()
+        speculativeFireTask = nil
         let text = liveTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        voice.stopDictation()
         guard conversationActive else { return }
         guard !text.isEmpty else {
+            cancelSpeculativeRequest()
+            voice.stopDictation()
             beginListening()
             return
         }
         liveTranscript = ""
         voiceState = .thinking
+
+        // Fast-path: if a speculative request already fired for exactly this transcript,
+        // promote it rather than starting from scratch.
+        if speculativeText == text, speculativeResponseTask != nil {
+            // The speculative task is still running — it will call promoteSpeculativeResult()
+            // when it finishes.  Dictation stays alive until promotion commits the turn.
+            return
+        }
+        if speculativeText == text, !speculativeReplyDraft.isEmpty {
+            // The speculative task already finished — promote immediately.
+            voice.stopDictation()
+            promoteSpeculativeResult(text: text)
+            return
+        }
+
+        // No matching speculative result — fall through to normal path.
+        cancelSpeculativeRequest()
+        voice.stopDictation()
         respond(to: text)
     }
 
@@ -399,9 +447,227 @@ extension AppModel {
         }
     }
 
+    // MARK: - Speculative dispatch
+
+    /// Cancels and discards any in-flight or completed speculative request.
+    private func cancelSpeculativeRequest() {
+        speculativeFireTask?.cancel()
+        speculativeFireTask = nil
+        speculativeResponseTask?.cancel()
+        speculativeResponseTask = nil
+        speculativeAudioBuffer.removeAll()
+        speculativeSegmentBuffer.removeAll()
+        speculativeReplyDraft = ""
+        speculativeRequestTrace = nil
+        speculativeToolCalls = []
+        speculativeText = ""
+    }
+
+    /// Fires an LLM request speculatively while the user is still in their silence window.
+    /// Results are buffered and only committed/played back if the turn is later confirmed.
+    private func fireSpeculativeRequest(text: String) {
+        guard let convoID = conversationSessionID, let idx = conversationIndex(convoID) else { return }
+        speculativeText = text
+        speculativeReplyDraft = ""
+        speculativeRequestTrace = nil
+        speculativeAudioBuffer = []
+        speculativeSegmentBuffer = []
+        speculativeToolCalls = []
+
+        // Snapshot history as if this user turn were committed (without actually appending yet).
+        let persona = personaStore.persona(for: conversations[idx])
+        let allHistory = conversations[idx].messages
+        let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
+        let history = Array(allHistory.dropFirst(folded)) + [ChatMessage(role: .user, content: text)]
+        let summary = conversations[idx].summary ?? ""
+        let config = settings.requestConfig(modelOverride: persona.model)
+        let generation = conversationGeneration
+
+        speculativeResponseTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                // Clear only if this task is still the active speculative one.
+                if self.speculativeText == text { self.speculativeResponseTask = nil }
+            }
+            let systemText = personaStore.stableSystemPrompt(
+                persona: persona, injectDateContext: settings.injectDateContext, mode: mode,
+                vaultConfigured: !settings.vaultPath.isEmpty)
+            async let memTask = self.memoryContext(
+                conversationID: convoID, persona: persona, history: history)
+            async let docTask = self.documentContext(conversationID: convoID, history: history)
+            async let vaultTask = self.vaultContext(
+                conversationID: convoID, persona: persona, history: history)
+            let (memoryText, documentText, vaultText) = await (memTask, docTask, vaultTask)
+            guard !Task.isCancelled, generation == self.conversationGeneration,
+                self.conversationActive, self.speculativeText == text
+            else { return }
+            let wire = self.buildWire(
+                systemText: systemText, summary: summary, memoryText: memoryText,
+                documentText: documentText, vaultText: vaultText, history: history)
+            let tools = [Tools.endConversationDef]
+            self.speculativeRequestTrace = (
+                summary: self.requestSummary(
+                    config: config, wire: wire, tools: tools, memory: memoryText, summary: summary),
+                detail: self.requestDetail(wire: wire))
+
+            // Stream LLM reply into a local buffer; do not touch conversationReplyDraft.
+            var full = ""
+            var buffer = ""
+            var isFirstSegment = true
+            var pendingSegments: [String] = []  // text segments for post-stream TTS synthesis
+            var toolCalls: [ToolCall] = []
+            var stripper = ThinkStripper()
+            do {
+                for try await event in ChatService.stream(config: config, messages: wire, tools: tools) {
+                    guard !Task.isCancelled, generation == self.conversationGeneration,
+                        self.conversationActive, self.speculativeText == text
+                    else { return }
+                    switch event {
+                    case .delta(let chunk):
+                        let out = stripper.consume(chunk)
+                        full += out.visible
+                        buffer += out.visible
+                        // Collect sentence-boundary segments for post-stream TTS synthesis.
+                        if self.settings.ttsSource == .server {
+                            while let seg = Self.popSpeakableSegment(&buffer, isFirst: isFirstSegment) {
+                                let clean = seg.strippedForSpeech
+                                guard !clean.isEmpty else { continue }
+                                isFirstSegment = false
+                                pendingSegments.append(clean)
+                            }
+                        }
+                    case .toolCalls(let calls): toolCalls = calls
+                    default: break
+                    }
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                traceStore.trace(
+                    conversationID: convoID, kind: .info,
+                    text: "speculative request failed: \(error.localizedDescription)",
+                    saveTraces: settings.saveTraces)
+                return
+            }
+            guard !Task.isCancelled, generation == self.conversationGeneration,
+                self.conversationActive, self.speculativeText == text
+            else { return }
+            let tail = stripper.finish()
+            full += tail.visible
+            // Flush any remaining text to pending segments (server-TTS path).
+            if self.settings.ttsSource == .server {
+                let rest = (buffer + tail.visible).strippedForSpeech
+                if !rest.isEmpty { pendingSegments.append(rest) }
+            }
+            self.speculativeReplyDraft = full
+            self.speculativeToolCalls = toolCalls
+
+            // Server-TTS: synthesize all segments concurrently now that the LLM stream is done.
+            // This keeps the LLM stream unblocked (no await inside the token loop).
+            if self.settings.ttsSource == .server, !pendingSegments.isEmpty {
+                let ttsConfig = self.settings.requestConfig(modelOverride: nil)
+                // Launch concurrent synthesis tasks.
+                let synthTasks = pendingSegments.map { seg in
+                    Task { () throws -> Data in
+                        try await ChatService.speech(config: ttsConfig, text: seg)
+                    }
+                }
+                var audioClips: [Data] = []
+                for (seg, task) in zip(pendingSegments, synthTasks) {
+                    guard !Task.isCancelled, generation == self.conversationGeneration,
+                        self.conversationActive, self.speculativeText == text
+                    else {
+                        synthTasks.forEach { $0.cancel() }
+                        return
+                    }
+                    if let data = try? await task.value {
+                        audioClips.append(data)
+                        self.speculativeSegmentBuffer.append(seg)
+                    }
+                }
+                guard !Task.isCancelled, generation == self.conversationGeneration,
+                    self.conversationActive, self.speculativeText == text
+                else { return }
+                self.speculativeAudioBuffer = audioClips
+            }
+
+            // If the endpoint timer already fired and put us in .thinking state while this task
+            // was still in-flight, promote immediately now that we have a result.
+            if self.voiceState == .thinking {
+                self.voice.stopDictation()
+                self.promoteSpeculativeResult(text: text)
+            }
+        }
+    }
+
+    /// Promotes the buffered speculative result: commits the turn to history, releases audio.
+    /// Must be called on the main actor (same as all AppModel mutations).
+    private func promoteSpeculativeResult(text: String) {
+        guard let convoID = conversationSessionID, let idx = conversationIndex(convoID) else {
+            cancelSpeculativeRequest()
+            respond(to: text)
+            return
+        }
+        let reply = speculativeReplyDraft
+        let requestTrace = speculativeRequestTrace
+        let toolCalls = speculativeToolCalls
+        let audioBuffer = speculativeAudioBuffer
+        let generation = conversationGeneration
+        cancelSpeculativeRequest()
+
+        guard !reply.isEmpty else {
+            // Empty result (e.g. error) — fall back to a normal request.
+            respond(to: text)
+            return
+        }
+
+        // Commit the user message and reply to conversation history.
+        if let requestTrace {
+            traceStore.trace(
+                conversationID: convoID, kind: .request, text: requestTrace.summary,
+                saveTraces: settings.saveTraces, detail: requestTrace.detail)
+        }
+        conversations[idx].messages.append(ChatMessage(role: .user, content: text))
+        touch(idx)
+        maybeAutoTitle(conversationID: convoID)
+        if !toolCalls.isEmpty { handleConversationalToolCalls(toolCalls, convoID: convoID) }
+        finishConversationTurn(convoID: convoID, reply: reply)
+        let audioDetail = audioBuffer.isEmpty ? "native TTS" : "\(audioBuffer.count) pre-synthesized clips"
+        traceStore.trace(
+            conversationID: convoID, kind: .finish,
+            text: "speculative: promoted (\(reply.count) chars, \(audioDetail))",
+            saveTraces: settings.saveTraces)
+        if !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            traceStore.trace(
+                conversationID: convoID, kind: .result, text: reply,
+                saveTraces: settings.saveTraces)
+        }
+
+        // Release audio to the speaker.
+        guard conversationActive else { return }
+        if settings.ttsSource == .server, !audioBuffer.isEmpty {
+            // All clips are already synthesized — enqueue and seal immediately.
+            voice.beginAudioStream()
+            voice.onFinishSpeaking = { [weak self] in
+                guard let self, self.conversationActive, generation == self.conversationGeneration
+                else { return }
+                self.voice.onFinishSpeaking = nil
+                self.conversationReplyMessageID = nil
+                if self.endConversationRequested { self.stopConversation() } else { self.beginListening() }
+            }
+            voiceState = .speaking
+            for clip in audioBuffer { voice.enqueueAudioData(clip) }
+            voice.sealAudioStream()
+        } else {
+            // Native TTS path (or server-TTS with no buffered audio): speak the full reply text.
+            speakThenListen(reply, generation: generation)
+        }
+        beginInterruptionMonitoring()
+    }
+
     private func respondBuffered(
         convoID: UUID, config: RequestConfig, wire: [WireMessage], tools: [ToolDef], generation: Int
     ) async {
+
         let start = Date()
         var reply = ""
         var reasoning = ""
@@ -449,6 +715,11 @@ extension AppModel {
             conversationID: convoID, kind: .finish,
             text: "reply in \(Int(Date().timeIntervalSince(start) * 1000))ms, chars=\(reply.count)",
             saveTraces: settings.saveTraces)
+        if !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            traceStore.trace(
+                conversationID: convoID, kind: .result, text: reply,
+                saveTraces: settings.saveTraces)
+        }
         guard self.conversationActive else { return }
         self.finishConversationTurn(convoID: convoID, reply: reply)
         self.speakThenListen(reply, generation: generation)
@@ -596,6 +867,11 @@ extension AppModel {
             conversationID: convoID, kind: .finish,
             text: "reply in \(Int(Date().timeIntervalSince(start) * 1000))ms, chars=\(full.count)",
             saveTraces: settings.saveTraces)
+        if !full.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            traceStore.trace(
+                conversationID: convoID, kind: .result, text: full,
+                saveTraces: settings.saveTraces)
+        }
         guard conversationActive else { return }
         finishConversationTurn(convoID: convoID, reply: full)
     }
