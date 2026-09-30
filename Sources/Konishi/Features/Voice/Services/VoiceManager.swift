@@ -287,8 +287,8 @@ final class VoiceManager: NSObject, @unchecked Sendable {
         lastError = nil
 
         // Apple invokes this on a background queue; keep it non-isolated and hop to main.
-        SFSpeechRecognizer.requestAuthorization { @Sendable status in
-            Task { @MainActor [weak self] in
+        SFSpeechRecognizer.requestAuthorization { @Sendable [weak self] status in
+            Task { @MainActor in
                 guard let self else { return }
                 guard generation == self.dictationGeneration else { return }
                 guard status == .authorized else {
@@ -305,8 +305,8 @@ final class VoiceManager: NSObject, @unchecked Sendable {
         case .authorized:
             beginDictation(generation: generation)
         case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { @Sendable granted in
-                Task { @MainActor [weak self] in
+            AVCaptureDevice.requestAccess(for: .audio) { @Sendable [weak self] granted in
+                Task { @MainActor in
                     guard let self, generation == self.dictationGeneration else { return }
                     if granted { self.beginDictation(generation: generation) }
                     else { self.lastError = "Microphone access denied." }

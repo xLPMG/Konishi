@@ -116,6 +116,7 @@ struct RootView: View {
                 .overlay(Capsule().stroke(.white.opacity(0.08)))
             }
         }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
 }
 
@@ -134,8 +135,18 @@ private struct PersonaPicker: View {
                 }
             }
         } label: {
-            Label(model.currentPersona.name, systemImage: model.currentPersona.iconSymbol)
+            HStack(spacing: 6) {
+                Image(systemName: model.currentPersona.iconSymbol)
+                Text(model.currentPersona.name)
+            }
         }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        // Wrapped in a styled container so the toolbar treats it as a custom view and keeps the title.
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.08)))
         .help("Persona (system prompt + memory)")
     }
 }
