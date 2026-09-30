@@ -328,6 +328,7 @@ final class AppModel {
     var conversationResponseTask: Task<Void, Never>?
     var conversationSynthesisTask: Task<Void, Never>?
     var conversationSegmentContinuation: AsyncStream<String>.Continuation?
+    var inFlightSynthTasks: [Task<Data, any Error>] = []
     var conversationGeneration = 0
     var conversationSessionID: UUID?
     var bargeInCandidate = ""

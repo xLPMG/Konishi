@@ -23,6 +23,7 @@ extension AppModel {
         cancelBackchannelDecision()
         conversationResponseTask?.cancel()
         conversationResponseTask = nil
+        cancelInFlightSynthTasks()
         conversationSynthesisTask?.cancel()
         conversationSynthesisTask = nil
         conversationSegmentContinuation?.finish()
@@ -259,6 +260,7 @@ extension AppModel {
         conversationGeneration &+= 1
         conversationResponseTask?.cancel()
         conversationResponseTask = nil
+        cancelInFlightSynthTasks()
         conversationSynthesisTask?.cancel()
         conversationSynthesisTask = nil
         conversationSegmentContinuation?.finish()
@@ -323,6 +325,7 @@ extension AppModel {
         conversationGeneration &+= 1
         let generation = conversationGeneration
         conversationResponseTask?.cancel()
+        cancelInFlightSynthTasks()
         conversationSynthesisTask?.cancel()
         conversationSegmentContinuation?.finish()
         conversationSegmentContinuation = nil
@@ -337,11 +340,12 @@ extension AppModel {
             let systemText = personaStore.stableSystemPrompt(
                 persona: persona, injectDateContext: settings.injectDateContext, mode: mode,
                 vaultConfigured: !settings.vaultPath.isEmpty)
-            let memoryText = await self.memoryContext(
+            async let memTask = self.memoryContext(
                 conversationID: convoID, persona: persona, history: history)
-            let documentText = await self.documentContext(conversationID: convoID, history: history)
-            let vaultText = await self.vaultContext(
+            async let docTask = self.documentContext(conversationID: convoID, history: history)
+            async let vaultTask = self.vaultContext(
                 conversationID: convoID, persona: persona, history: history)
+            let (memoryText, documentText, vaultText) = await (memTask, docTask, vaultTask)
             guard !Task.isCancelled, generation == self.conversationGeneration,
                 self.conversationActive
             else { return }
@@ -475,15 +479,36 @@ extension AppModel {
         let ttsConfig = settings.requestConfig(modelOverride: nil)
         let (segments, segCont) = AsyncStream.makeStream(of: String.self)
         conversationSegmentContinuation = segCont
-        // Synthesize segments serially so clips are enqueued in spoken order.
+        // Synthesize segments with pipelining: tasks are launched concurrently as sentences arrive,
+        // and audio clips are enqueued in strict chronological order for gapless playback.
         conversationSynthesisTask = Task { [weak self] in
+            guard let self else { return }
             var started = false
-            for await seg in segments {
-                guard let self, self.conversationActive, generation == self.conversationGeneration,
+            let (taskStream, taskCont) = AsyncStream.makeStream(of: Task<Data, any Error>.self)
+
+            let dispatchTask = Task { [weak self] in
+                for await seg in segments {
+                    guard let self, self.conversationActive, generation == self.conversationGeneration,
+                        !Task.isCancelled
+                    else { break }
+                    let synthTask = Task { [ttsConfig] () throws -> Data in
+                        try await ChatService.speech(config: ttsConfig, text: seg)
+                    }
+                    self.inFlightSynthTasks.append(synthTask)
+                    taskCont.yield(synthTask)
+                }
+                taskCont.finish()
+            }
+
+            for await synthTask in taskStream {
+                guard self.conversationActive, generation == self.conversationGeneration,
                     !Task.isCancelled
-                else { break }
+                else {
+                    synthTask.cancel()
+                    break
+                }
                 do {
-                    let data = try await ChatService.speech(config: ttsConfig, text: seg)
+                    let data = try await synthTask.value
                     guard generation == self.conversationGeneration, !Task.isCancelled else {
                         break
                     }
@@ -494,11 +519,14 @@ extension AppModel {
                     }
                     self.voice.enqueueAudioData(data)
                 } catch {
+                    guard !Task.isCancelled else { break }
                     self.warnServerTTSFailure(error)
+                    self.cancelInFlightSynthTasks()
                     break
                 }
             }
-            guard let self, generation == self.conversationGeneration, !Task.isCancelled else {
+            dispatchTask.cancel()
+            guard generation == self.conversationGeneration, !Task.isCancelled else {
                 return
             }
             self.conversationSynthesisTask = nil
@@ -509,6 +537,7 @@ extension AppModel {
         var full = ""
         var buffer = ""
         var reasoning = ""
+        var isFirstSegment = true
         var toolCalls: [ToolCall] = []
         var stripper = ThinkStripper()
         do {
@@ -523,9 +552,11 @@ extension AppModel {
                     full += out.visible
                     conversationReplyDraft = full
                     buffer += out.visible
-                    while let seg = Self.popSpeakableSegment(&buffer) {
+                    while let seg = Self.popSpeakableSegment(&buffer, isFirst: isFirstSegment) {
                         let clean = seg.strippedForSpeech
-                        if !clean.isEmpty { segCont.yield(clean) }
+                        guard !clean.isEmpty else { continue }
+                        isFirstSegment = false
+                        segCont.yield(clean)
                     }
                 case .toolCalls(let calls):
                     toolCalls = calls
@@ -555,7 +586,9 @@ extension AppModel {
                 saveTraces: settings.saveTraces)
         }
         let rest = buffer.strippedForSpeech
-        if !rest.isEmpty { segCont.yield(rest) }
+        if !rest.isEmpty {
+            segCont.yield(rest)
+        }
         segCont.finish()
         conversationSegmentContinuation = nil
         if !toolCalls.isEmpty { handleConversationalToolCalls(toolCalls, convoID: convoID) }
@@ -598,30 +631,69 @@ extension AppModel {
         conversationReplyMessageID = nil
     }
 
-    /// Pops the next complete sentence from `buffer` (up to `.`/`!`/`?`/`…`/newline followed by
-    /// whitespace), or nil if none has finished yet. Keeps segments from being split mid-number.
-    private static func popSpeakableSegment(_ buffer: inout String) -> String? {
+    /// Pops the next speakable segment from `buffer`, or nil if none has finished yet.
+    ///
+    /// For the first segment of a turn (`isFirst: true`), early clause boundaries (commas, colons,
+    /// semicolons, dashes) are accepted once reaching a readable length (>= 20 chars), letting audio
+    /// synthesis and playback begin without waiting for a full sentence terminator. Subsequent
+    /// segments prefer full sentence boundaries to maintain natural prosody.
+    private static func popSpeakableSegment(_ buffer: inout String, isFirst: Bool) -> String? {
         let chars = Array(buffer)
-        let minLen = 12
+        let minSentenceLen = isFirst ? 10 : 12
+        let minClauseLen = isFirst ? 20 : 60
         var i = 0
         while i < chars.count {
             let c = chars[i]
             if c == "\n" {
                 let seg = String(chars[0...i])
-                buffer = String(chars[(i + 1)...])
+                buffer = nextBuffer(from: chars, after: i)
                 return seg
             }
-            if c == "." || c == "!" || c == "?" || c == "…" {
+
+            // Sentence terminators: . ! ? … 。 ！ ？
+            if c == "." || c == "!" || c == "?" || c == "…" || c == "。" || c == "！" || c == "？" {
+                var breakIndex = i
+                var nextIndex = i + 1
+                if nextIndex < chars.count && ("\"')]”’»".contains(chars[nextIndex])) {
+                    breakIndex = nextIndex
+                    nextIndex += 1
+                }
+                let nextIsBreak = nextIndex >= chars.count || chars[nextIndex].isWhitespace
+                if nextIsBreak && (breakIndex + 1) >= minSentenceLen {
+                    let seg = String(chars[0...breakIndex])
+                    buffer = nextBuffer(from: chars, after: breakIndex)
+                    return seg
+                }
+            }
+
+            // Clause terminators: , ; : — –
+            if c == "," || c == ";" || c == ":" || c == "—" || c == "–" {
                 let nextIsBreak = i + 1 < chars.count && chars[i + 1].isWhitespace
-                if nextIsBreak && (i + 1) >= minLen {
+                if nextIsBreak && (i + 1) >= minClauseLen {
                     let seg = String(chars[0...i])
-                    buffer = String(chars[(i + 1)...])
+                    buffer = nextBuffer(from: chars, after: i)
                     return seg
                 }
             }
             i += 1
         }
         return nil
+    }
+
+    private static func nextBuffer(from chars: [Character], after index: Int) -> String {
+        var next = index + 1
+        while next < chars.count && chars[next].isWhitespace {
+            next += 1
+        }
+        guard next < chars.count else { return "" }
+        return String(chars[next...])
+    }
+
+    func cancelInFlightSynthTasks() {
+        for task in inFlightSynthTasks {
+            task.cancel()
+        }
+        inFlightSynthTasks.removeAll()
     }
 
     private func speakThenListen(_ text: String, generation: Int) {

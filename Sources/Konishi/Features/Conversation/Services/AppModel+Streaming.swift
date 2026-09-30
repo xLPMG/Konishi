@@ -91,12 +91,13 @@ extension AppModel {
                 : personaStore.stableSystemPrompt(
                     persona: persona, injectDateContext: settings.injectDateContext, mode: mode,
                     vaultConfigured: !settings.vaultPath.isEmpty)
-            let memoryText = await self.memoryContext(
+            async let memTask = self.memoryContext(
                 conversationID: conversationID, persona: persona, history: history)
-            let documentText = await self.documentContext(
+            async let docTask = self.documentContext(
                 conversationID: conversationID, history: history)
-            let vaultText = await self.vaultContext(
+            async let vaultTask = self.vaultContext(
                 conversationID: conversationID, persona: persona, history: history)
+            let (memoryText, documentText, vaultText) = await (memTask, docTask, vaultTask)
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
                 documentText: documentText, vaultText: vaultText, history: history)
