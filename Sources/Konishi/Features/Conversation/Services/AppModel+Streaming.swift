@@ -50,6 +50,16 @@ extension AppModel {
         touch(idx)
     }
 
+    func deleteTurn(messageIDs: [UUID]) {
+        guard let convoID = selectedConversationID, let idx = conversationIndex(convoID) else {
+            return
+        }
+        let idSet = Set(messageIDs)
+        conversations[idx].messages.removeAll { idSet.contains($0.id) }
+        reconcileFoldCounters(idx)
+        touch(idx)
+    }
+
     func startTurn(conversationID: UUID) {
         guard let idx = conversationIndex(conversationID) else { return }
         streamingConversationID = conversationID

@@ -4,6 +4,7 @@ extension AppModel {
     func newConversation(personaID: UUID? = nil) {
         let pid = personaID ?? currentPersonaIDForNewChat()
         let convo = Conversation(personaID: pid, isLanguage: mode == .language ? true : nil)
+        searchText = ""
         conversations.insert(convo, at: 0)
         hydratedIDs.insert(convo.id)
         hydrationOrder.append(convo.id)

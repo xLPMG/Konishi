@@ -52,26 +52,98 @@ struct ChatView: View {
         model.selectedConversationID.map { model.documentStore.documents(for: $0) } ?? []
     }
 
-    /// Text/code replies are shown as messages; tool calls and their results are collapsed
-    /// into the single replacing `activityLine` and remain visible in the Trace.
-    private var messages: [ChatMessage] {
-        (model.selectedConversation?.messages ?? []).filter { m in
-            switch m.role {
-            case .tool: return false
-            case .assistant: return !m.content.isEmpty || !(m.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-            default: return true
+    /// Renders user messages and collapsed multi-step assistant turns (reasoning, tool calls,
+    /// and final replies) as unified visual bubbles.
+    private var chatItems: [ChatItem] {
+        let raw = model.selectedConversation?.messages ?? []
+        var items: [ChatItem] = []
+        var currentAssistantSteps: [AssistantStep] = []
+        var currentAssistantToolResults: [String: String] = [:]
+        var currentAssistantAllIDs: [UUID] = []
+        var currentAssistantSources: [Source] = []
+        var currentAssistantInterrupted = false
+        var currentAssistantImages: [String] = []
+        var currentAssistantAttachments: [Attachment] = []
+
+        func flushAssistant() {
+            guard !currentAssistantSteps.isEmpty else { return }
+            let turn = AssistantTurn(
+                id: currentAssistantSteps[0].id,
+                steps: currentAssistantSteps,
+                toolResults: currentAssistantToolResults,
+                sources: currentAssistantSources,
+                interrupted: currentAssistantInterrupted,
+                images: currentAssistantImages,
+                attachments: currentAssistantAttachments,
+                allMessageIDs: currentAssistantAllIDs
+            )
+            if turn.hasVisibleContent {
+                items.append(.assistant(turn))
+            }
+            currentAssistantSteps = []
+            currentAssistantToolResults = [:]
+            currentAssistantAllIDs = []
+            currentAssistantSources = []
+            currentAssistantInterrupted = false
+            currentAssistantImages = []
+            currentAssistantAttachments = []
+        }
+
+        for msg in raw {
+            switch msg.role {
+            case .user:
+                if msg.content == "Plot(s) generated:", !msg.images.isEmpty, !currentAssistantSteps.isEmpty {
+                    currentAssistantAllIDs.append(msg.id)
+                    currentAssistantImages.append(contentsOf: msg.images)
+                    break
+                }
+                flushAssistant()
+                items.append(.user(msg))
+            case .assistant:
+                currentAssistantAllIDs.append(msg.id)
+                currentAssistantSteps.append(AssistantStep(
+                    id: msg.id,
+                    reasoning: msg.reasoning,
+                    content: msg.content,
+                    toolCalls: msg.toolCalls
+                ))
+                if !msg.sources.isEmpty {
+                    for src in msg.sources {
+                        if !currentAssistantSources.contains(where: { $0.url == src.url }) {
+                            currentAssistantSources.append(src)
+                        }
+                    }
+                }
+                if msg.interrupted { currentAssistantInterrupted = true }
+                if !msg.images.isEmpty { currentAssistantImages.append(contentsOf: msg.images) }
+                if !msg.attachments.isEmpty { currentAssistantAttachments.append(contentsOf: msg.attachments) }
+            case .tool:
+                currentAssistantAllIDs.append(msg.id)
+                if let callId = msg.toolCallId {
+                    currentAssistantToolResults[callId] = msg.content
+                }
+            case .system:
+                break
             }
         }
+        flushAssistant()
+        return items
     }
 
     private var messageList: some View {
-        let messages = self.messages
+        let items = self.chatItems
+        let lastMessage = model.selectedConversation?.messages.last
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if messages.isEmpty { emptyState }
-                    ForEach(messages) { message in
-                        MessageRow(message: message).id(message.id)
+                    if items.isEmpty { emptyState }
+                    ForEach(items) { item in
+                        switch item {
+                        case .user(let message):
+                            UserMessageRow(message: message).id(item.id)
+                        case .assistant(let turn):
+                            AssistantTurnRow(turn: turn).id(item.id)
+                        }
                     }
                 }
                 .padding(16)
@@ -81,17 +153,21 @@ struct ChatView: View {
             } action: { _, atBottom in
                 pinnedToBottom = atBottom
             }
-            .onChange(of: messages.last?.content) {
-                guard pinnedToBottom, let last = messages.last else { return }
+            .onChange(of: lastMessage?.content) {
+                guard pinnedToBottom, let last = items.last else { return }
                 withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(last.id, anchor: .bottom) }
             }
-            .onChange(of: messages.last?.reasoning) {
-                guard pinnedToBottom, let last = messages.last else { return }
+            .onChange(of: lastMessage?.reasoning) {
+                guard pinnedToBottom, let last = items.last else { return }
+                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+            .onChange(of: model.selectedConversation?.messages.count) {
+                guard pinnedToBottom, let last = items.last else { return }
                 withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(last.id, anchor: .bottom) }
             }
             .onChange(of: model.selectedConversationID) {
                 pinnedToBottom = true
-                if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
     }
@@ -348,48 +424,76 @@ private struct ToolApprovalBar: View {
     }
 }
 
-private struct MessageRow: View {
+struct AssistantStep: Identifiable, Sendable {
+    let id: UUID
+    let reasoning: String?
+    let content: String
+    let toolCalls: [ToolCall]?
+
+    var hasVisibleContent: Bool {
+        !(reasoning?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            || !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(toolCalls?.isEmpty ?? true)
+    }
+}
+
+struct AssistantTurn: Identifiable, Sendable {
+    let id: UUID
+    let steps: [AssistantStep]
+    let toolResults: [String: String]
+    let sources: [Source]
+    let interrupted: Bool
+    let images: [String]
+    let attachments: [Attachment]
+    let allMessageIDs: [UUID]
+
+    var lastMessageID: UUID { steps.last?.id ?? id }
+
+    var hasVisibleContent: Bool {
+        steps.contains { $0.hasVisibleContent } || !images.isEmpty || !attachments.isEmpty
+    }
+}
+
+enum ChatItem: Identifiable {
+    case user(ChatMessage)
+    case assistant(AssistantTurn)
+
+    var id: UUID {
+        switch self {
+        case .user(let msg): return msg.id
+        case .assistant(let turn): return turn.id
+        }
+    }
+}
+
+private struct UserMessageRow: View {
     @Environment(AppModel.self) private var model
     let message: ChatMessage
     @State private var hovering = false
     @State private var zoom: IdentifiableImage?
-    @State private var reasoningExpanded = false
-
-    private var isUser: Bool { message.role == .user }
 
     var body: some View {
-        bubble
-            .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
-            .contextMenu {
-                Button("Copy Message", systemImage: "doc.on.doc") { copyMessage() }
-            }
-    }
-
-    private var bubble: some View {
         HStack {
-            if isUser { Spacer(minLength: 60) }
+            Spacer(minLength: 60)
             VStack(alignment: .leading, spacing: 6) {
-                Text(isUser ? "You" : model.currentAssistantName)
+                Text("You")
                     .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 if !message.images.isEmpty { imageGrid }
                 if !message.attachments.isEmpty { attachmentChips }
-                if let reasoning = message.reasoning,
-                   !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    reasoningView(reasoning)
-                }
-                content
-                if message.interrupted {
-                    Label("Interrupted", systemImage: "waveform.badge.minus")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                if !message.sources.isEmpty { sourcesView }
+                Text(message.content)
+                    .font(.system(size: model.settings.fontSize))
+                    .textSelection(.enabled)
+                    .foregroundStyle(.white)
                 if hovering { actions }
             }
             .padding(10)
-            .background(bubbleBackground, in: RoundedRectangle(cornerRadius: 12))
-            if !isUser { Spacer(minLength: 60) }
+            .background(model.currentAccent, in: RoundedRectangle(cornerRadius: 12))
         }
         .onHover { hovering = $0 }
+        .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
+        .contextMenu {
+            Button("Copy Message", systemImage: "doc.on.doc") { copyMessage() }
+        }
     }
 
     private var imageGrid: some View {
@@ -413,7 +517,106 @@ private struct MessageRow: View {
             ForEach(message.attachments) { doc in
                 Label(doc.name, systemImage: "doc.text")
                     .font(.caption)
-                    .foregroundStyle(isUser ? .white : .primary)
+                    .foregroundStyle(.white)
+                    .help("\(doc.text.count) characters attached")
+            }
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 12) {
+            Button { copyMessage() } label: { Image(systemName: "doc.on.doc") }
+            Button { model.branch(fromMessage: message.id) } label: { Image(systemName: "arrow.triangle.branch") }
+            Button { model.deleteMessage(message.id) } label: { Image(systemName: "trash") }
+        }
+        .buttonStyle(.plain).font(.caption)
+        .foregroundStyle(.white.opacity(0.85))
+    }
+
+    private func copyMessage() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(message.content, forType: .string)
+    }
+}
+
+private struct AssistantTurnRow: View {
+    @Environment(AppModel.self) private var model
+    let turn: AssistantTurn
+    @State private var hovering = false
+    @State private var zoom: IdentifiableImage?
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(model.currentAssistantName)
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                if !turn.images.isEmpty { imageGrid }
+                if !turn.attachments.isEmpty { attachmentChips }
+
+                let visibleSteps = turn.steps.filter(\.hasVisibleContent)
+                let reasoningCount = turn.steps.filter { !($0.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }.count
+
+                ForEach(Array(visibleSteps.enumerated()), id: \.element.id) { idx, step in
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let reasoning = step.reasoning,
+                           !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            let title = reasoningCount > 1 ? "Reasoning (Step \(idx + 1))" : "Reasoning"
+                            ReasoningDisclosureView(reasoning: reasoning, title: title)
+                        }
+                        if !step.content.isEmpty {
+                            MarkdownView(text: step.content, baseSize: model.settings.fontSize)
+                                .textSelection(.enabled)
+                        }
+                        if let toolCalls = step.toolCalls, !toolCalls.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(toolCalls) { call in
+                                    ToolCallView(call: call, result: turn.toolResults[call.id])
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if turn.interrupted {
+                    Label("Interrupted", systemImage: "waveform.badge.minus")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if !turn.sources.isEmpty { sourcesView }
+                if hovering { actions }
+            }
+            .padding(10)
+            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
+            Spacer(minLength: 60)
+        }
+        .onHover { hovering = $0 }
+        .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
+        .contextMenu {
+            Button("Copy Message", systemImage: "doc.on.doc") { copyTurn() }
+        }
+    }
+
+    private var imageGrid: some View {
+        HStack(alignment: .top, spacing: 6) {
+            ForEach(Array(turn.images.enumerated()), id: \.offset) { _, dataURL in
+                if let img = ChatView.nsImage(from: dataURL) {
+                    Button { zoom = IdentifiableImage(image: img) } label: {
+                        Image(nsImage: img).resizable().scaledToFit()
+                            .frame(maxWidth: 360, maxHeight: 280)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Click to enlarge")
+                }
+            }
+        }
+    }
+
+    private var attachmentChips: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(turn.attachments) { doc in
+                Label(doc.name, systemImage: "doc.text")
+                    .font(.caption)
+                    .foregroundStyle(.primary)
                     .help("\(doc.text.count) characters attached")
             }
         }
@@ -425,7 +628,7 @@ private struct MessageRow: View {
                 .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(Array(message.sources.enumerated()), id: \.element.id) { idx, src in
+                    ForEach(Array(turn.sources.enumerated()), id: \.element.id) { idx, src in
                         if let url = URL(string: src.url) {
                             Link(destination: url) {
                                 HStack(spacing: 4) {
@@ -446,7 +649,6 @@ private struct MessageRow: View {
         .padding(.top, 2)
     }
 
-    /// Short, readable label for a source chip: the host without a leading "www.".
     private static func sourceLabel(_ src: Source) -> String {
         if let host = URL(string: src.url)?.host {
             return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
@@ -454,18 +656,42 @@ private struct MessageRow: View {
         return src.title.isEmpty ? src.url : src.title
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if isUser {
-            Text(message.content).font(.system(size: model.settings.fontSize))
-                .textSelection(.enabled).foregroundStyle(.white)
-        } else if !message.content.isEmpty {
-            MarkdownView(text: message.content, baseSize: model.settings.fontSize).textSelection(.enabled)
+    private var actions: some View {
+        HStack(spacing: 12) {
+            Button { copyTurn() } label: { Image(systemName: "doc.on.doc") }
+            Button {
+                let text = turn.steps.last(where: { !$0.content.isEmpty })?.content ?? ""
+                model.speak(text)
+            } label: { Image(systemName: "speaker.wave.2") }
+            Group {
+                Button { model.regenerate(messageID: turn.id) } label: { Image(systemName: "arrow.clockwise") }
+                Button { model.branch(fromMessage: turn.lastMessageID) } label: { Image(systemName: "arrow.triangle.branch") }
+                Button { model.deleteTurn(messageIDs: turn.allMessageIDs) } label: { Image(systemName: "trash") }
+            }
+            .disabled(model.isStreaming || model.pendingApproval != nil)
         }
+        .buttonStyle(.plain).font(.caption)
+        .foregroundStyle(.secondary)
     }
 
-    private func reasoningView(_ reasoning: String) -> some View {
-        DisclosureGroup(isExpanded: $reasoningExpanded) {
+    private func copyTurn() {
+        let text = turn.steps
+            .map(\.content)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: "\n\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+private struct ReasoningDisclosureView: View {
+    @Environment(AppModel.self) private var model
+    let reasoning: String
+    var title: String = "Reasoning"
+    @State private var isExpanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
             Text(reasoning)
                 .font(.system(size: max(11, model.settings.fontSize - 2)))
                 .foregroundStyle(.secondary)
@@ -473,36 +699,125 @@ private struct MessageRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 4)
         } label: {
-            Label("Reasoning", systemImage: "brain")
+            Label(title, systemImage: "brain")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 8).padding(.vertical, 6)
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
     }
+}
 
-    private var bubbleBackground: AnyShapeStyle {
-        isUser ? AnyShapeStyle(model.currentAccent) : AnyShapeStyle(.quaternary.opacity(0.55))
-    }
+private struct ToolCallView: View {
+    let call: ToolCall
+    let result: String?
+    @State private var isExpanded = false
 
-    private var actions: some View {
-        HStack(spacing: 12) {
-            Button { copyMessage() } label: { Image(systemName: "doc.on.doc") }
-            if !isUser {
-                Button { model.speak(message.content) } label: { Image(systemName: "speaker.wave.2") }
-                Button { model.regenerate(messageID: message.id) } label: { Image(systemName: "arrow.clockwise") }
-                    .disabled(model.isStreaming)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: toolIcon(call.function.name ?? ""))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(toolSummary(call))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
             }
-            Button { model.branch(fromMessage: message.id) } label: { Image(systemName: "arrow.triangle.branch") }
-            Button { model.deleteMessage(message.id) } label: { Image(systemName: "trash") }
+            .buttonStyle(.plain)
+            .help(call.function.arguments)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !call.function.arguments.isEmpty && call.function.arguments != "{}" {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Arguments")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Text(call.function.arguments)
+                                .font(.system(size: 11, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(6)
+                        .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                    }
+                    if let result, !result.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Result")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            ScrollView {
+                                Text(result.prefix(4000))
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: 120)
+                        }
+                        .padding(6)
+                        .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+                .padding(6)
+                .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 6))
+            }
         }
-        .buttonStyle(.plain).font(.caption)
-        .foregroundStyle(isUser ? .white.opacity(0.85) : .secondary)
     }
 
-    private func copyMessage() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(message.content, forType: .string)
+    private func toolIcon(_ name: String) -> String {
+        switch name {
+        case "web_search", "web_research": return "magnifyingglass"
+        case "web_fetch": return "globe"
+        case "calculate": return "function"
+        case "python_exec": return "chevron.left.forwardslash.chevron.right"
+        case "run_shell": return "terminal"
+        case "file_read": return "doc.text"
+        case "vault_search", "vault_read", "vault_list", "vault_write", "vault_append": return "lock.doc"
+        case "memory_list", "memory_read", "memory_write", "memory_append": return "brain.head.profile"
+        case "add_vocab", "add_grammar", "search_deck", "get_due_items", "record_review": return "character.book.closed"
+        case "ask_multiple_choice": return "questionmark.bubble"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
+    private func toolSummary(_ call: ToolCall) -> String {
+        let name = call.function.name ?? "tool"
+        if let data = call.function.arguments.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let q = json["query"] as? String, !q.isEmpty {
+                return "\(name)(\"\(q)\")"
+            }
+            if let expr = json["expression"] as? String, !expr.isEmpty {
+                return "\(name)(\(expr))"
+            }
+            if let cmd = json["command"] as? String, !cmd.isEmpty {
+                return "\(name)(\(cmd))"
+            }
+            if let url = json["url"] as? String, !url.isEmpty {
+                return "\(name)(\(url))"
+            }
+            if let note = json["note"] as? String, !note.isEmpty {
+                return "\(name)(\(note))"
+            }
+            if let path = json["path"] as? String, !path.isEmpty {
+                return "\(name)(\(path))"
+            }
+        }
+        return name
     }
 }
 
