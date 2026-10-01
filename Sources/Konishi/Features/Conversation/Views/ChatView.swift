@@ -7,8 +7,15 @@ struct ChatView: View {
     @State private var showImporter = false
     @State private var showDocImporter = false
     @State private var showTaskBoard = false
+    @State private var showContextPins = false
+    @State private var pendingChatJump: ChatJump?
     @State private var pinnedToBottom = true
     @FocusState private var inputFocused: Bool
+
+    private struct ChatJump: Equatable {
+        var requestID = UUID()
+        var messageID: UUID
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -238,7 +245,34 @@ struct ChatView: View {
                 pinnedToBottom = true
                 if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
+            .onChange(of: pendingChatJump) { _, jump in
+                guard let jump, let targetID = chatItemID(containing: jump.messageID) else { return }
+                pinnedToBottom = false
+                withAnimation(.easeInOut(duration: 0.24)) {
+                    proxy.scrollTo(targetID, anchor: .center)
+                }
+                pendingChatJump = nil
+            }
         }
+    }
+
+    private func chatItemID(containing messageID: UUID) -> String? {
+        for item in chatItems {
+            switch item {
+            case .user(let message) where message.id == messageID:
+                return item.id
+            case .assistant(let turn) where turn.allMessageIDs.contains(messageID):
+                return item.id
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+
+    private func jumpToPinnedMessage(_ messageID: UUID) {
+        showContextPins = false
+        pendingChatJump = ChatJump(messageID: messageID)
     }
 
     private func verticalGap(at index: Int, in items: [ChatItem]) -> CGFloat {
@@ -414,6 +448,9 @@ struct ChatView: View {
                 .help("Attach image or file")
 
                 ContextGauge(used: model.selectedConversation?.lastStats?.promptTokens ?? 0, window: model.contextWindow)
+                if !model.selectedContextPins.isEmpty {
+                    contextPinsControl
+                }
 
                 Button { model.settings.reasoningEnabled.toggle() } label: {
                     Image(systemName: "brain")
@@ -475,6 +512,91 @@ struct ChatView: View {
         .padding(.horizontal, 24)
         .padding(.bottom, 12)
         .padding(.top, 4)
+    }
+
+    private var contextPinsControl: some View {
+        let pins = model.selectedContextPins
+        return Button { showContextPins.toggle() } label: {
+            HStack(spacing: 3) {
+                Image(systemName: pins.isEmpty ? "pin" : "pin.fill")
+                if !pins.isEmpty {
+                    Text("\(pins.count)")
+                        .font(.caption2.monospacedDigit())
+                }
+            }
+            .foregroundStyle(pins.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(model.currentAccent))
+            .frame(minWidth: 26, minHeight: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Pinned context (\(pins.count)/\(ContextPin.maximumCount))")
+        .popover(isPresented: $showContextPins, arrowEdge: .bottom) {
+            contextPinsPopover
+        }
+    }
+
+    private var contextPinsPopover: some View {
+        let pins = model.selectedContextPins
+        return VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Label("Pinned context", systemImage: "pin.fill")
+                    .font(.headline)
+                Spacer()
+                Text("\(pins.count)/\(ContextPin.maximumCount)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if pins.isEmpty {
+                Text("No pinned messages")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(pins) { pin in
+                            HStack(alignment: .top, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(pin.role == .user ? "You" : "Assistant")
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Text(pin.text)
+                                        .font(.caption)
+                                        .lineLimit(4)
+                                        .textSelection(.enabled)
+                                }
+                                Spacer(minLength: 0)
+                                Button { jumpToPinnedMessage(pin.messageID) } label: {
+                                    Image(systemName: "arrow.up.left")
+                                        .font(.caption.weight(.semibold))
+                                        .frame(width: 22, height: 22)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Jump to message")
+                                Button { model.removeContextPin(pin.messageID) } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.caption.weight(.semibold))
+                                        .frame(width: 22, height: 22)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove pin")
+                            }
+                            if pin.id != pins.last?.id { Divider() }
+                        }
+                    }
+                }
+                .frame(maxHeight: 300)
+            }
+            Divider()
+            Text("Each pin keeps up to \(ContextPin.maximumPinCharacters) characters from its message.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(width: 320)
     }
 
     private func addImage(_ url: URL) {
@@ -673,6 +795,11 @@ private struct UserMessageRow: View {
         .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
         .contextMenu {
             Button("Copy Message", systemImage: "doc.on.doc") { copyMessage() }
+            Button(
+                model.isContextPinned(message.id) ? "Remove from Pinned Context" : "Pin to Context",
+                systemImage: model.isContextPinned(message.id) ? "pin.slash" : "pin"
+            ) { model.toggleContextPin(message.id) }
+            .disabled(pinActionDisabled)
         }
     }
 
@@ -705,12 +832,23 @@ private struct UserMessageRow: View {
 
     private var actions: some View {
         HStack(spacing: 12) {
+            Button { model.toggleContextPin(message.id) } label: {
+                Image(systemName: model.isContextPinned(message.id) ? "pin.fill" : "pin")
+            }
+            .help(model.isContextPinned(message.id) ? "Remove from pinned context" : "Pin to context")
+            .disabled(pinActionDisabled)
             Button { copyMessage() } label: { Image(systemName: "doc.on.doc") }
             Button { model.branch(fromMessage: message.id) } label: { Image(systemName: "arrow.triangle.branch") }
             Button { model.deleteMessage(message.id) } label: { Image(systemName: "trash") }
         }
         .buttonStyle(.plain).font(.caption)
         .foregroundStyle(.secondary)
+    }
+
+    private var pinActionDisabled: Bool {
+        if model.isContextPinned(message.id) { return false }
+        return model.selectedContextPins.count >= ContextPin.maximumCount
+            || message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func copyMessage() {
@@ -811,6 +949,13 @@ private struct AssistantTurnRow: View {
         .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
         .contextMenu {
             Button("Copy Message", systemImage: "doc.on.doc") { copyTurn() }
+            if let pinnableStep {
+                Button(
+                    model.isContextPinned(pinnableStep.id) ? "Remove from Pinned Context" : "Pin to Context",
+                    systemImage: model.isContextPinned(pinnableStep.id) ? "pin.slash" : "pin"
+                ) { model.toggleContextPin(pinnableStep.id) }
+                .disabled(isActive || pinActionDisabled(for: pinnableStep.id))
+            }
         }
     }
 
@@ -877,6 +1022,13 @@ private struct AssistantTurnRow: View {
 
     private var actions: some View {
         HStack(spacing: 12) {
+            if let pinnableStep {
+                Button { model.toggleContextPin(pinnableStep.id) } label: {
+                    Image(systemName: model.isContextPinned(pinnableStep.id) ? "pin.fill" : "pin")
+                }
+                .help(model.isContextPinned(pinnableStep.id) ? "Remove from pinned context" : "Pin to context")
+                .disabled(isActive || pinActionDisabled(for: pinnableStep.id))
+            }
             Button { copyTurn() } label: { Image(systemName: "doc.on.doc") }
             Button {
                 let text = turn.steps.last(where: { !$0.content.isEmpty })?.content ?? ""
@@ -891,6 +1043,17 @@ private struct AssistantTurnRow: View {
         }
         .buttonStyle(.plain).font(.caption)
         .foregroundStyle(.secondary)
+    }
+
+    private var pinnableStep: AssistantStep? {
+        turn.steps.last {
+            !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    private func pinActionDisabled(for messageID: UUID) -> Bool {
+        !model.isContextPinned(messageID)
+            && model.selectedContextPins.count >= ContextPin.maximumCount
     }
 
     private func copyTurn() {

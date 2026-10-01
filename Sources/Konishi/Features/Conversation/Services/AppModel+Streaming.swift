@@ -82,6 +82,7 @@ extension AppModel {
         let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
         let history = Array(allHistory.dropFirst(folded))
         let summary = conversations[idx].summary ?? ""
+        let pinnedContext = ContextPin.promptText(for: conversations[idx].contextPins ?? [])
         var config = settings.requestConfig(modelOverride: persona.model)
         config.enableThinking = settings.reasoningEnabled
         let tools: [ToolDef]?
@@ -117,7 +118,8 @@ extension AppModel {
             let (memoryText, documentText, vaultText) = await (memTask, docTask, vaultTask)
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
-                documentText: documentText, vaultText: vaultText, history: history)
+                documentText: documentText, vaultText: vaultText,
+                pinnedContext: pinnedContext, history: history)
 
             traceStore.trace(
                 conversationID: conversationID, kind: .request,
@@ -485,6 +487,7 @@ extension AppModel {
         memoryText: String,
         documentText: String = "",
         vaultText: String = "",
+        pinnedContext: String = "",
         history: [ChatMessage]
     ) -> [WireMessage] {
         var wire: [WireMessage] = []
@@ -502,6 +505,7 @@ extension AppModel {
         let memory = memoryText.trimmingCharacters(in: .whitespacesAndNewlines)
         let retrievedDocs = documentText.trimmingCharacters(in: .whitespacesAndNewlines)
         let vaultNotes = vaultText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pinnedNotes = pinnedContext.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastUserIdx = budgeted.lastIndex(where: { $0.role == .user })
         // Keep only the most recent tool outputs verbatim; older ones are re-sent every
         // turn otherwise, so collapse them to a stub to save context.
@@ -552,6 +556,9 @@ extension AppModel {
                 }
                 if i == lastUserIdx, !memory.isEmpty {
                     text = "# Relevant memory\n\(memory)\n\n---\n\n" + text
+                }
+                if i == lastUserIdx, !pinnedNotes.isEmpty {
+                    text = "\(pinnedNotes)\n\n---\n\n" + text
                 }
                 if msg.images.isEmpty || !settings.sendImagesToModel {
                     wire.append(WireMessage(role: "user", text: text))

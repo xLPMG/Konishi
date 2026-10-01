@@ -82,10 +82,13 @@ extension AppModel {
         guard let convo = selectedConversation,
             let mIdx = convo.messages.firstIndex(where: { $0.id == id })
         else { return }
+        let branchedMessages = Array(convo.messages.prefix(mIdx + 1))
+        let messageIDs = Set(branchedMessages.map(\.id))
         let copy = Conversation(
             title: convo.title + " (branch)",
             personaID: convo.personaID,
-            messages: Array(convo.messages.prefix(mIdx + 1))
+            messages: branchedMessages,
+            contextPins: convo.contextPins?.filter { messageIDs.contains($0.messageID) }
         )
         conversations.insert(copy, at: 0)
         hydratedIDs.insert(copy.id)

@@ -20,6 +20,39 @@ struct ConversationTask: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+struct ContextPin: Identifiable, Codable, Equatable, Sendable {
+    static let maximumCount = 5
+    static let maximumPinCharacters = 600
+    static let maximumPromptCharacters = 3_200
+
+    var messageID: UUID
+    var role: Role
+    var text: String
+
+    var id: UUID { messageID }
+
+    static func promptText(for pins: [ContextPin]) -> String {
+        let header = "# User-pinned context\nThese are excerpts the user chose to keep in view. Use them when relevant; the current message takes precedence.\n"
+        var remaining = maximumPromptCharacters - header.count
+        var excerpts: [String] = []
+
+        for pin in pins.prefix(maximumCount) {
+            let label = pin.role == .user ? "You" : "Assistant"
+            let prefix = "- \(label): "
+            let available = min(maximumPinCharacters, remaining - prefix.count)
+            guard available > 0 else { break }
+
+            let excerpt = String(pin.text.prefix(available))
+            let truncated = excerpt.count < pin.text.count ? "…" : ""
+            excerpts.append(prefix + excerpt + truncated)
+            remaining -= prefix.count + excerpt.count + truncated.count
+        }
+
+        guard !excerpts.isEmpty else { return "" }
+        return header + excerpts.joined(separator: "\n")
+    }
+}
+
 struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var id = UUID()
     var title: String
@@ -47,6 +80,8 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var digestRolledUpAt: Date?
     /// User-managed task plan and notes for this conversation.
     var tasks: [ConversationTask]?
+    /// User-selected message excerpts kept in context across turns and compression.
+    var contextPins: [ContextPin]?
 
     init(
         id: UUID = UUID(),
@@ -63,7 +98,8 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         digest: String? = nil,
         digestCount: Int? = nil,
         digestUpdatedAt: Date? = nil,
-        tasks: [ConversationTask]? = nil
+        tasks: [ConversationTask]? = nil,
+        contextPins: [ContextPin]? = nil
     ) {
         self.id = id
         self.title = title
@@ -80,6 +116,7 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.digestCount = digestCount
         self.digestUpdatedAt = digestUpdatedAt
         self.tasks = tasks
+        self.contextPins = contextPins
     }
 
     var lastStats: MessageStats? {
@@ -107,6 +144,7 @@ struct ConversationMeta: Decodable {
     var digestUpdatedAt: Date?
     var digestRolledUpAt: Date?
     var tasks: [ConversationTask]?
+    var contextPins: [ContextPin]?
 
     /// A body-less `Conversation` (empty `messages`) carrying just the metadata.
     func asConversation() -> Conversation {
@@ -115,7 +153,8 @@ struct ConversationMeta: Decodable {
             createdAt: createdAt, updatedAt: updatedAt,
             summary: summary, summarizedCount: summarizedCount, memorizedCount: memorizedCount,
             isLanguage: isLanguage, lastTitledMessageCount: lastTitledMessageCount,
-            digest: digest, digestCount: digestCount, digestUpdatedAt: digestUpdatedAt, tasks: tasks
+            digest: digest, digestCount: digestCount, digestUpdatedAt: digestUpdatedAt,
+            tasks: tasks, contextPins: contextPins
         )
         convo.digestRolledUpAt = digestRolledUpAt
         return convo

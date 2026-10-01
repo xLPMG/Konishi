@@ -383,6 +383,7 @@ extension AppModel {
         let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
         let history = Array(allHistory.dropFirst(folded))
         let summary = conversations[idx].summary ?? ""
+        let pinnedContext = ContextPin.promptText(for: conversations[idx].contextPins ?? [])
         let config = settings.requestConfig(modelOverride: persona.model)
         conversationGeneration &+= 1
         let generation = conversationGeneration
@@ -413,7 +414,8 @@ extension AppModel {
             else { return }
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
-                documentText: documentText, vaultText: vaultText, history: history)
+                documentText: documentText, vaultText: vaultText,
+                pinnedContext: pinnedContext, history: history)
             // The voice-only hang-up tool is offered on every conversational turn.
             let tools = [Tools.endConversationDef]
             traceStore.trace(
