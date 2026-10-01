@@ -17,8 +17,8 @@ struct ChatView: View {
                     VStack(spacing: 0) {
                         if let error = model.errorMessage { errorBanner(error) }
                         if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
-                        if model.isStreaming, let activity = model.activity { activityLine(activity) }
                         if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
+                        if model.isStreaming, let activity = model.activity { activityLine(activity) }
                         StatsBar()
                         attachmentStrip
                         inputBar
@@ -330,7 +330,10 @@ struct ChatView: View {
             Text(text).font(.callout).foregroundStyle(.secondary).contentTransition(.opacity)
             Spacer()
         }
-        .padding(.horizontal, 16).padding(.vertical, 6)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .frame(maxWidth: 860)
+        .frame(maxWidth: .infinity)
     }
 
     private func banner(_ text: String, symbol: String, tint: Color, dismiss: @escaping () -> Void) -> some View {
@@ -754,13 +757,21 @@ private struct AssistantTurnRow: View {
                             ReasoningDisclosureView(reasoning: reasoning, title: title)
                         }
                         if !step.content.isEmpty {
-                            MarkdownView(text: step.content, baseSize: model.settings.fontSize)
+                            MarkdownView(
+                                text: step.content,
+                                baseSize: model.settings.fontSize,
+                                sources: turn.sources
+                            )
                                 .textSelection(.enabled)
                         }
                         if let toolCalls = step.toolCalls, !toolCalls.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 ForEach(toolCalls) { call in
-                                    ToolCallView(call: call, result: turn.toolResults[call.id])
+                                    ToolCallView(
+                                        call: call,
+                                        result: turn.toolResults[call.id],
+                                        sources: turn.sources
+                                    )
                                 }
                             }
                         }
@@ -900,6 +911,7 @@ private struct ReasoningDisclosureView: View {
 private struct ToolCallView: View {
     let call: ToolCall
     let result: String?
+    let sources: [Source]
     @State private var isExpanded = false
 
     var body: some View {
@@ -949,13 +961,22 @@ private struct ToolCallView: View {
                             Text("Result")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                            ScrollView {
-                                Text(result.prefix(4000))
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            if let artifact = ToolArtifact.make(
+                                toolName: call.function.name ?? "",
+                                arguments: call.function.arguments,
+                                result: result,
+                                sources: sources
+                            ) {
+                                ToolArtifactView(artifact: artifact)
+                            } else {
+                                ScrollView {
+                                    Text(result.prefix(4000))
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .frame(maxHeight: 120)
                             }
-                            .frame(maxHeight: 120)
                         }
                         .padding(6)
                         .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
@@ -1008,6 +1029,96 @@ private struct ToolCallView: View {
             }
         }
         return name
+    }
+}
+
+private struct ToolArtifactView: View {
+    let artifact: ToolArtifact
+    @State private var copied = false
+
+    var body: some View {
+        switch artifact {
+        case let .calculation(expression, value, isError):
+            VStack(alignment: .leading, spacing: 5) {
+                Text(expression)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(value)
+                        .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(isError ? Color.red : Color.primary)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 4)
+                    copyButton(value)
+                }
+            }
+        case let .process(exitCode, output):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label(
+                        exitCode == 0 ? "Completed" : "Exit \(exitCode)",
+                        systemImage: exitCode == 0 ? "checkmark.circle.fill" : "xmark.octagon.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(exitCode == 0 ? Color.green : Color.red)
+                    Spacer()
+                    copyButton(output)
+                }
+                ScrollView([.horizontal, .vertical]) {
+                    Text(output.isEmpty ? "(no output)" : output)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                }
+                .frame(maxHeight: 160)
+                .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+            }
+        case let .sources(sources):
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(sources.enumerated()), id: \.element.id) { index, source in
+                    if let url = URL(string: source.url) {
+                        Link(destination: url) {
+                            HStack(alignment: .top, spacing: 7) {
+                                Text("\(index + 1)")
+                                    .font(.caption2.weight(.bold).monospacedDigit())
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(source.title.isEmpty ? source.url : source.title)
+                                        .font(.caption)
+                                        .lineLimit(2)
+                                    Text(url.host ?? source.url)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: "arrow.up.forward.app")
+                                    .font(.caption2)
+                            }
+                            .foregroundStyle(.blue)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private func copyButton(_ text: String) -> some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.caption2)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help(copied ? "Copied" : "Copy result")
     }
 }
 

@@ -5,6 +5,7 @@ import SwiftUI
 struct MarkdownView: View {
     let text: String
     var baseSize: Double = 14
+    var sources: [Source] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -17,7 +18,8 @@ struct MarkdownView: View {
                         headers: headers,
                         rows: rows,
                         alignments: alignments,
-                        baseSize: baseSize
+                        baseSize: baseSize,
+                        sources: sources
                     )
                 case let .lines(lines):
                     ForEach(Array(groupedLines(lines).enumerated()), id: \.offset) { _, line in
@@ -170,14 +172,26 @@ struct MarkdownView: View {
             if !paragraph.isEmpty { result.append(paragraph.joined(separator: "\n")); paragraph = [] }
         }
 
-        for line in lines {
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
             if line.trimmingCharacters(in: .whitespaces).isEmpty || headingLevel(line) != nil
-                || isBullet(line) || numberedItem(line) != nil || line.hasPrefix("> ") {
+                || isBullet(line) || numberedItem(line) != nil
+                || MarkdownSyntax.isHorizontalRule(line) {
                 flushParagraph()
                 result.append(line)
+            } else if line.hasPrefix("> ") {
+                flushParagraph()
+                var quoteLines = [line]
+                while index + 1 < lines.count, lines[index + 1].hasPrefix("> ") {
+                    index += 1
+                    quoteLines.append(lines[index])
+                }
+                result.append(quoteLines.joined(separator: "\n"))
             } else {
                 paragraph.append(line)
             }
+            index += 1
         }
         flushParagraph()
         return result
@@ -188,22 +202,50 @@ struct MarkdownView: View {
         let line = raw
         if line.trimmingCharacters(in: .whitespaces).isEmpty {
             Spacer().frame(height: 2)
+        } else if MarkdownSyntax.isHorizontalRule(line) {
+            Divider().padding(.vertical, 4)
+        } else if let callout = MarkdownSyntax.callout(from: line) {
+            let color = calloutColor(callout.kind)
+            VStack(alignment: .leading, spacing: 4) {
+                Label(callout.kind.capitalized, systemImage: calloutIcon(callout.kind))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(color)
+                if !callout.body.isEmpty { inline(callout.body) }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 3)
+            }
         } else if let heading = headingLevel(line) {
             inline(String(line.drop(while: { $0 == "#" || $0 == " " })))
                 .font(.system(size: baseSize + CGFloat(8 - heading * 2), weight: .bold))
                 .padding(.top, 2)
+        } else if let task = MarkdownSyntax.taskItem(from: line) {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: task.isChecked ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(task.isChecked ? Color.accentColor : Color.secondary)
+                    .font(.system(size: baseSize - 1))
+                    .padding(.top, 1)
+                inline(task.content)
+            }
+            .padding(.leading, CGFloat(task.indentationDepth * 14))
         } else if isBullet(line) {
             HStack(alignment: .top, spacing: 6) {
                 Text("•").foregroundStyle(.secondary)
                 inline(bulletContent(line))
             }
+            .padding(.leading, CGFloat(MarkdownSyntax.indentationDepth(line) * 14))
         } else if let (number, rest) = numberedItem(line) {
             HStack(alignment: .top, spacing: 6) {
                 Text("\(number).").foregroundStyle(.secondary).monospacedDigit()
                 inline(rest)
             }
+            .padding(.leading, CGFloat(MarkdownSyntax.indentationDepth(line) * 14))
         } else if line.hasPrefix("> ") {
-            inline(String(line.dropFirst(2)))
+            inline(line.components(separatedBy: "\n").map { String($0.dropFirst(2)) }.joined(separator: "\n"))
                 .padding(.leading, 8)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(.secondary).frame(width: 2)
@@ -215,14 +257,28 @@ struct MarkdownView: View {
     }
 
     private func inline(_ s: String) -> Text {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        let displayText = LaTeX.render(s)
-        if let attr = try? AttributedString(markdown: displayText, options: options) {
-            return Text(attr).font(.system(size: baseSize))
+        Text(MarkdownInline.attributed(s, sources: sources))
+            .font(.system(size: baseSize))
+    }
+
+    private func calloutIcon(_ kind: String) -> String {
+        switch kind.uppercased() {
+        case "TIP": return "lightbulb"
+        case "IMPORTANT": return "star"
+        case "WARNING": return "exclamationmark.triangle"
+        case "CAUTION": return "hand.raised"
+        default: return "info.circle"
         }
-        return Text(displayText).font(.system(size: baseSize))
+    }
+
+    private func calloutColor(_ kind: String) -> Color {
+        switch kind.uppercased() {
+        case "TIP": return .green
+        case "IMPORTANT": return .purple
+        case "WARNING": return .orange
+        case "CAUTION": return .red
+        default: return .blue
+        }
     }
 
     private func headingLevel(_ line: String) -> Int? {
@@ -233,7 +289,7 @@ struct MarkdownView: View {
 
     private func isBullet(_ line: String) -> Bool {
         let t = line.drop(while: { $0 == " " })
-        return t.hasPrefix("- ") || t.hasPrefix("* ")
+        return t.hasPrefix("- ") || t.hasPrefix("* ") || t.hasPrefix("+ ")
     }
 
     private func bulletContent(_ line: String) -> String {
@@ -246,8 +302,170 @@ struct MarkdownView: View {
         let digits = t.prefix(while: { $0.isNumber })
         guard !digits.isEmpty, let n = Int(digits) else { return nil }
         let after = t.dropFirst(digits.count)
-        guard after.hasPrefix(". ") else { return nil }
+        guard after.hasPrefix(". ") || after.hasPrefix(") ") else { return nil }
         return (n, String(after.dropFirst(2)))
+    }
+}
+
+enum MarkdownSyntax {
+    struct TaskItem: Equatable {
+        let indentationDepth: Int
+        let isChecked: Bool
+        let content: String
+    }
+
+    struct Callout: Equatable {
+        let kind: String
+        let body: String
+    }
+
+    static func indentationDepth(_ line: String) -> Int {
+        line.prefix(while: { $0 == " " }).count / 2
+    }
+
+    static func taskItem(from line: String) -> TaskItem? {
+        let leadingSpaces = line.prefix(while: { $0 == " " }).count
+        let trimmed = line.dropFirst(leadingSpaces)
+        guard trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("+ ") else { return nil }
+        let body = trimmed.dropFirst(2)
+        guard body.count >= 4 else { return nil }
+        let characters = Array(body.prefix(4))
+        guard characters[0] == "[", characters[2] == "]", characters[3] == " ",
+              characters[1] == " " || characters[1] == "x" || characters[1] == "X" else {
+            return nil
+        }
+        return TaskItem(
+            indentationDepth: leadingSpaces / 2,
+            isChecked: characters[1] != " ",
+            content: String(body.dropFirst(4))
+        )
+    }
+
+    static func isHorizontalRule(_ line: String) -> Bool {
+        let markers = line.filter { !$0.isWhitespace }
+        guard markers.count >= 3, let first = markers.first,
+              first == "-" || first == "*" || first == "_" else { return false }
+        return markers.allSatisfy { $0 == first }
+    }
+
+    static func callout(from quotedBlock: String) -> Callout? {
+        let lines = quotedBlock.components(separatedBy: "\n")
+        guard let first = lines.first, first.hasPrefix("> ") else { return nil }
+        let firstContent = String(first.dropFirst(2))
+        guard firstContent.hasPrefix("[!"), let close = firstContent.firstIndex(of: "]") else { return nil }
+        let kind = String(firstContent[firstContent.index(firstContent.startIndex, offsetBy: 2)..<close]).uppercased()
+        let knownKinds: Set<String> = ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"]
+        guard knownKinds.contains(kind) else { return nil }
+
+        var bodyLines: [String] = []
+        let firstBody = firstContent[firstContent.index(after: close)...].trimmingCharacters(in: .whitespaces)
+        if !firstBody.isEmpty { bodyLines.append(firstBody) }
+        bodyLines.append(contentsOf: lines.dropFirst().map { line in
+            line.hasPrefix("> ") ? String(line.dropFirst(2)) : line
+        })
+        return Callout(kind: kind, body: bodyLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}
+
+enum MarkdownInline {
+    private static let citationRegex = try! NSRegularExpression(
+        pattern: #"\[(\d+(?:\s*,\s*\d+)*)\]"#,
+        options: []
+    )
+    private static let numberRegex = try! NSRegularExpression(pattern: #"\d+"#, options: [])
+
+    static func attributed(_ text: String, sources: [Source]) -> AttributedString {
+        let displayText = linkedCitations(in: LaTeX.render(text), sources: sources)
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        let attributed = (try? AttributedString(markdown: displayText, options: options))
+            ?? AttributedString(displayText)
+        return attributed
+    }
+
+    private static func linkedCitations(in text: String, sources: [Source]) -> String {
+        guard !sources.isEmpty else { return text }
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        let matches = citationRegex.matches(in: text, range: fullRange)
+        let rewritten = NSMutableString(string: text)
+        for match in matches.reversed() {
+            if isInsideCodeSpan(in: nsText, before: match.range.location) { continue }
+            let followingIndex = NSMaxRange(match.range)
+            if followingIndex < nsText.length {
+                let nextCharacter = nsText.substring(with: NSRange(location: followingIndex, length: 1))
+                if nextCharacter == "(" || nextCharacter == "[" { continue }
+            }
+            let digitsRange = match.range(at: 1)
+            let digits = nsText.substring(with: digitsRange) as NSString
+            let digitMatches = numberRegex.matches(
+                in: digits as String,
+                range: NSRange(location: 0, length: digits.length)
+            )
+            var links: [String] = []
+            var valid = !digitMatches.isEmpty
+            for digitMatch in digitMatches {
+                guard let sourceIndex = Int(digits.substring(with: digitMatch.range)),
+                      sources.indices.contains(sourceIndex - 1),
+                      let url = URL(string: sources[sourceIndex - 1].url),
+                      ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { continue }
+                let destination = url.absoluteString
+                    .replacingOccurrences(of: "<", with: "%3C")
+                    .replacingOccurrences(of: ">", with: "%3E")
+                    .replacingOccurrences(of: " ", with: "%20")
+                links.append("[\(sourceIndex)](<\(destination)>)")
+            }
+            if links.count != digitMatches.count { valid = false }
+            if valid { rewritten.replaceCharacters(in: match.range, with: links.joined(separator: ", ")) }
+        }
+        return rewritten as String
+    }
+
+    private static func isInsideCodeSpan(in text: NSString, before location: Int) -> Bool {
+        var index = 0
+        var delimiterLength: Int?
+        while index < location {
+            guard text.character(at: index) == 0x60 else {
+                index += 1
+                continue
+            }
+            let start = index
+            while index < location, text.character(at: index) == 0x60 { index += 1 }
+            let runLength = index - start
+            var backslashes = 0
+            var preceding = start - 1
+            while preceding >= 0, text.character(at: preceding) == 0x5C {
+                backslashes += 1
+                preceding -= 1
+            }
+            guard backslashes.isMultiple(of: 2) else { continue }
+            if delimiterLength == nil {
+                delimiterLength = runLength
+            } else if delimiterLength == runLength {
+                delimiterLength = nil
+            }
+        }
+
+        guard let delimiterLength else { return false }
+        index = location
+        while index < text.length {
+            guard text.character(at: index) == 0x60 else {
+                index += 1
+                continue
+            }
+            let start = index
+            while index < text.length, text.character(at: index) == 0x60 { index += 1 }
+            let runLength = index - start
+            var backslashes = 0
+            var preceding = start - 1
+            while preceding >= 0, text.character(at: preceding) == 0x5C {
+                backslashes += 1
+                preceding -= 1
+            }
+            if runLength == delimiterLength, backslashes.isMultiple(of: 2) { return true }
+        }
+        return false
     }
 }
 
@@ -256,6 +474,7 @@ private struct MarkdownTableView: View {
     let rows: [[String]]
     let alignments: [MarkdownView.TableAlignment]
     let baseSize: Double
+    let sources: [Source]
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: true) {
@@ -290,14 +509,8 @@ private struct MarkdownTableView: View {
     }
 
     private func inline(_ text: String) -> Text {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        let displayText = LaTeX.render(text)
-        if let attributed = try? AttributedString(markdown: displayText, options: options) {
-            return Text(attributed).font(.system(size: baseSize))
-        }
-        return Text(displayText).font(.system(size: baseSize))
+        Text(MarkdownInline.attributed(text, sources: sources))
+            .font(.system(size: baseSize))
     }
 
     private func frameAlignment(_ index: Int) -> Alignment {
