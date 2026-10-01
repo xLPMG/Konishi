@@ -175,7 +175,7 @@ private struct MemorySettings: View {
                         }
                     }
                 }
-                Text("Konishi keeps a structured profile about you (profile, preferences, projects, people, history). Every few messages it extracts durable facts on the server model; if a turn has nothing worth saving, nothing changes. Once memory passes the note count above, an automatic pass dedupes and reorganizes it. Update Memory extracts from the current chat; Clean Up Memory does a full backed-up reorganize.")
+                Text("Konishi keeps a structured profile about you (profile, preferences, projects, people, history, rapport). Every few messages it extracts durable facts on the server model and keeps a short summary of the chat so later chats can recall it. New facts are usable right away (see Recent in the Memory window); when idle, on chat switch, and after launch, the ones that matter are moved into long-term memory and the rest fade. Once memory passes the note count above, an automatic pass dedupes and reorganizes it. Update Memory extracts from the current chat; Clean Up Memory does a full backed-up reorganize.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Long-term Memory") {

@@ -8,6 +8,8 @@ enum Paths {
 
     static let conversations = root.appendingPathComponent("conversations", isDirectory: true)
     static let memory = root.appendingPathComponent("memory", isDirectory: true)
+    /// Facts awaiting promotion to long-term memory, plus the active-day clock.
+    static let shortTermMemory = root.appendingPathComponent("memory-short-term.json")
     static let personasFile = root.appendingPathComponent("personas.json")
     static let venv = root.appendingPathComponent("env", isDirectory: true)
     static let serversFile = root.appendingPathComponent("servers.json")

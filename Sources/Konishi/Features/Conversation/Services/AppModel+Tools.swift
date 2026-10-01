@@ -156,6 +156,22 @@ extension AppModel {
                 memoryStore.append(scope: scope, name: args.name, content: args.content)
             }
             return "Appended to \(scope)/\(args.name)."
+        case "conversation_search":
+            guard toolEnabled("conversation_search"),
+                let args: ToolArguments.ConversationSearch = Self.decodeToolArgs(call),
+                !args.query.isEmpty
+            else { return "Error: conversation_search is disabled or missing query" }
+            return await conversationSearchResult(
+                query: args.query, limit: args.limit, current: conversationID)
+        case "conversation_list":
+            guard toolEnabled("conversation_list") else { return "Error: tool disabled" }
+            let args: ToolArguments.ConversationList? = Self.decodeToolArgs(call)
+            return conversationListResult(days: args?.days, limit: args?.limit, current: conversationID)
+        case "conversation_read":
+            guard toolEnabled("conversation_read"),
+                let args: ToolArguments.ConversationRead = Self.decodeToolArgs(call)
+            else { return "Error: conversation_read is disabled or missing id" }
+            return conversationReadResult(id: args.id)
         case "file_read":
             guard toolEnabled("file_read"), let args: ToolArguments.FileRead = Self.decodeToolArgs(call) else {
                 return "Error: file_read is disabled or missing path"

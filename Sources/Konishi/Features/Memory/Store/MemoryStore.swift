@@ -150,16 +150,20 @@ struct MemoryStore {
         }
         let text: String
         let trace: Trace?
+        /// Short-term facts that were injected, so the caller can record the retrieval.
+        var stmHits: [UUID] = []
     }
 
     /// Injects the user's identity (global profile) in full plus the top-K bullets most relevant
     /// to the current query, so memory can grow large without flooding the context.  When an
     /// embeddings endpoint is available, lexical BM25 and semantic similarity are combined;
-    /// otherwise BM25 remains a useful fully-local fallback.
+    /// otherwise BM25 remains a useful fully-local fallback. Pending short-term facts compete
+    /// with long-term bullets on equal terms.
     @MainActor
     func retrieve(
         scopes: [String], query: String, cache: EmbeddingCache,
-        requestConfig: RequestConfig, threshold: Double, topK: Int
+        requestConfig: RequestConfig, threshold: Double, topK: Int,
+        shortTerm: [STMFact] = []
     ) async -> Retrieval {
         let profileName = MemoryCategory.profile.fileName
         let profileScope = MemoryStore.globalScope
@@ -183,61 +187,40 @@ struct MemoryStore {
                 }
             }
         }
+        let known = Set(chunks.map { MemoryProfile.normalizedFact($0.text) })
+        var recentIDs: [String: UUID] = [:]
+        for fact in shortTerm where scopes.contains(fact.scope) {
+            let text = "- \(fact.text)"
+            guard !known.contains(MemoryProfile.normalizedFact(text)) else { continue }
+            chunks.append((label: "recent/\(fact.category.header.lowercased())", text: text))
+            recentIDs[text] = fact.id
+        }
         guard !chunks.isEmpty, !query.isEmpty else {
             return Retrieval(text: sections.joined(separator: "\n\n"), trace: nil)
         }
-        let rawLexicalScores = MemoryRetrieval.bm25(query: query, documents: chunks.map(\.text))
-        let lexicalScores = rawLexicalScores.map(MemoryRetrieval.boundedBM25)
-        do {
-            let (q, blockEmb) = try await cache.embedWithCache(
-                query: query, blocks: chunks.map(\.text),
-                requestConfig: requestConfig)
-            let semanticScores = blockEmb.map { (EmbeddingCache.cosine(q, $0) + 1.0) / 2.0 }  // map cosine to [0, 1] range for comparison with BM25
-            let scored = chunks.indices
-                .map { index in
-                    MemoryRetrieval.ScoredChunk(
-                        chunk: chunks[index],
-                        score: MemoryRetrieval.hybridScore(
-                            semantic: semanticScores[index], lexical: lexicalScores[index]),
-                        semanticScore: semanticScores[index],
-                        lexicalScore: lexicalScores[index],
-                        rawLexicalScore: rawLexicalScores[index]
-                    )
-                }
-                .filter { $0.score >= threshold }
-                .sorted { $0.score > $1.score }
-                .prefix(max(1, topK))
-            sections.append(contentsOf: MemoryRetrieval.groupedSections(Array(scored)))
-            let trace = Retrieval.Trace(
+        let ranking = await MemoryRetrieval.rank(
+            chunks: chunks, query: query, cache: cache, requestConfig: requestConfig,
+            hybridThreshold: threshold, lexicalThreshold: 0.2)
+        let scored = Array(ranking.scored.prefix(max(1, topK)))
+        sections.append(contentsOf: MemoryRetrieval.groupedSections(scored))
+        let hits = scored.compactMap { item in
+            item.chunk.label.hasPrefix("recent/") ? recentIDs[item.chunk.text] : nil
+        }
+        let trace: Retrieval.Trace
+        if let failure = ranking.failure {
+            // An embeddings server is optional: retain targeted lexical retrieval when it is down.
+            trace = Retrieval.Trace(
+                kind: .error,
+                text:
+                    "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(failure)",
+                detail: MemoryRetrieval.traceDetail(scored))
+        } else {
+            trace = Retrieval.Trace(
                 kind: .memory,
                 text:
                     "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", threshold)) injected",
-                detail: MemoryRetrieval.traceDetail(Array(scored))
-            )
-            return Retrieval(text: sections.joined(separator: "\n\n"), trace: trace)
-        } catch {
-            // An embeddings server is optional: retain targeted lexical retrieval when it is down.
-            let scored = chunks.indices
-                .map { index in
-                    MemoryRetrieval.ScoredChunk(
-                        chunk: chunks[index],
-                        score: lexicalScores[index],
-                        semanticScore: nil,
-                        lexicalScore: lexicalScores[index],
-                        rawLexicalScore: rawLexicalScores[index]
-                    )
-                }
-                .filter { $0.score >= 0.2 }  // magic number :)
-                .sorted { $0.score > $1.score }
-                .prefix(max(1, topK))
-            sections.append(contentsOf: MemoryRetrieval.groupedSections(Array(scored)))
-            let trace = Retrieval.Trace(
-                kind: .error,
-                text:
-                    "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(error.localizedDescription)",
-                detail: MemoryRetrieval.traceDetail(Array(scored))
-            )
-            return Retrieval(text: sections.joined(separator: "\n\n"), trace: trace)
+                detail: MemoryRetrieval.traceDetail(scored))
         }
+        return Retrieval(text: sections.joined(separator: "\n\n"), trace: trace, stmHits: hits)
     }
 }

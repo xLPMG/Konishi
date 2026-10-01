@@ -12,7 +12,10 @@ final class AppModel {
     // Selection & transient UI state
     var selectedConversationID: UUID? {
         didSet {
-            if let id = selectedConversationID, id != oldValue { ensureHydrated(id) }
+            if let id = selectedConversationID, id != oldValue {
+                ensureHydrated(id)
+                scheduleSleepPass(after: .seconds(20))
+            }
         }
     }
     var draft: String = ""
@@ -47,6 +50,7 @@ final class AppModel {
     var discoveredModels: [LocalModels.Entry] = []
 
     let memoryStore = MemoryStore()
+    let stm = STMStore()
     let fileStore = FileStore()
     let documentStore = DocumentStore()
     let vaultStore = VaultStore()
@@ -290,6 +294,7 @@ final class AppModel {
         "git_status", "git_diff", "git_log", "web_search", "web_fetch", "web_research",
         "search_deck", "get_due_items", "calculate",
         "vault_search", "vault_read", "vault_list",
+        "conversation_search", "conversation_list", "conversation_read",
     ]
     /// Tools whose OUTPUT the model must read to finish its reply, so a continuation turn is warranted.
     /// After fire-and-forget writes (e.g. banking a card) with a written reply, the turn is complete.
@@ -297,6 +302,7 @@ final class AppModel {
         "get_due_items", "search_deck", "web_search", "web_fetch", "web_research", "file_read",
         "memory_list", "memory_read", "calculate", "python_exec", "run_shell", "ask_multiple_choice",
         "vault_search", "vault_read", "vault_list",
+        "conversation_search", "conversation_list", "conversation_read",
     ]
 
     /// How many trailing tool results are kept verbatim in the wire; older ones are stubbed.
@@ -364,6 +370,9 @@ final class AppModel {
     // MARK: - Long-term memory (structured, auto-updating)
 
     var isMemorizing = false
-    /// Bullet count of each scope at its last consolidation, to avoid re-consolidating repeatedly.
-    var lastConsolidatedBullets: [String: Int] = [:]
+    /// Background promotion / digest / cleanup pass (idle, conversation switch, launch).
+    var sleepTask: Task<Void, Never>?
+    /// When the pending sleep pass is due; nil when none is scheduled.
+    var sleepFireDate: Date?
+    var isSleeping = false
 }

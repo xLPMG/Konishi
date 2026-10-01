@@ -788,6 +788,7 @@ private struct ToolCallView: View {
         case "file_read": return "doc.text"
         case "vault_search", "vault_read", "vault_list", "vault_write", "vault_append": return "lock.doc"
         case "memory_list", "memory_read", "memory_write", "memory_append": return "brain.head.profile"
+        case "conversation_search", "conversation_list", "conversation_read": return "clock.arrow.circlepath"
         case "add_vocab", "add_grammar", "search_deck", "get_due_items", "record_review": return "character.book.closed"
         case "ask_multiple_choice": return "questionmark.bubble"
         default: return "wrench.and.screwdriver"

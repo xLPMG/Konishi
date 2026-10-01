@@ -81,6 +81,8 @@ struct RootView: View {
                             Label(model.settings.pauseMemoryWrites ? "Resume New Memories" : "Pause New Memories",
                                   systemImage: model.settings.pauseMemoryWrites ? "play.circle" : "pause.circle")
                         }
+                        Divider()
+                        Text(model.sleepStatusText)
                     } label: {
                         Image(systemName: model.settings.pauseMemoryWrites ? "brain.head.profile.fill" : "brain.head.profile")
                     }
@@ -145,8 +147,8 @@ private struct PersonaPicker: View {
         // Wrapped in a styled container so the toolbar treats it as a custom view and keeps the title.
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(.white.opacity(0.08)))
+        // .background(.ultraThinMaterial, in: Capsule())
+        // .overlay(Capsule().stroke(.white.opacity(0.08)))
         .help("Persona (system prompt + memory)")
     }
 }

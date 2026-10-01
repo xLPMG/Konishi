@@ -71,6 +71,11 @@ extension AppModel {
         if let m = conversations[idx].memorizedCount, m > count {
             conversations[idx].memorizedCount = count
         }
+        if let d = conversations[idx].digestCount, d > count {
+            conversations[idx].digest = nil
+            conversations[idx].digestCount = nil
+            conversations[idx].digestUpdatedAt = nil
+        }
     }
 
     func branch(fromMessage id: UUID) {

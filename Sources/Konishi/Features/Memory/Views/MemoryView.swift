@@ -17,7 +17,7 @@ struct MemoryView: View {
     @State private var newNote = ""
 
     private struct BulletID: Hashable { let category: MemoryCategory; let index: Int }
-    private enum Selection: Hashable { case category(MemoryCategory); case other }
+    private enum Selection: Hashable { case category(MemoryCategory); case recent; case summaries; case other }
 
     @State private var selection: Selection? = .category(.profile)
 
@@ -32,6 +32,8 @@ struct MemoryView: View {
             Group {
                 switch selection {
                 case .category(let c): categoryDetail(c)
+                case .recent: recentDetail
+                case .summaries: summariesDetail
                 case .other: otherDetail
                 case nil: ContentUnavailableView("Select a category", systemImage: "tray.full")
                 }
@@ -69,7 +71,16 @@ struct MemoryView: View {
         var d: [Selection: Int] = [:]
         for c in MemoryCategory.allCases { d[.category(c)] = fullBullets(c, scope(c)).count }
         d[.other] = extraFiles.count
+        d[.recent] = recentFacts.count
+        d[.summaries] = summarizedConversations.count
         return d
+    }
+
+    /// Short-term facts for the global scope and the current persona, newest first.
+    private var recentFacts: [STMFact] {
+        _ = version
+        let scopes = [globalScope, personaScope]
+        return model.stm.facts.filter { scopes.contains($0.scope) }.sorted { $0.createdAt > $1.createdAt }
     }
 
     // MARK: - Sidebar
@@ -93,6 +104,28 @@ struct MemoryView: View {
                 }
             }
             Section {
+                Label {
+                    HStack {
+                        Text("Recent")
+                        Spacer()
+                        Text("\(counts[.recent] ?? 0)")
+                            .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "hourglass").foregroundStyle(.teal)
+                }
+                .tag(Selection.recent)
+                Label {
+                    HStack {
+                        Text("Conversations")
+                        Spacer()
+                        Text("\(counts[.summaries] ?? 0)")
+                            .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "text.bubble").foregroundStyle(.indigo)
+                }
+                .tag(Selection.summaries)
                 Label {
                     HStack {
                         Text("Other notes")
@@ -193,6 +226,116 @@ struct MemoryView: View {
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(Capsule().fill(.secondary.opacity(0.15)))
             .foregroundStyle(.secondary)
+    }
+
+    // MARK: - Conversation summaries (read-only)
+
+    private var summarizedConversations: [Conversation] {
+        model.conversations
+            .filter { $0.isLanguage != true && !($0.digest ?? "").isEmpty }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    private var summariesDetail: some View {
+        let all = summarizedConversations
+        let query = search.trimmingCharacters(in: .whitespaces).lowercased()
+        let shown = query.isEmpty
+            ? all : all.filter { $0.title.lowercased().contains(query) || ($0.digest ?? "").lowercased().contains(query) }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "text.bubble").foregroundStyle(.indigo).font(.title)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Conversations").font(.title2.weight(.semibold))
+                    Text("A short summary of each chat, kept up to date automatically. The assistant recalls these in later chats.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(16)
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if shown.isEmpty {
+                        Text(search.isEmpty ? "No summaries yet." : "No matches.")
+                            .foregroundStyle(.tertiary).padding(.vertical, 12)
+                    }
+                    ForEach(shown) { convo in summaryRow(convo) }
+                }
+                .padding(16)
+            }
+            .searchable(text: $search, placement: .toolbar, prompt: "Search summaries")
+        }
+    }
+
+    private func summaryRow(_ convo: Conversation) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(convo.title).font(.callout.weight(.semibold)).lineLimit(1)
+                Spacer()
+                Text(ConversationRecall.dateString(convo.updatedAt))
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Open") {
+                    model.selectedConversationID = convo.id
+                    dismiss()
+                }
+                .buttonStyle(.borderless).font(.caption)
+            }
+            Text(convo.digest ?? "").font(.callout).textSelection(.enabled)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
+    }
+
+    // MARK: - Recent (short-term) facts
+
+    private var recentDetail: some View {
+        let facts = recentFacts
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "hourglass").foregroundStyle(.teal).font(.title)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recent").font(.title2.weight(.semibold))
+                    Text("Newly learned facts. They are already used in chats; the ones that prove important are moved to long-term memory automatically.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(16)
+            Divider()
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    if facts.isEmpty {
+                        Text("Nothing pending.").foregroundStyle(.tertiary).padding(.vertical, 12)
+                    }
+                    ForEach(facts) { fact in recentRow(fact) }
+                }
+                .padding(16)
+            }
+        }
+    }
+
+    private func recentRow(_ fact: STMFact) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(fact.text).font(.callout).textSelection(.enabled)
+                Text("\(fact.category.header) · importance \(fact.salience)/3 · used in \(fact.retrievals) chat\(fact.retrievals == 1 ? "" : "s") · \(max(0, model.stm.activeDay - fact.createdDay)) active days old")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                model.stm.promote(fact.id, to: model.memoryStore)
+                version += 1
+            } label: { Image(systemName: "arrow.up.doc") }
+                .buttonStyle(.borderless).help("Move to long-term memory now")
+            Button(role: .destructive) {
+                model.stm.remove(fact.id)
+                version += 1
+            } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless).help("Forget")
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
     }
 
     // MARK: - Other (non-category) notes
@@ -331,6 +474,7 @@ struct MemoryView: View {
         case .projects: "hammer"
         case .people: "person.2"
         case .history: "clock"
+        case .rapport: "bubble.left.and.bubble.right"
         }
     }
 
@@ -341,6 +485,7 @@ struct MemoryView: View {
         case .projects: .orange
         case .people: .green
         case .history: .pink
+        case .rapport: .teal
         }
     }
 }

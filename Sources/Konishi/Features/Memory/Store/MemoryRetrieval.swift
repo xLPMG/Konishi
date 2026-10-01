@@ -16,6 +16,50 @@ enum MemoryRetrieval {
         0.7 * semantic + 0.3 * lexical
     }
 
+    struct Ranking {
+        let scored: [ScoredChunk]
+        /// Set when embeddings were unavailable and scoring fell back to BM25 alone.
+        let failure: String?
+    }
+
+    /// Ranks chunks against a query by hybrid BM25 + embedding score, best first. Chunks below the
+    /// threshold are dropped; without an embeddings endpoint, BM25 alone is used.
+    @MainActor
+    static func rank(
+        chunks: [(label: String, text: String)], query: String, cache: EmbeddingCache,
+        requestConfig: RequestConfig, hybridThreshold: Double, lexicalThreshold: Double
+    ) async -> Ranking {
+        let rawLexical = bm25(query: query, documents: chunks.map(\.text))
+        let lexical = rawLexical.map(boundedBM25)
+        do {
+            let (q, blockEmb) = try await cache.embedWithCache(
+                query: query, blocks: chunks.map(\.text), requestConfig: requestConfig)
+            // Cosine mapped to [0, 1] so it is comparable with bounded BM25.
+            let semantic = blockEmb.map { (EmbeddingCache.cosine(q, $0) + 1.0) / 2.0 }
+            let scored = chunks.indices
+                .map { i in
+                    ScoredChunk(
+                        chunk: chunks[i],
+                        score: hybridScore(semantic: semantic[i], lexical: lexical[i]),
+                        semanticScore: semantic[i], lexicalScore: lexical[i],
+                        rawLexicalScore: rawLexical[i])
+                }
+                .filter { $0.score >= hybridThreshold }
+                .sorted { $0.score > $1.score }
+            return Ranking(scored: scored, failure: nil)
+        } catch {
+            let scored = chunks.indices
+                .map { i in
+                    ScoredChunk(
+                        chunk: chunks[i], score: lexical[i], semanticScore: nil,
+                        lexicalScore: lexical[i], rawLexicalScore: rawLexical[i])
+                }
+                .filter { $0.score >= lexicalThreshold }
+                .sorted { $0.score > $1.score }
+            return Ranking(scored: scored, failure: error.localizedDescription)
+        }
+    }
+
     /// Groups scored chunks by source file, preserving score order between files.
     static func groupedSections(_ scored: [ScoredChunk]) -> [String] {
         var order: [String] = []

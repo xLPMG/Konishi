@@ -101,6 +101,45 @@ enum Tools {
             group: .memory, mutating: true,
             defaultEnabled: true, defaultAutoApprove: false
         ),
+        ToolSpec(
+            name: "conversation_search",
+            summary: "Search past conversations",
+            description: "Search summaries of past conversations; returns id, date, title and a snippet for the best matches. Use conversation_read for the full summary.",
+            parameters: .schema(
+                properties: [
+                    "query": .property("string", "what the conversation was about"),
+                    "limit": .property("integer", "matches to return (default 5, maximum 15)")
+                ],
+                required: ["query"]
+            ),
+            group: .memory, mutating: false,
+            defaultEnabled: true, defaultAutoApprove: true
+        ),
+        ToolSpec(
+            name: "conversation_list",
+            summary: "List recent conversations",
+            description: "List the most recent past conversations (id, date, title, snippet), newest first.",
+            parameters: .schema(
+                properties: [
+                    "days": .property("integer", "only conversations from the last N days"),
+                    "limit": .property("integer", "conversations to return (default 10, maximum 30)")
+                ],
+                required: []
+            ),
+            group: .memory, mutating: false,
+            defaultEnabled: true, defaultAutoApprove: true
+        ),
+        ToolSpec(
+            name: "conversation_read",
+            summary: "Read a conversation summary",
+            description: "Read the summary of a past conversation by its id (as returned by conversation_search or conversation_list).",
+            parameters: .schema(
+                properties: ["id": .property("string", "conversation id")],
+                required: ["id"]
+            ),
+            group: .memory, mutating: false,
+            defaultEnabled: true, defaultAutoApprove: true
+        ),
 
         // MARK: Files
         ToolSpec(

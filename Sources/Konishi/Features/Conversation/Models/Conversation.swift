@@ -17,6 +17,14 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var isLanguage: Bool?
     /// Number of messages at the time the title was last updated.
     var lastTitledMessageCount: Int?
+    /// Short recallable summary of the whole conversation (distinct from the compression `summary`).
+    var digest: String?
+    /// Number of leading messages the digest covers.
+    var digestCount: Int?
+    /// `updatedAt` at the moment the digest was known to be current; a later `updatedAt` means stale.
+    var digestUpdatedAt: Date?
+    /// When the digest's durable highlights were folded into long-term History (see the sleep pass).
+    var digestRolledUpAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -29,7 +37,10 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         summarizedCount: Int? = nil,
         memorizedCount: Int? = nil,
         isLanguage: Bool? = nil,
-        lastTitledMessageCount: Int? = nil
+        lastTitledMessageCount: Int? = nil,
+        digest: String? = nil,
+        digestCount: Int? = nil,
+        digestUpdatedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -42,6 +53,9 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.memorizedCount = memorizedCount
         self.isLanguage = isLanguage
         self.lastTitledMessageCount = lastTitledMessageCount
+        self.digest = digest
+        self.digestCount = digestCount
+        self.digestUpdatedAt = digestUpdatedAt
     }
 
     var lastStats: MessageStats? {
@@ -64,14 +78,21 @@ struct ConversationMeta: Decodable {
     var memorizedCount: Int?
     var isLanguage: Bool?
     var lastTitledMessageCount: Int?
+    var digest: String?
+    var digestCount: Int?
+    var digestUpdatedAt: Date?
+    var digestRolledUpAt: Date?
 
     /// A body-less `Conversation` (empty `messages`) carrying just the metadata.
     func asConversation() -> Conversation {
-        Conversation(
+        var convo = Conversation(
             id: id, title: title, personaID: personaID, messages: [],
             createdAt: createdAt, updatedAt: updatedAt,
             summary: summary, summarizedCount: summarizedCount, memorizedCount: memorizedCount,
-            isLanguage: isLanguage, lastTitledMessageCount: lastTitledMessageCount
+            isLanguage: isLanguage, lastTitledMessageCount: lastTitledMessageCount,
+            digest: digest, digestCount: digestCount, digestUpdatedAt: digestUpdatedAt
         )
+        convo.digestRolledUpAt = digestRolledUpAt
+        return convo
     }
 }

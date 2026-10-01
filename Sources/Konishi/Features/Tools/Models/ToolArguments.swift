@@ -18,6 +18,16 @@ enum ToolArguments {
         var limit: Int?
     }
 
+    struct ConversationSearch: Decodable {
+        let query: String
+        var limit: Int?
+    }
+    struct ConversationList: Decodable {
+        var days: Int?
+        var limit: Int?
+    }
+    struct ConversationRead: Decodable { let id: String }
+
     struct URLValue: Decodable { let url: String }
     struct Query: Decodable { let query: String }
     struct Research: Decodable {

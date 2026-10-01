@@ -110,6 +110,8 @@ struct ChatCompletionRequest: Codable, Sendable {
     let toolChoice: String?
     /// Extra kwargs forwarded to the server's chat template (e.g. enable_thinking for Gemma).
     var chatTemplateKwargs: [String: Bool]? = nil
+    /// OpenAI-style switch some servers (e.g. Splash) honour instead of template kwargs; only "none" is sent.
+    var reasoningEffort: String? = nil
 }
 
 // MARK: - Responses

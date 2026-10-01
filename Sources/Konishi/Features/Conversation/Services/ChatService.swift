@@ -354,7 +354,8 @@ enum ChatService {
             tools: tools,
             toolChoice: toolChoice,
             // Cover the common template flags: enable_thinking (Gemma 4, Qwen3) + thinking (other templates).
-            chatTemplateKwargs: config.enableThinking.map { ["enable_thinking": $0, "thinking": $0] }
+            chatTemplateKwargs: config.enableThinking.map { ["enable_thinking": $0, "thinking": $0] },
+            reasoningEffort: config.enableThinking == false ? "none" : nil
         )
     }
 

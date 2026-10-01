@@ -12,7 +12,7 @@ struct KonishiApp: App {
                 .environment(model)
                 .tint(model.currentAccent)
                 .frame(minWidth: 820, minHeight: 560)
-                .task { model.refreshServerInfo(); model.refreshAudioModels(); model.autostartServers() }
+                .task { model.refreshServerInfo(); model.refreshAudioModels(); model.autostartServers(); model.scheduleSleepPass(after: .seconds(45)) }
         }
         .commands {
             CommandGroup(replacing: .newItem) {

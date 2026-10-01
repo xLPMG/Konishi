@@ -75,6 +75,19 @@ final class EmbeddingCache {
         return (result[0], blockEmb.map { $0 ?? [] })
     }
 
+    /// Embeds and caches any of `texts` not yet cached, so the first query after new content
+    /// doesn't pay for it.
+    func warm(texts: [String], requestConfig: RequestConfig) async throws {
+        let missing = Array(Set(texts.filter { get(model: requestConfig.embeddingModel, text: $0) == nil }))
+        guard !missing.isEmpty else { return }
+        let result = try await ChatService.embed(config: requestConfig, inputs: missing)
+        guard result.count == missing.count else { throw ChatServiceError.invalidURL }
+        for (text, embedding) in zip(missing, result) {
+            set(model: requestConfig.embeddingModel, text: text, embedding: embedding)
+        }
+        save()
+    }
+
     static func cosine(_ a: [Double], _ b: [Double]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return 0 }
         var dot = 0.0

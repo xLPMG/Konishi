@@ -408,6 +408,22 @@ final class AppSettings {
 
             defaults.set(4, forKey: Keys.settingsVersion)
         }
+        if defaults.integer(forKey: Keys.settingsVersion) < 5 {
+            // Past-conversation recall tools for existing installs (text chat and voice).
+            let recall: Set<String> = ["conversation_search", "conversation_list", "conversation_read"]
+            for mode in [AppMode.chat, .conversational] {
+                var enabled = enabledByMode[mode.rawValue] ?? Tools.modeEnabledDefaults(mode)
+                enabled.formUnion(recall)
+                enabledByMode[mode.rawValue] = enabled
+                defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(mode))
+
+                var approved = autoByMode[mode.rawValue] ?? Tools.modeAutoApproveDefaults(mode)
+                approved.formUnion(recall)
+                autoByMode[mode.rawValue] = approved
+                defaults.set(Array(approved), forKey: Keys.autoApproveKey(mode))
+            }
+            defaults.set(5, forKey: Keys.settingsVersion)
+        }
         self.enabledToolsByMode = enabledByMode
         self.autoApproveByMode = autoByMode
         self.shellAutoApproveCommandsByMode = Dictionary(uniqueKeysWithValues: AppMode.allCases.compactMap { mode in
