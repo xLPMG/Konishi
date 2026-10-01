@@ -132,6 +132,7 @@ final class STMStore {
         var changed = false
         for id in ids {
             guard let i = state.facts.firstIndex(where: { $0.id == id }) else { continue }
+            guard !state.facts[i].mentionedIn.contains(conversationID) else { continue }
             state.facts[i].lastRetrievedAt = now
             if !state.facts[i].retrievedIn.contains(conversationID) {
                 state.facts[i].retrievedIn.append(conversationID)

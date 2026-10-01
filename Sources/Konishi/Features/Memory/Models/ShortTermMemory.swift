@@ -21,7 +21,7 @@ struct STMFact: Codable, Identifiable, Equatable, Sendable {
     var lastRetrievedAt: Date?
 
     var mentions: Int { mentionedIn.count }
-    var retrievals: Int { retrievedIn.count }
+    var retrievals: Int { retrievedIn.filter { !mentionedIn.contains($0) }.count }
 }
 
 /// Decides which short-term facts graduate to long-term memory. Pure, so it is unit-testable.
@@ -43,7 +43,7 @@ enum MemoryPromotion {
         let score = score(fact)
         if score >= promoteScore { return .promote }
         guard activeDay - fact.createdDay >= maturityDays else { return .keep }
-        return fact.salience >= 2 || score >= 1 ? .promote : .drop
+        return fact.mentions > 1 || fact.retrievals > 0 ? .promote : .drop
     }
 
     /// Ids to evict so at most `capacity` facts remain: lowest score first, oldest first on ties.

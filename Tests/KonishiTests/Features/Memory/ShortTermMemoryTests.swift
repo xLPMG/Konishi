@@ -40,10 +40,11 @@ struct ShortTermMemoryTests {
         #expect(MemoryPromotion.decide(fact(salience: 2, mentions: 2), activeDay: 0) == .promote)
     }
 
-    @Test("a mature medium fact is promoted, a mature unused minor fact is dropped")
+    @Test("mature facts need independent reinforcement to be promoted")
     func matureFactsResolve() {
         let day = MemoryPromotion.maturityDays
-        #expect(MemoryPromotion.decide(fact(salience: 2), activeDay: day) == .promote)
+        #expect(MemoryPromotion.decide(fact(salience: 2), activeDay: day) == .drop)
+        #expect(MemoryPromotion.decide(fact(salience: 2, mentions: 2), activeDay: day) == .promote)
         #expect(MemoryPromotion.decide(fact(salience: 1), activeDay: day) == .drop)
     }
 
@@ -237,12 +238,35 @@ struct ShortTermMemoryTests {
         let id = stm.facts[0].id
         stm.markRetrieved([id], in: convo)
         stm.markRetrieved([id], in: convo)
+        #expect(stm.facts[0].retrievals == 0)
+        let otherConversation = UUID()
+        stm.markRetrieved([id], in: otherConversation)
+        stm.markRetrieved([id], in: otherConversation)
         #expect(stm.facts[0].retrievals == 1)
 
         let outcome = stm.applyPromotion(to: store)
         #expect(outcome.promoted.count == 1)
         #expect(stm.facts.isEmpty)
         #expect(store.read(store.file(scope: "global", name: "profile.md")) == "- Name is Luca")
+    }
+
+    @Test("retrieval in the source conversation does not count as independent reuse")
+    @MainActor
+    func sourceConversationRetrievalDoesNotReinforce() {
+        let stm = STMStore(url: nil)
+        let sourceConversation = UUID()
+        var result = MemoryProfile.ApplyResult(changedBodies: [:], appliedCount: 1, skippedCount: 0, detail: "")
+        result.staged = [.init(category: .projects, fact: "Building a spectrometer", salience: 2)]
+        stm.apply(result, global: "global", persona: "p", conversationID: sourceConversation)
+
+        let id = stm.facts[0].id
+        stm.markRetrieved([id], in: sourceConversation)
+        #expect(stm.facts[0].retrievals == 0)
+        #expect(MemoryPromotion.decide(stm.facts[0], activeDay: 0) == .keep)
+
+        stm.markRetrieved([id], in: UUID())
+        #expect(stm.facts[0].retrievals == 1)
+        #expect(MemoryPromotion.decide(stm.facts[0], activeDay: 0) == .promote)
     }
 
     @Test("promotion does not duplicate a bullet that is already long-term")
