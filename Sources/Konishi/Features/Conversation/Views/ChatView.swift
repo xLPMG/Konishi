@@ -18,7 +18,6 @@ struct ChatView: View {
                         if let error = model.errorMessage { errorBanner(error) }
                         if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
                         if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
-                        if model.isStreaming, let activity = model.activity { activityLine(activity) }
                         StatsBar()
                         attachmentStrip
                         inputBar
@@ -94,7 +93,7 @@ struct ChatView: View {
         var currentAssistantAttachments: [Attachment] = []
         var currentAssistantCreatedAt: Date?
 
-        func flushAssistant() {
+        func flushAssistant(includePending: Bool = false) {
             guard !currentAssistantSteps.isEmpty else { return }
             let turn = AssistantTurn(
                 id: currentAssistantSteps[0].id,
@@ -107,7 +106,10 @@ struct ChatView: View {
                 attachments: currentAssistantAttachments,
                 allMessageIDs: currentAssistantAllIDs
             )
-            if turn.hasVisibleContent {
+            let isPending = includePending
+                && model.isStreaming
+                && model.streamingConversationID == model.selectedConversationID
+            if turn.hasVisibleContent || isPending {
                 items.append(.assistant(turn))
             }
             currentAssistantSteps = []
@@ -158,7 +160,7 @@ struct ChatView: View {
                 break
             }
         }
-        flushAssistant()
+        flushAssistant(includePending: true)
         return items
     }
 
@@ -185,6 +187,10 @@ struct ChatView: View {
     private var messageList: some View {
         let items = self.datedChatItems
         let lastMessage = model.selectedConversation?.messages.last
+        let activeAssistantID = model.isStreaming
+            && model.streamingConversationID == model.selectedConversationID
+            ? items.last(where: { $0.isAssistant })?.id
+            : nil
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -196,7 +202,7 @@ struct ChatView: View {
                                 .padding(.top, verticalGap(at: index, in: items))
                                 .id(item.id)
                         case .assistant(let turn):
-                            AssistantTurnRow(turn: turn)
+                            AssistantTurnRow(turn: turn, isActive: item.id == activeAssistantID)
                                 .padding(.top, verticalGap(at: index, in: items))
                                 .id(item.id)
                         case .dayBreak(let day):
@@ -322,18 +328,6 @@ struct ChatView: View {
 
     private func voiceBanner(_ text: String) -> some View {
         banner(text, symbol: "mic.slash.fill", tint: .red) { model.voice.lastError = nil }
-    }
-
-    private func activityLine(_ text: String) -> some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            Text(text).font(.callout).foregroundStyle(.secondary).contentTransition(.opacity)
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 6)
-        .frame(maxWidth: 860)
-        .frame(maxWidth: .infinity)
     }
 
     private func banner(_ text: String, symbol: String, tint: Color, dismiss: @escaping () -> Void) -> some View {
@@ -729,6 +723,7 @@ private struct UserMessageRow: View {
 private struct AssistantTurnRow: View {
     @Environment(AppModel.self) private var model
     let turn: AssistantTurn
+    let isActive: Bool
     @State private var hovering = false
     @State private var zoom: IdentifiableImage?
 
@@ -776,6 +771,11 @@ private struct AssistantTurnRow: View {
                             }
                         }
                     }
+                }
+
+                if isActive, let activity = model.activity {
+                    AssistantActivityView(text: activity)
+                        .transition(.opacity)
                 }
 
                 if turn.interrupted {
@@ -884,6 +884,52 @@ private struct AssistantTurnRow: View {
     }
 }
 
+private struct AssistantActivityView: View {
+    let text: String
+    @State private var isAnimating = false
+
+    private var displayText: String {
+        let label: String
+        if text.hasSuffix("…") {
+            label = String(text.dropLast())
+        } else if text.hasSuffix("...") {
+            label = String(text.dropLast(3))
+        } else {
+            label = text
+        }
+        return label == "Thinking" ? "" : label
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(Color.secondary)
+                        .frame(width: 4, height: 4)
+                        .opacity(isAnimating ? 0.35 : 0.9)
+                        .offset(y: isAnimating ? 1 : -1)
+                        .animation(
+                            .easeInOut(duration: 0.55).repeatForever().delay(Double(index) * 0.14),
+                            value: isAnimating
+                        )
+                }
+            }
+            .accessibilityHidden(true)
+
+            if !displayText.isEmpty {
+                Text(displayText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(displayText.isEmpty ? "Thinking" : displayText)
+        .onAppear { isAnimating = true }
+    }
+}
+
 private struct ReasoningDisclosureView: View {
     @Environment(AppModel.self) private var model
     let reasoning: String
@@ -892,19 +938,22 @@ private struct ReasoningDisclosureView: View {
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
-            Text(reasoning)
-                .font(.system(size: max(11, model.settings.fontSize - 2)))
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .top, spacing: 8) {
+                KonishiPalette.border
+                    .frame(width: 1)
+                Text(reasoning)
+                    .font(.system(size: max(11, model.settings.fontSize - 2)))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
                 .padding(.top, 4)
         } label: {
-            Label(title, systemImage: "brain")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 8).padding(.vertical, 6)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.vertical, 2)
     }
 }
 

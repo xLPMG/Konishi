@@ -139,7 +139,6 @@ extension AppModel {
                         if firstGenerationAt == nil { firstGenerationAt = Date() }
                         if firstTokenAt == nil {
                             firstTokenAt = Date()
-                            self.activity = nil
                             traceStore.trace(
                                 conversationID: conversationID, kind: .token,
                                 text: String(
@@ -148,6 +147,9 @@ extension AppModel {
                                 saveTraces: settings.saveTraces)
                         }
                         let out = stripper.consume(d)
+                        if !out.reasoning.isEmpty || !out.visible.isEmpty {
+                            self.activity = nil
+                        }
                         if !out.reasoning.isEmpty {
                             reasoning += out.reasoning
                             self.appendReasoning(
@@ -163,10 +165,13 @@ extension AppModel {
                                 assistantID: assistantID)
                         }
                     case .reasoning(let r):
-                        if !r.isEmpty && firstGenerationAt == nil { firstGenerationAt = Date() }
-                        reasoning += r
-                        self.appendReasoning(
-                            r, conversationID: conversationID, assistantID: assistantID)
+                        if !r.isEmpty {
+                            if firstGenerationAt == nil { firstGenerationAt = Date() }
+                            self.activity = nil
+                            reasoning += r
+                            self.appendReasoning(
+                                r, conversationID: conversationID, assistantID: assistantID)
+                        }
                     case .usage(let u):
                         usage = u
                         traceStore.trace(
