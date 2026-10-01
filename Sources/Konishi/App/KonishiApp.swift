@@ -30,9 +30,10 @@ struct KonishiApp: App {
             SettingsView()
                 .environment(model)
                 .tint(model.currentAccent)
-                .frame(minWidth: 560, minHeight: 460)
+                .frame(minWidth: 860, minHeight: 560)
         }
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 980, height: 680)
         .defaultLaunchBehavior(.suppressed)
 
         Window("Trace", id: "trace") {

@@ -3,22 +3,89 @@ import AVFoundation
 import AppKit
 
 struct SettingsView: View {
+    @State private var selection: SettingsSection? = .endpoints
+
     var body: some View {
-        TabView {
-            ServerSettings().tabItem { Label("Endpoints", systemImage: "server.rack") }
-            RuntimeSettings().tabItem { Label("Local Servers", systemImage: "shippingbox") }
-            GenerationSettings().tabItem { Label("Generation", systemImage: "slider.horizontal.3") }
-            MemorySettings().tabItem { Label("Memory", systemImage: "brain") }
-            VaultSettings().tabItem { Label("Vault", systemImage: "books.vertical") }
-            ToolsSettings().tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
-            VoiceSettings().tabItem { Label("Voice", systemImage: "waveform") }
-            PersonaSettings().tabItem { Label("Personas", systemImage: "person.2") }
-            AppearanceSettings().tabItem { Label("Appearance", systemImage: "paintpalette") }
+        NavigationSplitView {
+            List(selection: $selection) {
+                Section("Connection") { sectionRows(group: "Connection") }
+                Section("Assistant") { sectionRows(group: "Assistant") }
+                Section("Personalization") { sectionRows(group: "Personalization") }
+            }
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 170, ideal: 195, max: 230)
+        } detail: {
+            selectedContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(KonishiPalette.canvas)
         }
+        .navigationTitle("Settings - \(selectedSection.title)")
+        .navigationSplitViewStyle(.balanced)
         .frame(
-            minWidth: 620, idealWidth: 680, maxWidth: .infinity,
-            minHeight: 500, idealHeight: 560, maxHeight: .infinity
+            minWidth: 860, idealWidth: 980, maxWidth: .infinity,
+            minHeight: 560, idealHeight: 680, maxHeight: .infinity
         )
+    }
+
+    private var selectedSection: SettingsSection { selection ?? .endpoints }
+
+    @ViewBuilder
+    private func sectionRows(group: String) -> some View {
+        ForEach(SettingsSection.allCases.filter { $0.group == group }) { section in
+            Label(section.title, systemImage: section.symbol).tag(section)
+        }
+    }
+
+    @ViewBuilder
+    private var selectedContent: some View {
+        switch selectedSection {
+        case .endpoints: ServerSettings()
+        case .localServers: RuntimeSettings()
+        case .generation: GenerationSettings()
+        case .memory: MemorySettings()
+        case .vault: VaultSettings()
+        case .tools: ToolsSettings()
+        case .voice: VoiceSettings()
+        case .personas: PersonaSettings()
+        case .appearance: AppearanceSettings()
+        }
+    }
+}
+
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case endpoints = "Endpoints"
+    case localServers = "Local Servers"
+    case generation = "Generation"
+    case memory = "Memory"
+    case vault = "Vault"
+    case tools = "Tools"
+    case voice = "Voice"
+    case personas = "Personas"
+    case appearance = "Appearance"
+
+    var id: String { rawValue }
+    var title: String { rawValue }
+
+    var group: String {
+        switch self {
+        case .endpoints, .localServers: "Connection"
+        case .generation, .memory, .tools, .voice: "Assistant"
+        case .vault, .personas, .appearance: "Personalization"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .endpoints: "server.rack"
+        case .localServers: "shippingbox"
+        case .generation: "slider.horizontal.3"
+        case .memory: "brain"
+        case .vault: "books.vertical"
+        case .tools: "wrench.and.screwdriver"
+        case .voice: "waveform"
+        case .personas: "person.2"
+        case .appearance: "paintpalette"
+        }
     }
 }
 
@@ -469,6 +536,8 @@ private struct PersonaSettings: View {
                 }
             }
             .frame(minWidth: 150, idealWidth: 190, maxWidth: 240)
+            .scrollContentBackground(.hidden)
+            .background(KonishiPalette.canvas)
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 4) {
                     Button { model.personaStore.addPersona() } label: {
@@ -496,6 +565,7 @@ private struct PersonaSettings: View {
             }
             .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(KonishiPalette.canvas)
         .onAppear { if selection == nil { selection = model.personaStore.personas.first?.id } }
     }
 }

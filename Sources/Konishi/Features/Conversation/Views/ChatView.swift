@@ -7,6 +7,7 @@ struct ChatView: View {
     @State private var showImporter = false
     @State private var showDocImporter = false
     @State private var pinnedToBottom = true
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -146,8 +147,12 @@ struct ChatView: View {
                         }
                     }
                 }
-                .padding(16)
+                .frame(maxWidth: 860)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 24)
             }
+            .background(KonishiPalette.canvas)
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 40
             } action: { _, atBottom in
@@ -173,13 +178,54 @@ struct ChatView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 6) {
-            Image(systemName: model.currentPersona.iconSymbol)
-                .font(.largeTitle).foregroundStyle(model.currentAccent)
-            Text("Chatting with \(model.currentAssistantName)").font(.title3.weight(.semibold))
-            Text(model.settings.baseURL).font(.callout).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                Image(systemName: model.currentPersona.iconSymbol)
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(model.currentAccent)
+                    .frame(width: 48, height: 48)
+                    .background(model.currentAccent.opacity(0.13), in: RoundedRectangle(cornerRadius: 15))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("A little room to think.")
+                        .font(.system(size: 28, weight: .semibold, design: .rounded))
+                    Text("Start a conversation with \(model.currentAssistantName).")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(model.connectionOK == true ? Color.green : (model.connectionOK == false ? Color.orange : Color.secondary))
+                    .frame(width: 7, height: 7)
+                Text(model.connectionOK == true ? "Model connected" : (model.connectionOK == false ? "Check model connection" : "Checking model…"))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                starterButton("Explore an idea", icon: "lightbulb", prompt: "Help me explore an idea. Ask me one question to get started.")
+                starterButton("Make a plan", icon: "list.bullet", prompt: "Help me make a clear, practical plan for my next goal.")
+                starterButton("Explain a topic", icon: "sparkle.magnifyingglass", prompt: "Explain a topic clearly, with an intuitive example. Ask me what topic first.")
+            }
         }
-        .frame(maxWidth: .infinity).padding(.top, 60)
+        .padding(24)
+        .frame(maxWidth: 660, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 72)
+    }
+
+    private func starterButton(_ title: String, icon: String, prompt: String) -> some View {
+        Button {
+            model.draft = prompt
+            inputFocused = true
+        } label: {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
     }
 
     private func errorBanner(_ text: String) -> some View {
@@ -303,6 +349,7 @@ struct ChatView: View {
                 .font(.system(size: model.settings.fontSize))
                 .lineLimit(1...8)
                 .padding(.vertical, 4)
+                .focused($inputFocused)
                 .onKeyPress(keys: [.return]) { keyPress in
                     if keyPress.modifiers.contains(.shift) {
                         model.draft.append("\n")
@@ -312,17 +359,26 @@ struct ChatView: View {
                     return .handled
                 }
 
-            Button { model.send() } label: { Image(systemName: "arrow.up.circle.fill").font(.title) }
+            Button { model.send() } label: {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(model.currentAccent, in: RoundedRectangle(cornerRadius: 11))
+            }
                 .buttonStyle(.plain)
                 .disabled(!model.canSend)
+            .opacity(model.canSend ? 1 : 0.45)
                 .keyboardShortcut(.return, modifiers: .command)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(.white.opacity(0.08)))
-        .shadow(color: .black.opacity(0.16), radius: 12, y: 4)
-        .padding(.horizontal, 16)
+        .frame(maxWidth: 860)
+        .background(KonishiPalette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(KonishiPalette.border.opacity(0.7), lineWidth: 1))
+        .shadow(color: .black.opacity(0.06), radius: 12, y: 3)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
         .padding(.bottom, 12)
         .padding(.top, 4)
     }
@@ -476,18 +532,27 @@ private struct UserMessageRow: View {
         HStack {
             Spacer(minLength: 60)
             VStack(alignment: .leading, spacing: 6) {
-                Text("You")
-                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                Label("You", systemImage: "person.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(model.currentAccent)
                 if !message.images.isEmpty { imageGrid }
                 if !message.attachments.isEmpty { attachmentChips }
                 Text(message.content)
                     .font(.system(size: model.settings.fontSize))
                     .textSelection(.enabled)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 if hovering { actions }
             }
-            .padding(10)
-            .background(model.currentAccent, in: RoundedRectangle(cornerRadius: 12))
+            .frame(maxWidth: 680, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(model.currentAccent.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(model.currentAccent)
+                    .frame(width: 3)
+                    .padding(.vertical, 12)
+            }
         }
         .onHover { hovering = $0 }
         .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
@@ -530,7 +595,7 @@ private struct UserMessageRow: View {
             Button { model.deleteMessage(message.id) } label: { Image(systemName: "trash") }
         }
         .buttonStyle(.plain).font(.caption)
-        .foregroundStyle(.white.opacity(0.85))
+        .foregroundStyle(.secondary)
     }
 
     private func copyMessage() {
@@ -546,10 +611,16 @@ private struct AssistantTurnRow: View {
     @State private var zoom: IdentifiableImage?
 
     var body: some View {
-        HStack {
+        HStack(alignment: .top, spacing: 11) {
+            Image(systemName: model.currentPersona.iconSymbol)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(model.currentAccent)
+                .frame(width: 32, height: 32)
+                .background(model.currentAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
             VStack(alignment: .leading, spacing: 8) {
                 Text(model.currentAssistantName)
-                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 if !turn.images.isEmpty { imageGrid }
                 if !turn.attachments.isEmpty { attachmentChips }
 
@@ -584,9 +655,11 @@ private struct AssistantTurnRow: View {
                 if !turn.sources.isEmpty { sourcesView }
                 if hovering { actions }
             }
-            .padding(10)
-            .background(.quaternary.opacity(0.55), in: RoundedRectangle(cornerRadius: 12))
-            Spacer(minLength: 60)
+            .frame(maxWidth: 780, alignment: .leading)
+            .padding(14)
+            .background(KonishiPalette.surface, in: RoundedRectangle(cornerRadius: 15))
+            .overlay(RoundedRectangle(cornerRadius: 15).stroke(KonishiPalette.border.opacity(0.65), lineWidth: 1))
+            Spacer(minLength: 20)
         }
         .onHover { hovering = $0 }
         .sheet(item: $zoom) { ZoomImageView(image: $0.image) }

@@ -1,4 +1,11 @@
 import SwiftUI
+import AppKit
+
+enum KonishiPalette {
+    static let canvas = Color(nsColor: .underPageBackgroundColor)
+    static let surface = Color(nsColor: .controlBackgroundColor)
+    static let border = Color(nsColor: .separatorColor)
+}
 
 extension Color {
     /// Creates a color from a `#RRGGBB` or `#RRGGBBAA` hex string. Falls back to accentColor.

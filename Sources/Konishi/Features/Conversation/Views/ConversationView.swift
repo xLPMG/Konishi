@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// A glassy, translucent 3D orb that reflects the current voice state. Built from layered
-/// depth cues — a frosted glass body, edge-darkened volume shading, slow drifting internal
-/// "energy" (lava-lamp glow), a rim light, and specular highlights — rather than a flat disc.
 struct VoiceOrb: View {
     let state: AppModel.VoiceState
     var accent: Color
@@ -64,25 +61,20 @@ struct VoiceOrb: View {
         let breathe = 1 + 0.018 * sin(t * 1.1)
 
         ZStack {
-            // Grounding contact shadow
             Ellipse()
                 .fill(.black.opacity(0.5))
                 .frame(width: size * 0.68, height: size * 0.13)
                 .blur(radius: 18)
                 .offset(y: size * 0.62)
 
-            // Soft coloured aura
             Circle()
                 .fill(tint.opacity(0.22))
                 .frame(width: size * 1.2, height: size * 1.2)
                 .blur(radius: 48)
 
-            // The glass sphere itself
             ZStack {
-                // Frosted translucent body
                 Circle().fill(.ultraThinMaterial)
 
-                // Volume shading: brighter core, darker rim → reads as a sphere
                 Circle().fill(
                     RadialGradient(
                         colors: [tint.opacity(0.55), tint.opacity(0.14), .black.opacity(0.38)],
@@ -91,16 +83,14 @@ struct VoiceOrb: View {
                     )
                 )
 
-                // Drifting internal energy (blurred blobs = liquid light inside the glass)
                 ZStack {
-                    blob(tint,  d: 120, x: cos(m) * 34,           y: sin(m * 0.8) * 30)
+                    blob(tint, d: 120, x: cos(m) * 34, y: sin(m * 0.8) * 30)
                     blob(tint2, d: 104, x: cos(m * 1.3 + 2) * 40, y: sin(m + 1) * 34)
-                    blob(tint3, d: 92,  x: cos(m * 0.9 + 5) * 38, y: sin(m * 1.2 + 2) * 32)
-                    blob(tint3, d: 58,  x: cos(m * 0.7 + 4) * 24, y: sin(m * 1.1 + 3) * 24, opacity: 0.45)
+                    blob(tint3, d: 92, x: cos(m * 0.9 + 5) * 38, y: sin(m * 1.2 + 2) * 32)
+                    blob(tint3, d: 58, x: cos(m * 0.7 + 4) * 24, y: sin(m * 1.1 + 3) * 24, opacity: 0.45)
                 }
                 .blur(radius: 24)
 
-                // Light pooling / refraction near the bottom
                 Circle().fill(
                     RadialGradient(
                         colors: [tint.opacity(0.5), .clear],
@@ -111,7 +101,6 @@ struct VoiceOrb: View {
             }
             .frame(width: size, height: size)
             .clipShape(Circle())
-            // Rim light: iridescent edges catching the light like glass
             .overlay {
                 Circle().strokeBorder(
                     AngularGradient(
@@ -139,33 +128,47 @@ struct ConversationView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        let state = statePresentation
         ZStack {
-            Rectangle().fill(.black.opacity(0.92)).ignoresSafeArea()
+            KonishiPalette.canvas.ignoresSafeArea()
 
-            VStack(spacing: 28) {
-                Spacer()
-                VoiceOrb(state: model.voiceState, accent: model.currentAccent)
-                    .frame(height: 260)
+            VStack(spacing: 0) {
+                Spacer(minLength: 24)
 
-                if let err = model.voice.lastError {
-                    Text(err).font(.callout).foregroundStyle(.orange).multilineTextAlignment(.center)
-                        .frame(maxWidth: 480)
+                VStack(spacing: 12) {
+                    Label(state.title, systemImage: state.symbol)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(state.tint)
+
+                    VoiceOrb(state: model.voiceState, accent: model.currentAccent)
+                        .frame(height: 260)
                 }
-                Spacer()
+
+                if let error = model.voice.lastError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                        .padding(12)
+                        .frame(maxWidth: 480)
+                        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.top, 12)
+                }
+
+                Spacer(minLength: 24)
 
                 Button {
                     model.stopConversation()
                     dismiss()
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.title2)
-                        .foregroundStyle(.white.opacity(0.8))
-                        .frame(width: 52, height: 52)
-                        .background(.white.opacity(0.12), in: Circle())
+                    Label("End conversation", systemImage: "phone.down.fill")
+                        .frame(minWidth: 190)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(.red)
                 .keyboardShortcut(.cancelAction)
-                .padding(.bottom, 40)
+                .padding(.bottom, 28)
             }
         }
         .frame(minWidth: 560, minHeight: 520)
@@ -174,6 +177,15 @@ struct ConversationView: View {
         // The model can hang up itself via the end_conversation tool; close the sheet when it does.
         .onChange(of: model.conversationActive) { _, active in
             if !active { dismiss() }
+        }
+    }
+
+    private var statePresentation: (title: String, symbol: String, tint: Color) {
+        switch model.voiceState {
+        case .idle: ("Ready", "waveform", .secondary)
+        case .listening: ("Listening", "waveform", model.currentAccent)
+        case .thinking: ("Thinking", "ellipsis", .orange)
+        case .speaking: ("Speaking", "speaker.wave.2", .green)
         }
     }
 }

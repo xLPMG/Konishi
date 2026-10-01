@@ -20,13 +20,47 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search chats")
+        .searchable(text: $model.searchText, placement: .sidebar, prompt: isLanguage ? "Search sessions" : "Search chats")
         .safeAreaInset(edge: .top) {
-            Button { model.newConversation() } label: {
-                Label(isLanguage ? "New Session" : "New Chat", systemImage: "square.and.pencil")
-                    .frame(maxWidth: .infinity)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Image(systemName: isLanguage ? "character.book.closed.fill" : "sparkles")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(model.currentAccent)
+                        .frame(width: 36, height: 36)
+                        .background(model.currentAccent.opacity(0.13), in: RoundedRectangle(cornerRadius: 11))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Konishi").font(.headline)
+                        Text(isLanguage ? "LEARNING DESK" : "CHAT STUDIO")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Text("\(model.filteredConversations.count)")
+                        .font(.caption.monospacedDigit().weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(KonishiPalette.surface, in: Capsule())
+                }
+
+                Button { model.newConversation() } label: {
+                    Label(isLanguage ? "New Session" : "New Chat", systemImage: "square.and.pencil")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent).padding(8)
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+            .background(KonishiPalette.canvas)
+        }
+        .background(KonishiPalette.canvas)
+        .overlay(alignment: .trailing) {
+            KonishiPalette.border.opacity(0.8)
+                .frame(width: 1)
+                .allowsHitTesting(false)
         }
     }
 
@@ -41,7 +75,9 @@ struct SidebarView: View {
                     .textFieldStyle(.roundedBorder)
             } else {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(convo.title).lineLimit(1)
+                    Text(convo.title)
+                        .font(.body.weight(model.selectedConversationID == convo.id ? .semibold : .regular))
+                        .lineLimit(1)
                     Text(persona.name).font(.caption2).foregroundStyle(.secondary)
                 }
             }

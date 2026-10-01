@@ -53,6 +53,8 @@ struct PersonaEditorView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(KonishiPalette.canvas)
         .onChange(of: draft) { model.personaStore.updatePersona(draft) }
     }
 }

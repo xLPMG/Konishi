@@ -66,17 +66,29 @@ struct StatsBar: View {
         let stats = model.selectedConversation?.lastStats
         HStack(spacing: 14) {
             ModelChip()
+            Rectangle().fill(KonishiPalette.border).frame(width: 1, height: 13)
             if model.isStreaming {
                 Label("Generating", systemImage: "circle.fill")
-                    .foregroundStyle(.green).symbolEffect(.pulse)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.green.opacity(0.1), in: Capsule())
+                    .symbolEffect(.pulse)
             }
             if !model.activeToolNames.isEmpty {
                 Label("\(model.activeToolNames.count) tools", systemImage: "wrench.and.screwdriver")
                     .foregroundStyle(model.currentAccent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(model.currentAccent.opacity(0.1), in: Capsule())
                     .help("Tools available: " + model.activeToolNames.joined(separator: ", "))
             }
             if let s = model.selectedConversation?.summary, !s.isEmpty {
                 Label("compressed", systemImage: "arrow.down.right.and.arrow.up.left")
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(KonishiPalette.surface, in: Capsule())
                     .help("Older turns folded into a rolling summary")
             }
             if let ttft = stats?.timeToFirstToken {
@@ -98,7 +110,10 @@ struct StatsBar: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(.horizontal, 16)
-        .padding(.vertical, 5)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 860)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .top) { KonishiPalette.border.opacity(0.55).frame(height: 1) }
     }
 
     private func metric(_ symbol: String, _ text: String) -> some View {
