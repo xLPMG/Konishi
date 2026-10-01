@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct PersonaEditorView: View {
     @Environment(AppModel.self) private var model
@@ -16,7 +17,7 @@ struct PersonaEditorView: View {
 
     var body: some View {
         Form {
-            Section("Identity") {
+            Section {
                 TextField("Mode name", text: $draft.name)
                 TextField("Assistant name", text: Binding(
                     get: { draft.assistantName ?? "" },
@@ -52,9 +53,9 @@ struct PersonaEditorView: View {
                     .frame(minHeight: 120)
             }
         }
-        .formStyle(.grouped)
+        .formStyle(.columns)
         .scrollContentBackground(.hidden)
-        .background(KonishiPalette.canvas)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onChange(of: draft) { model.personaStore.updatePersona(draft) }
     }
 }

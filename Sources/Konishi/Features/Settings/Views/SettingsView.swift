@@ -17,10 +17,12 @@ struct SettingsView: View {
         } detail: {
             selectedContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(KonishiPalette.canvas)
+                .background(Color(nsColor: .windowBackgroundColor))
         }
         .navigationTitle("Settings - \(selectedSection.title)")
         .navigationSplitViewStyle(.balanced)
+        .toolbarBackground(Color(nsColor: .windowBackgroundColor), for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
         .frame(
             minWidth: 860, idealWidth: 980, maxWidth: .infinity,
             minHeight: 560, idealHeight: 680, maxHeight: .infinity
@@ -550,30 +552,59 @@ private struct PersonaSettings: View {
     @State private var selection: UUID?
 
     var body: some View {
-        HSplitView {
-            List(selection: $selection) {
-                ForEach(model.personaStore.personas) { persona in
-                    Label(persona.name, systemImage: persona.iconSymbol).tag(persona.id)
-                }
-            }
-            .frame(minWidth: 150, idealWidth: 190, maxWidth: 240)
-            .scrollContentBackground(.hidden)
-            .background(KonishiPalette.canvas)
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 4) {
-                    Button { model.personaStore.addPersona() } label: {
-                        Image(systemName: "plus").frame(width: 24, height: 24).contentShape(Rectangle())
-                    }
-                    Button {
-                        if let id = selection { model.deletePersona(id); selection = nil }
-                    } label: {
-                        Image(systemName: "minus").frame(width: 24, height: 24).contentShape(Rectangle())
-                    }
-                    .disabled(selection == nil || model.personaStore.personas.count <= 1)
+        HStack(spacing: 0) {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("PERSONAS")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                     Spacer()
+                    Button(action: addPersona) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 30, height: 30)
+                            .background(KonishiPalette.surface, in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add persona")
+                    .accessibilityLabel("Add persona")
                 }
-                .buttonStyle(.borderless).padding(6)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+
+                List(selection: $selection) {
+                    ForEach(model.personaStore.personas) { persona in
+                        Label(persona.name, systemImage: persona.iconSymbol).tag(persona.id)
+                    }
+                }
+                .listStyle(.sidebar)
+                .scrollContentBackground(.hidden)
+
+                Rectangle()
+                    .fill(KonishiPalette.border)
+                    .frame(height: 1)
+
+                HStack {
+                    Text("\(model.personaStore.personas.count) personas")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(role: .destructive, action: deleteSelectedPersona) {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(selection == nil || model.personaStore.personas.count <= 1)
+                    .help("Delete selected persona")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
+            .frame(width: 210)
+            .background(Color(nsColor: .windowBackgroundColor))
+
+            Rectangle()
+                .fill(KonishiPalette.border)
+                .frame(width: 1)
 
             Group {
                 if let id = selection ?? model.personaStore.personas.first?.id,
@@ -584,10 +615,23 @@ private struct PersonaSettings: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
-        .background(KonishiPalette.canvas)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { if selection == nil { selection = model.personaStore.personas.first?.id } }
+    }
+
+    private func addPersona() {
+        model.personaStore.addPersona()
+        selection = model.personaStore.personas.last?.id
+    }
+
+    private func deleteSelectedPersona() {
+        guard let selection else { return }
+        model.deletePersona(selection)
+        self.selection = model.personaStore.personas.first?.id
     }
 }
 
