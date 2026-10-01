@@ -38,11 +38,11 @@ enum MemoryCategory: String, CaseIterable, Codable, Sendable {
     var guidance: String {
         switch self {
         case .profile: "stable identity — name, location, education, occupation, skills, hardware, OS, environment"
-        case .preferences: "how they like to interact — style, tone, tools, conventions, dos and don'ts, likes and dislikes"
+        case .preferences: "how they want this assistant to communicate and work — style, tone, tool use, workflows, conventions, boundaries, likes/dislikes, and corrections to assistant behavior"
         case .projects: "active or important projects and goals — status, constraints, and decisions"
         case .people: "people and relationships in their life, each with the context that makes them relevant"
         case .history: "dated events, completed milestones, and durable past decisions"
-        case .rapport: "what the user said about working with this assistant — agreed conventions, ongoing arrangements, shared terminology, recurring bits, corrections to its behavior"
+        case .rapport: "relationship-specific continuity with this assistant — user-given names, shared shorthand or callbacks, and meaningful shared history or trust; not communication, tool, workflow, or behavior preferences"
         }
     }
 
@@ -223,8 +223,12 @@ enum MemoryProfile {
         - Record ONLY facts about the human USER (the "USER:" lines) and their real world.
         - NEVER record the assistant\(assistantAka), its persona, traits, or role-play character as \
         facts. The "ASSISTANT:" lines are the assistant, not the user — ignore them as a source of \
-        facts. The only assistant-related notes allowed are under Rapport, and only what the USER \
-        said about how they want to work together.
+        facts. The only assistant-related notes allowed are user-stated relationship continuity \
+        under Rapport; operational preferences about the assistant belong under Preferences.
+        - Put requests about how the assistant should respond or work (including tool use, workflow, \
+        conventions, and behavior corrections) under Preferences, never Rapport. Rapport is only \
+        relationship-specific continuity such as a user-given name, shared shorthand, or meaningful \
+        shared history. A fact must not be stored in both categories.
         - Record a fact ONLY if the USER actually stated or clearly implied it. Do NOT invent, \
         guess, or infer names, jobs, hardware, colleagues, achievements, or numbers.
         - If there are no durable facts about the user, return no operations. \
@@ -540,8 +544,10 @@ enum MemoryProfile {
         CRITICAL RULES:
         - Memory is about the human USER only (the "USER:" lines). NEVER record the \
         assistant\(assistantAka), its persona, traits, or role-play character as facts; delete any such \
-        bullets you find. Rapport bullets that capture what the USER said about how they want to work \
-        with the assistant are allowed.
+        bullets you find. Preferences contain how the USER wants the assistant to communicate or work, \
+        including tool use, workflows, conventions, and behavior corrections. Rapport contains only \
+        relationship-specific continuity such as user-given names, shared shorthand, or meaningful \
+        shared history; it is not a second home for preferences.
         - Keep only facts the USER actually stated or clearly implied. Delete anything invented, \
         speculative, or unsupported (fake names, jobs, colleagues, achievements, or numbers).
         - If a category has no real user facts, leave it EMPTY.
