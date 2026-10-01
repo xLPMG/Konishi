@@ -9,23 +9,25 @@ struct RuntimeSettings: View {
 
     var body: some View {
         Form {
-            environmentSection
             serversSection
-            addSection
+            detectedEndpointsSection
+            environmentSection
             packagesSection
-            discoveredSection
             logSection
         }
         .formStyle(.grouped)
         .onAppear {
             if model.discoveredModels.isEmpty { model.scanLocalModels() }
+            model.scanLocalEndpoints()
             if runtime.installedPackages.isEmpty { runtime.refreshPackages() }
+            runtime.ensureRoleServers()
             runtime.rescan()   // pick up servers started outside Konishi
         }
     }
 
     private var environmentSection: some View {
-        Section("Python Environment") {
+        DisclosureGroup("Python Runtime") {
+            VStack(alignment: .leading, spacing: 10) {
             LabeledContent("Python", value: runtime.pythonVersion ?? "not found")
             if !runtime.availableInterpreters.isEmpty {
                 Picker("Interpreter", selection: Binding(
@@ -65,6 +67,7 @@ struct RuntimeSettings: View {
             }
             Text("Env lives in ~/Konishi/env. Python 3.12 is recommended — 3.14 lacks wheels for spacy/blis (needed by Kokoro). Recreate/Delete wipes installed packages.")
                 .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -84,27 +87,46 @@ struct RuntimeSettings: View {
             if runtime.servers.isEmpty {
                 Text("No servers. Add one below.").foregroundStyle(.secondary)
             }
-            ForEach(runtime.servers) { server in
+            ForEach(runtime.roleServers) { server in
                 ManagedServerRow(server: server).id(server.id)
             }
         }
     }
 
-    private var addSection: some View {
-        Section("Add") {
-            ForEach(ManagedServer.presets) { preset in
-                Button {
-                    runtime.addPreset(preset)
-                } label: {
-                    Label("Add “\(preset.name)”", systemImage: "plus.circle")
+    private var detectedEndpointsSection: some View {
+        Section("Other Local Endpoints") {
+            HStack {
+                Text("Scan common local server ports")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { model.scanLocalEndpoints() } label: {
+                    Label("Scan", systemImage: "arrow.clockwise")
                 }
             }
-            Button { runtime.addServer() } label: { Label("Add blank server", systemImage: "plus") }
+            if model.discoveredEndpoints.isEmpty {
+                Text("No compatible endpoints found.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(model.discoveredEndpoints) { endpoint in
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(endpoint.baseURL).font(.system(.body, design: .monospaced))
+                        Text(endpoint.modelIDs.isEmpty ? "OpenAI-compatible endpoint" : endpoint.modelIDs.joined(separator: ", "))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    Spacer()
+                    Menu("Use for…") {
+                        ForEach(ManagedServer.Role.primaryRoles) { role in
+                            Button(role.label) { model.useDetectedEndpoint(endpoint, for: role) }
+                        }
+                    }
+                }
+            }
         }
     }
 
     private var packagesSection: some View {
-        Section("Installed Packages (\(runtime.installedPackages.count))") {
+        DisclosureGroup("Installed Packages (\(runtime.installedPackages.count))") {
             HStack {
                 TextField("Filter packages…", text: $packageFilter)
                     .textFieldStyle(.roundedBorder)
@@ -146,28 +168,6 @@ struct RuntimeSettings: View {
         return f.isEmpty ? runtime.installedPackages : runtime.installedPackages.filter { $0.name.lowercased().contains(f) }
     }
 
-    private var discoveredSection: some View {
-        Section("Discovered Local Models") {
-            HStack {
-                Button("Scan") { model.scanLocalModels() }
-                Spacer()
-                Text("\(model.discoveredModels.count) found").font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(model.discoveredModels.prefix(40)) { entry in
-                HStack {
-                    Text(entry.name).font(.system(size: 11, design: .monospaced)).lineLimit(1)
-                    Spacer()
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(entry.path, forType: .string)
-                    } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help("Copy path")
-                }
-            }
-        }
-    }
-
     private var logSection: some View {
         Section("Logs") {
             if runtime.busy {
@@ -188,79 +188,212 @@ struct RuntimeSettings: View {
 private struct ManagedServerRow: View {
     @Environment(AppModel.self) private var model
     @State private var draft: ManagedServer
-    @State private var expanded = false
+    @State private var advanced = false
 
     init(server: ManagedServer) { _draft = State(initialValue: server) }
 
     private var runtime: Runtime { model.runtime }
-    private var running: Bool { runtime.isRunning(draft.id) }
+    private var status: ProcStatus {
+        let activeURL = normalized(endpointURL)
+        guard activeURL != normalized(draft.endpointURL) else { return runtime.status(draft.id) }
+        return model.discoveredEndpoints.contains { normalized($0.baseURL) == activeURL } ? .external : .configured
+    }
+
+    private var localStatus: ProcStatus { runtime.status(draft.id) }
+
+    private var managedActive: Bool {
+        switch status {
+        case .running, .starting, .stopping: true
+        default: false
+        }
+    }
+
+    private var endpointURL: String {
+        switch draft.role {
+        case .chat: model.settings.baseURL
+        case .audio: model.settings.audioBaseURL.isEmpty ? model.settings.baseURL : model.settings.audioBaseURL
+        case .embedding: model.settings.embeddingBaseURL.isEmpty ? model.settings.baseURL : model.settings.embeddingBaseURL
+        case .none: ""
+        }
+    }
+
+    private func normalized(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                TextField("Name", text: $draft.name)
-                TextField("pip package", text: $draft.pipPackage)
-                TextField("Command", text: $draft.command, axis: .vertical)
-                    .font(.system(size: 12, design: .monospaced))
-                    .lineLimit(1...3)
-                TextField("Host", text: $draft.host)
-                NumberField("Port", value: $draft.port, range: 1024...65535, step: 1)
-                Picker("Role", selection: $draft.role) {
-                    ForEach(ManagedServer.Role.allCases) { Text($0.label).tag($0) }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: roleIcon).foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(draft.role.label).fontWeight(.semibold)
+                    Text(draft.name).font(.caption).foregroundStyle(.secondary)
                 }
+                Spacer()
+                statusLabel
+                actionButton
+            }
+            modelPicker
+            LabeledContent("Active endpoint", value: endpointURL.isEmpty ? "Not configured" : endpointURL)
+                .font(.caption)
+            if case .failed(let message) = status {
+                Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
+            HStack {
                 Toggle("Start on launch", isOn: Binding(
                     get: { draft.autostart ?? false },
                     set: { draft.autostart = $0 }
                 ))
-                if !draft.note.isEmpty {
-                    Text(draft.note).font(.caption).foregroundStyle(.secondary)
+                .toggleStyle(.switch)
+                Spacer()
+                let primary = Runtime.primaryPackageName(draft.pipPackage)
+                let version = primary.flatMap { runtime.installedVersion(of: $0) }
+                if let version {
+                    Text("v\(version)").font(.caption.monospaced()).foregroundStyle(.secondary)
                 }
-                HStack {
-                    let primary = Runtime.primaryPackageName(draft.pipPackage)
-                    let version = primary.flatMap { runtime.installedVersion(of: $0) }
-                    if let version {
-                        Label("v\(version)", systemImage: "checkmark.circle")
-                            .font(.caption).foregroundStyle(.green)
-                        Button("Update") { runtime.install(package: draft.pipPackage) }
-                            .disabled(runtime.busy || !runtime.venvReady || draft.pipPackage.isEmpty)
-                    } else {
-                        Button("Install") { runtime.install(package: draft.pipPackage) }
-                            .disabled(runtime.busy || !runtime.venvReady || draft.pipPackage.isEmpty)
+                Button(version == nil ? "Install" : "Update") {
+                    runtime.install(package: draft.pipPackage)
+                }
+                .disabled(runtime.busy || !runtime.venvReady || draft.pipPackage.isEmpty)
+                .help("Install or update this server runtime")
+            }
+            DisclosureGroup("Server options", isExpanded: $advanced) {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("Server name", text: $draft.name)
+                    TextField("Python package", text: $draft.pipPackage)
+                        .disabled(managedActive)
+                    TextField("Launch command", text: $draft.command, axis: .vertical)
+                        .font(.system(size: 12, design: .monospaced))
+                        .lineLimit(1...3)
+                        .disabled(managedActive)
+                    TextField("Bind address", text: $draft.host)
+                        .disabled(managedActive)
+                    NumberField("Port", value: $draft.port, range: 1024...65535, step: 1)
+                        .disabled(managedActive)
+                    if !draft.note.isEmpty {
+                        Text(draft.note).font(.caption).foregroundStyle(.secondary)
                     }
-                    Button(role: .destructive) { runtime.delete(draft.id) } label: { Text("Delete") }
-                    Spacer()
+                }
+                .padding(.top, 6)
+            }
+        }
+        .onChange(of: draft) { runtime.update(draft) }
+    }
+
+    private var roleIcon: String {
+        switch draft.role {
+        case .chat: "bubble.left.and.bubble.right"
+        case .embedding: "point.3.connected.trianglepath.dotted"
+        case .audio: "waveform"
+        case .none: "server.rack"
+        }
+    }
+
+    @ViewBuilder
+    private var statusLabel: some View {
+        switch localStatus {
+        case .stopped:
+            Label("Stopped", systemImage: "circle").foregroundStyle(.secondary)
+        case .starting:
+            Label("Loading model", systemImage: "arrow.trianglehead.2.clockwise")
+                .foregroundStyle(.orange)
+        case .running:
+            Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+        case .external:
+            Label("External", systemImage: "link").foregroundStyle(.blue)
+        case .configured:
+            Label("Configured", systemImage: "link").foregroundStyle(.secondary)
+        case .stopping:
+            Label("Stopping", systemImage: "stop.circle").foregroundStyle(.orange)
+        case .failed(let message):
+            Label("Needs attention", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .help(message)
+        }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        switch localStatus {
+        case .running:
+            Button("Stop", role: .destructive) { runtime.stop(draft.id) }
+        case .starting, .stopping:
+            ProgressView().controlSize(.small)
+        case .external:
+            Button("Use Local") { model.startServer(draft) }
+                .help("Use the endpoint already listening on this server's port")
+        case .configured:
+            Button("Start local") { model.startServer(draft) }
+                .disabled(draft.command.isEmpty)
+        case .stopped, .failed:
+            Button(status == .external || status == .configured ? "Start local" : "Start") { model.startServer(draft) }
+                .disabled(draft.command.isEmpty)
+        }
+    }
+
+    @ViewBuilder
+    private var modelPicker: some View {
+        @Bindable var settings = model.settings
+        VStack(alignment: .leading, spacing: 5) {
+            if draft.supportsModelSelection {
+                HStack {
+                    TextField("Model path or Hugging Face ID", text: modelPathBinding)
+                        .font(.system(size: 12, design: .monospaced))
+                        .disabled(managedActive)
+                    Menu {
+                        ForEach(model.discoveredModels.prefix(100)) { entry in
+                            Button(entry.name) { selectModel(entry.path) }
+                        }
+                        if model.discoveredModels.isEmpty {
+                            Text("No local models detected")
+                        }
+                    } label: {
+                        Image(systemName: "square.grid.2x2")
+                    }
+                    .help("Choose a detected local model")
+                    .disabled(model.discoveredModels.isEmpty)
                 }
             }
-            .onChange(of: draft) { runtime.update(draft) }
-        } label: {
-            HStack(spacing: 10) {
-                statusDot
-                Text(draft.name).fontWeight(.medium)
-                Spacer()
-                if running {
-                    Button("Stop", role: .destructive) { runtime.stop(draft.id) }
+            switch draft.role {
+            case .chat:
+                LabeledContent("Chat model", value: settings.model.isEmpty ? "Not selected" : settings.model)
+            case .embedding:
+                LabeledContent("Embedding model", value: settings.embeddingModel.isEmpty ? "Not selected" : settings.embeddingModel)
+            case .audio:
+                if model.audioModels.isEmpty {
+                    HStack {
+                        LabeledContent("Speech models", value: "Not detected")
+                        Button("Scan") { model.refreshAudioModels() }
+                    }
                 } else {
-                    Button("Start") { model.startServer(draft) }
-                        .disabled(draft.command.isEmpty)
+                    Picker("Speech to text", selection: $settings.sttModel) {
+                        ForEach(model.sttCandidates) { Text($0.id).tag($0.id) }
+                    }
+                    Picker("Text to speech", selection: $settings.ttsModel) {
+                        ForEach(model.ttsCandidates) { Text($0.id).tag($0.id) }
+                    }
                 }
-                Menu {
-                    Button("Use for Chat") { model.useForChat(draft) }
-                    Button("Use for Audio") { model.useForAudio(draft) }
-                    Button("Use for Embeddings") { model.useForEmbeddings(draft) }
-                } label: { Image(systemName: "arrow.right.circle") }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
+            case .none:
+                EmptyView()
             }
         }
     }
 
-    private var statusDot: some View {
-        let color: Color = switch runtime.status(draft.id) {
-        case .running: .green
-        case .starting: .yellow
-        case .failed: .red
-        case .stopped: .secondary
+    private var modelPathBinding: Binding<String> {
+        Binding(
+            get: { draft.modelPath ?? "" },
+            set: { selectModel($0) }
+        )
+    }
+
+    private func selectModel(_ path: String) {
+        var updated = draft
+        updated.setModelPath(path)
+        draft = updated
+        switch updated.role {
+        case .chat: model.settings.model = path
+        case .embedding: model.settings.embeddingModel = path
+        case .audio, .none: break
         }
-        return Circle().fill(color).frame(width: 8, height: 8)
     }
 }

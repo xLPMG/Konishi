@@ -13,6 +13,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
             case .embedding: "Embedding endpoint"
             }
         }
+
+        static let primaryRoles: [Role] = [.chat, .embedding, .audio]
     }
 
     var id = UUID()
@@ -34,7 +36,51 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
             .replacingOccurrences(of: #"\s*--host(?:=|\s+)\S+"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s*--port(?:=|\s+)\d+"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
-        return stripped + " --host \(host)" + " --port \(port)"
+        return stripped + " --host \(Self.shellQuote(host))" + " --port \(port)"
+    }
+
+    var supportsModelSelection: Bool {
+        let backend = pipPackage.lowercased()
+        return command.contains("--model") || backend.contains("mlx-lm") || backend.contains("mlx-vlm") || backend.contains("mlx-embeddings")
+    }
+
+    var modelPath: String? {
+        let pattern = #"(--model(?:=|\s+))(?:"([^"]*)"|'([^']*)'|(\S+))"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)) else { return nil }
+        let source = command as NSString
+        for group in 2...4 where match.range(at: group).location != NSNotFound {
+            return source.substring(with: match.range(at: group))
+        }
+        return nil
+    }
+
+    mutating func setModelPath(_ path: String) {
+        let pattern = #"(--model(?:=|\s+))(?:"([^"]*)"|'([^']*)'|(\S+))"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        let fullRange = NSRange(command.startIndex..., in: command)
+        let value = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let match = regex.firstMatch(in: command, range: fullRange) {
+            let prefix = (command as NSString).substring(with: match.range(at: 1))
+            let replacement = value.isEmpty ? "" : prefix + Self.shellQuote(value)
+            command = (command as NSString).replacingCharacters(in: match.range, with: replacement)
+                .trimmingCharacters(in: .whitespaces)
+        } else if !value.isEmpty {
+            command += " --model \(Self.shellQuote(value))"
+        }
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    var endpointURL: String {
+        let connectHost = ["0.0.0.0", "::", "[::]"].contains(host) ? "127.0.0.1" : host
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = connectHost
+        components.port = port
+        return components.url?.absoluteString ?? "http://127.0.0.1:\(port)"
     }
 
     init(

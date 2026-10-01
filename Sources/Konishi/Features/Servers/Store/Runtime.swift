@@ -6,6 +6,9 @@ enum ProcStatus: Equatable, Sendable {
     case stopped
     case starting
     case running
+    case external
+    case configured
+    case stopping
     case failed(String)
 }
 
@@ -35,6 +38,7 @@ final class Runtime {
         var pid: Int32
         var port: Int
         var name: String
+        var command: String? = nil
     }
 
     /// Servers Konishi believes it started (this session or a previous one), keyed by id.
@@ -54,6 +58,12 @@ final class Runtime {
 
     private var venvBinPath: String { Paths.venv.appendingPathComponent("bin").path }
     private var pythonBinPath: String { Paths.venv.appendingPathComponent("bin/python").path }
+
+    var roleServers: [ManagedServer] {
+        ManagedServer.Role.primaryRoles.compactMap { role in
+            servers.first { $0.role == role }
+        }
+    }
 
     var venvReady: Bool { FileManager.default.fileExists(atPath: pythonBinPath) }
 
@@ -82,19 +92,17 @@ final class Runtime {
     func adoptRunning() {
         for server in servers where processes[server.id] == nil {
             if let rec = records[server.id], Self.recordOwnsServer(rec) {
-                statuses[server.id] = .running   // ours from a prior session (tentative until HTTP-verified)
+                statuses[server.id] = .starting  // ours from a prior session (tentative until HTTP-verified)
                 startTailing(server.id)
                 verifyAdopted(server, port: rec.port)
             } else if Self.portInUse(server.port) {
                 records[server.id] = nil         // any stale PID no longer owns this port
-                statuses[server.id] = .running   // tentative — started outside Konishi, or a zombie
-                verifyAdopted(server)
+                statuses[server.id] = .external  // detected, but not owned by Konishi
+                verifyAdopted(server, tailLog: false)
             } else {
                 records[server.id] = nil         // gone
-                if isRunning(server.id) {
-                    stopTailing(server.id)
-                    statuses[server.id] = .stopped
-                }
+                stopTailing(server.id)
+                statuses[server.id] = .stopped
             }
         }
         persistRecords()
@@ -107,42 +115,49 @@ final class Runtime {
     /// A bound port can be a crashed server still holding the socket. Confirm it answers HTTP;
     /// otherwise mark it failed so the UI doesn't claim it's usable. (It stays stoppable — we
     /// still hold its PID/port.)
-    private func verifyAdopted(_ server: ManagedServer, port: Int? = nil) {
+    private func verifyAdopted(_ server: ManagedServer, port: Int? = nil, tailLog: Bool = true) {
         let port = port ?? server.port
         let id = server.id
         Task { [weak self] in
-            let alive = await Self.httpAlive(port: port)
+            let alive = await Self.httpAlive(host: server.host, port: port)
             guard let self, self.processes[id] == nil else { return }
             if alive {
-                self.startTailing(id)   // follow the log the previous launch is still writing
+                self.statuses[id] = tailLog ? .running : .external
+                if tailLog { self.startTailing(id) }
             } else {
                 self.statuses[id] = .failed("not responding")
             }
         }
     }
 
-    /// True if something answers HTTP on the port (any status, even 404); false on empty reply / refusal.
-    private static func httpAlive(port: Int) async -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/v1/models") else { return false }
+    /// True when the endpoint responds; auth challenges are reachable, missing routes and server errors are not.
+    private static func httpAlive(host: String = "127.0.0.1", port: Int) async -> Bool {
+        let connectHost = ["0.0.0.0", "::", "[::]"].contains(host) ? "127.0.0.1" : host
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = connectHost
+        components.port = port
+        components.path = "/v1/models"
+        guard let url = components.url else { return false }
         var req = URLRequest(url: url)
         req.timeoutInterval = 4
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
-            return (resp as? HTTPURLResponse) != nil
+            guard let response = resp as? HTTPURLResponse else { return false }
+            return response.statusCode != 404 && response.statusCode < 500
         } catch {
             return false
         }
     }
 
     func stopAll() {
-        // Stop processes we launched, PID-tracked orphans, and anything else marked running.
-        let ids = Set(processes.keys).union(records.keys).union(servers.map(\.id))
-        for id in ids where processes[id] != nil || records[id] != nil || isRunning(id) { stop(id) }
+        let ids = Set(processes.keys).union(records.keys)
+        for id in ids { stop(id) }
     }
 
     func status(_ id: UUID) -> ProcStatus { statuses[id] ?? .stopped }
     func isRunning(_ id: UUID) -> Bool {
-        switch status(id) { case .running, .starting: true; default: false }
+        switch status(id) { case .running, .starting, .external, .stopping: true; default: false }
     }
 
     // MARK: - Environment
@@ -199,20 +214,25 @@ final class Runtime {
         do { try p.run(); p.waitUntilExit(); return p.terminationStatus == 0 } catch { return false }
     }
 
-    private static func portInUse(_ port: Int) -> Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-lc", "lsof -ti tcp:\(port) >/dev/null 2>&1"]
-        p.standardOutput = Pipe(); p.standardError = Pipe()
-        do { try p.run(); p.waitUntilExit(); return p.terminationStatus == 0 } catch { return false }
-    }
+    private static func portInUse(_ port: Int) -> Bool { !listeningPIDs(port).isEmpty }
 
-    private static func killPort(_ port: Int) {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        p.arguments = ["-lc", "p=$(lsof -ti tcp:\(port) 2>/dev/null); [ -n \"$p\" ] && kill -9 $p"]
-        p.standardOutput = Pipe(); p.standardError = Pipe()
-        try? p.run(); p.waitUntilExit()
+    private static func listeningPIDs(_ port: Int) -> [Int32] {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        proc.arguments = ["-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            return String(decoding: data, as: UTF8.self)
+                .split(whereSeparator: \.isNewline)
+                .compactMap { Int32($0) }
+        } catch {
+            return []
+        }
     }
 
     /// True if a process with this PID currently exists (no signal sent). EPERM means it exists
@@ -227,10 +247,20 @@ final class Runtime {
         kill(pid, SIGKILL)
     }
 
+    private static func terminateServer(pid: Int32, port: Int) async {
+        guard listeningPIDs(port).contains(pid) else { return }
+        kill(pid, SIGTERM)
+        for _ in 0..<20 {
+            guard listeningPIDs(port).contains(pid) else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        if listeningPIDs(port).contains(pid) { killPID(pid) }
+    }
+
     /// A persisted record is only trustworthy if the PID is alive AND still holds its recorded
     /// port — this guards against a PID that the OS recycled to an unrelated process after a reboot.
     private static func recordOwnsServer(_ rec: RunningRecord) -> Bool {
-        pidAlive(rec.pid) && portInUse(rec.port)
+        pidAlive(rec.pid) && listeningPIDs(rec.port).contains(rec.pid)
     }
 
     func install(package: String) {
@@ -420,61 +450,125 @@ final class Runtime {
     /// Explicitly (re)launch a server. Frees the port first, so this always yields a fresh
     /// process — used by the manual Start button. For launch-time / Start-All, prefer
     /// `ensureRunning` which adopts an already-healthy instance instead of reloading the model.
-    func start(_ server: ManagedServer) {
-        guard processes[server.id] == nil else { return }
+    func start(_ server: ManagedServer) async -> Bool {
+        guard processes[server.id] == nil else { return false }
+        guard !Self.portInUse(server.port) else {
+            let message = "Port \(server.port) is already in use; no process was stopped. Choose another port or connect to the existing endpoint."
+            statuses[server.id] = .failed(message)
+            appendLog("✗ \(server.name): \(message)\n")
+            return false
+        }
         statuses[server.id] = .starting
         EmbedServer.ensureInstalled()   // materialise the bundled mlx embeddings server script
-        // Free the port first (kill any orphaned holder), pause for the kernel to release it, then exec.
         let command = server.launchCommand
-        let freePort = "p=$(lsof -ti tcp:\(server.port) 2>/dev/null); if [ -n \"$p\" ]; then kill -9 $p 2>/dev/null; sleep 0.6; fi; "
-        let full = freePort + "export PATH=\"\(venvBinPath):$PATH\"; exec \(command)"
+        let full = "export PATH=\"\(venvBinPath):$PATH\"; exec \(command)"
         appendLog("▶︎ \(server.name): \(command)\n")
 
         guard let proc = launch(full, id: server.id, isServer: true, logFile: Paths.serverLog(server.id)) else {
             statuses[server.id] = .failed("Could not launch")
-            return
+            return false
         }
         processes[server.id] = proc
-        statuses[server.id] = .running
         // `exec` replaces the login shell, so the shell PID is the server's PID.
-        records[server.id] = RunningRecord(id: server.id, pid: proc.processIdentifier, port: server.port, name: server.name)
+        records[server.id] = RunningRecord(
+            id: server.id, pid: proc.processIdentifier, port: server.port,
+            name: server.name, command: server.launchCommand
+        )
         persistRecords()
         startTailing(server.id)
+        return await waitUntilReady(server, process: proc)
     }
 
     /// Make sure a server is running WITHOUT creating a duplicate or needlessly reloading the
     /// model: adopt an instance we already own (by PID) or a healthy one on the port, else launch.
     /// Used by autostart and Start-All.
-    func ensureRunning(_ server: ManagedServer) async {
-        if processes[server.id]?.isRunning == true { return }          // we already run it this session
-        if let rec = records[server.id], Self.recordOwnsServer(rec) {   // ours from a previous session
-            statuses[server.id] = .running
-            startTailing(server.id)
-            return
+    func ensureRunning(_ server: ManagedServer) async -> Bool {
+        if let proc = processes[server.id], proc.isRunning {
+            return await waitUntilReady(server, process: proc)
         }
-        records[server.id] = nil                                       // drop any stale record before (re)launching
-        if Self.portInUse(server.port), await Self.httpAlive(port: server.port) {
-            statuses[server.id] = .running                             // healthy instance started outside Konishi
-            startTailing(server.id)
-            return
+        if let rec = records[server.id], Self.recordOwnsServer(rec) {
+            let configurationChanged = rec.port != server.port
+                || (rec.command != nil && rec.command != server.launchCommand)
+            if configurationChanged {
+                await Self.terminateServer(pid: rec.pid, port: rec.port)
+                if Self.listeningPIDs(rec.port).contains(rec.pid) {
+                    let message = "The previous server is still stopping. Retry Start in a moment."
+                    statuses[server.id] = .failed(message)
+                    return false
+                }
+                records[server.id] = nil
+                persistRecords()
+            } else if await Self.httpAlive(port: rec.port) {
+                statuses[server.id] = .running
+                startTailing(server.id)
+                return true
+            } else {
+                await Self.terminateServer(pid: rec.pid, port: rec.port)
+                records[server.id] = nil
+                persistRecords()
+            }
         }
-        start(server)                                                  // nothing alive → launch (reclaims a dead port)
+        records[server.id] = nil
+        if Self.portInUse(server.port) {
+            if await Self.httpAlive(host: server.host, port: server.port) {
+                statuses[server.id] = .external
+                return true
+            }
+            let message = "Port \(server.port) is occupied, but the endpoint is not responding. No process was stopped."
+            statuses[server.id] = .failed(message)
+            appendLog("✗ \(server.name): \(message)\n")
+            return false
+        }
+        return await start(server)
+    }
+
+    private func waitUntilReady(_ server: ManagedServer, process: Process) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(300))
+        while ContinuousClock.now < deadline {
+            guard processes[server.id] === process, process.isRunning, status(server.id) != .stopping else { return false }
+            if await Self.httpAlive(host: server.host, port: server.port) {
+                guard processes[server.id] === process else { return false }
+                statuses[server.id] = .running
+                appendLog("✓ \(server.name) is ready at http://127.0.0.1:\(server.port)\n")
+                return true
+            }
+            try? await Task.sleep(for: .seconds(1))
+        }
+        guard processes[server.id] === process, process.isRunning else { return false }
+        let message = "The server has not responded after 5 minutes. It is still running; check the log, retry Start, or Stop it."
+        statuses[server.id] = .failed(message)
+        appendLog("✗ \(server.name): \(message)\n")
+        return false
     }
 
     func stop(_ id: UUID) {
         stopTailing(id)
         if let proc = processes[id] {
+            statuses[id] = .stopping
             proc.terminate()
-            processes[id] = nil
+            let pid = proc.processIdentifier
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, self.processes[id] === proc, proc.isRunning else { return }
+                kill(pid, SIGKILL)
+            }
         } else if let rec = records[id], Self.recordOwnsServer(rec) {
-            Self.killPID(rec.pid)        // orphan from a prior session — kill by PID (works even if the port was edited)
-            Self.killPort(rec.port)
-        } else if let port = servers.first(where: { $0.id == id })?.port {
-            Self.killPort(port)          // last resort: kill whatever holds the configured port
+            statuses[id] = .stopping
+            Task { [weak self] in
+                await Self.terminateServer(pid: rec.pid, port: rec.port)
+                guard let self, self.records[id]?.pid == rec.pid else { return }
+                self.records[id] = nil
+                self.persistRecords()
+                self.statuses[id] = .stopped
+            }
+            return
+        } else if case .external = status(id) {
+            return
+        } else {
+            records[id] = nil
         }
-        records[id] = nil
         persistRecords()
-        statuses[id] = .stopped
+        if processes[id] == nil { statuses[id] = .stopped }
     }
 
     // MARK: - Server log tailing (servers write to a file, not a pipe that dies with Konishi)
@@ -506,6 +600,16 @@ final class Runtime {
 
     func addServer() {
         servers.append(ManagedServer(name: "New Server", pipPackage: "", command: "", host: "127.0.0.1", port: 8090, role: .none, note: ""))
+        saveServers()
+    }
+
+    func ensureRoleServers() {
+        for role in ManagedServer.Role.primaryRoles where !servers.contains(where: { $0.role == role }) {
+            guard let preset = ManagedServer.presets.first(where: { $0.role == role }) else { continue }
+            var server = preset
+            server.id = UUID()
+            servers.append(server)
+        }
         saveServers()
     }
 
@@ -581,15 +685,20 @@ final class Runtime {
 
     private func handleTermination(id: UUID?, isServer: Bool, code: Int32) {
         if isServer, let id {
+            stopTailing(id)
             processes[id] = nil
             records[id] = nil
             persistRecords()
+            let name = servers.first(where: { $0.id == id })?.name ?? "Server"
             switch statuses[id] {
             case .running, .starting:
                 statuses[id] = code == 0 ? .stopped : .failed("Exited (code \(code))")
+            case .failed(let message):
+                statuses[id] = .failed(message)
             default:
                 statuses[id] = .stopped
             }
+            if code != 0 { appendLog("✗ \(name) exited with code \(code). Check its server log above.\n") }
         } else {
             opProcess = nil
             busy = false

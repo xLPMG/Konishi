@@ -114,11 +114,10 @@ struct RootView: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(0.08)))
             }
         }
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .toolbarBackground(.regularMaterial, for: .windowToolbar)
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
     }
 }
 

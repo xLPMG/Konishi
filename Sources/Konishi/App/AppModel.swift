@@ -48,6 +48,7 @@ final class AppModel {
     var audioVoices: [String] = []
     var connectionOK: Bool?
     var discoveredModels: [LocalModels.Entry] = []
+    var discoveredEndpoints: [DetectedEndpoint] = []
 
     let memoryStore = MemoryStore()
     let stm = STMStore()

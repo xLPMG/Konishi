@@ -41,4 +41,28 @@ extension AppModel {
             self?.discoveredModels = found
         }
     }
+
+    func scanLocalEndpoints() {
+        Task { [weak self] in
+            let found = await LocalEndpointDiscovery.scan()
+            self?.discoveredEndpoints = found
+        }
+    }
+
+    func useDetectedEndpoint(_ endpoint: DetectedEndpoint, for role: ManagedServer.Role) {
+        switch role {
+        case .chat:
+            settings.baseURL = endpoint.baseURL
+            if let id = endpoint.modelIDs.first { settings.model = id }
+            refreshServerInfo()
+        case .embedding:
+            settings.embeddingBaseURL = endpoint.baseURL
+            if let id = endpoint.modelIDs.first { settings.embeddingModel = id }
+        case .audio:
+            settings.audioBaseURL = endpoint.baseURL
+            refreshAudioModels()
+        case .none:
+            break
+        }
+    }
 }
