@@ -60,7 +60,7 @@ extension AppModel {
 
     private func ensureConversationDictation() {
         guard conversationActive, !voice.isListening else { return }
-        voice.startNativeDictation { [weak self] update in
+        voice.startNativeDictation(locale: settings.conversationSpeechLocale) { [weak self] update in
             self?.onConversationDictation(update)
         }
     }
@@ -101,7 +101,7 @@ extension AppModel {
             guard let self, self.conversationActive, self.voiceState != .idle,
                 self.liveTranscript == prefix, !self.voice.isListening
             else { return }
-            self.voice.startNativeDictation { [weak self] update in
+            self.voice.startNativeDictation(locale: self.settings.conversationSpeechLocale) { [weak self] update in
                 guard let self else { return }
                 let continuation = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let combined = continuation.isEmpty ? prefix : prefix + " " + continuation

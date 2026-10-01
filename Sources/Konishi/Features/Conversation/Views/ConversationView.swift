@@ -2,14 +2,13 @@ import SwiftUI
 
 struct VoiceOrb: View {
     let state: AppModel.VoiceState
-    var accent: Color
     @State private var time = Date().timeIntervalSinceReferenceDate
 
     /// Main internal glow colour.
     private var tint: Color {
         switch state {
         case .idle: return Color(white: 0.55)
-        case .listening: return accent
+        case .listening: return .indigo
         case .thinking: return .purple
         case .speaking: return .green
         }
@@ -19,7 +18,7 @@ struct VoiceOrb: View {
     private var tint2: Color {
         switch state {
         case .idle: return Color(white: 0.35)
-        case .listening: return accent.opacity(0.85)
+        case .listening: return .purple
         case .thinking: return .blue
         case .speaking: return .mint
         }
@@ -29,7 +28,7 @@ struct VoiceOrb: View {
     private var tint3: Color {
         switch state {
         case .idle: return Color(white: 0.7)
-        case .listening: return .cyan
+        case .listening: return Color(red: 0.84, green: 0.78, blue: 1.0)
         case .thinking: return .pink
         case .speaking: return .teal
         }
@@ -128,21 +127,14 @@ struct ConversationView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        let state = statePresentation
         ZStack {
-            KonishiPalette.canvas.ignoresSafeArea()
+            Color.black.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 Spacer(minLength: 24)
 
-                VStack(spacing: 12) {
-                    Label(state.title, systemImage: state.symbol)
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(state.tint)
-
-                    VoiceOrb(state: model.voiceState, accent: model.currentAccent)
-                        .frame(height: 260)
-                }
+                VoiceOrb(state: model.voiceState)
+                    .frame(height: 260)
 
                 if let error = model.voice.lastError {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -177,15 +169,6 @@ struct ConversationView: View {
         // The model can hang up itself via the end_conversation tool; close the sheet when it does.
         .onChange(of: model.conversationActive) { _, active in
             if !active { dismiss() }
-        }
-    }
-
-    private var statePresentation: (title: String, symbol: String, tint: Color) {
-        switch model.voiceState {
-        case .idle: ("Ready", "waveform", .secondary)
-        case .listening: ("Listening", "waveform", model.currentAccent)
-        case .thinking: ("Thinking", "ellipsis", .orange)
-        case .speaking: ("Speaking", "speaker.wave.2", .green)
         }
     }
 }

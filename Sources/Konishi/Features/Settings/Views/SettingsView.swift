@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import AppKit
+import Speech
 
 struct SettingsView: View {
     @State private var selection: SettingsSection? = .endpoints
@@ -470,6 +471,13 @@ private struct VoiceSettings: View {
             }
 
             Section("Conversation") {
+                Picker("Recognition language", selection: $settings.conversationSpeechLocale) {
+                    ForEach(speechLocales, id: \.identifier) { locale in
+                        Text(speechLocaleLabel(locale)).tag(locale.identifier)
+                    }
+                }
+                Text("Voice conversations use Apple live recognition with this language. The Speech-to-Text source above applies to dictation.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Allow spoken interruptions", isOn: $settings.conversationBargeIn)
                 if settings.conversationBargeIn {
                     Toggle("Distinguish acknowledgements on device", isOn: $settings.conversationBackchannelANE)
@@ -548,6 +556,18 @@ private struct VoiceSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var speechLocales: [Locale] {
+        var locales = SFSpeechRecognizer.supportedLocales()
+        locales.insert(Locale(identifier: model.settings.conversationSpeechLocale))
+        return locales.sorted {
+            speechLocaleLabel($0).localizedStandardCompare(speechLocaleLabel($1)) == .orderedAscending
+        }
+    }
+
+    private func speechLocaleLabel(_ locale: Locale) -> String {
+        Locale.current.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
     }
 }
 

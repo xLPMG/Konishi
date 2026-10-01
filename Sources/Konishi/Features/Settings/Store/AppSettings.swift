@@ -258,6 +258,9 @@ final class AppSettings {
     var conversationBackchannelANE: Bool {
         didSet { defaults.set(conversationBackchannelANE, forKey: Keys.conversationBackchannelANE) }
     }
+    var conversationSpeechLocale: String {
+        didSet { defaults.set(conversationSpeechLocale, forKey: Keys.conversationSpeechLocale) }
+    }
     var sttSource: AudioSource {
         didSet { defaults.set(sttSource.rawValue, forKey: Keys.sttSource) }
     }
@@ -415,6 +418,7 @@ final class AppSettings {
         self.speechRate = defaults.object(forKey: Keys.speechRate) as? Double ?? 0.5
         self.conversationBargeIn = defaults.object(forKey: Keys.conversationBargeIn) as? Bool ?? true
         self.conversationBackchannelANE = defaults.object(forKey: Keys.conversationBackchannelANE) as? Bool ?? true
+        self.conversationSpeechLocale = defaults.string(forKey: Keys.conversationSpeechLocale) ?? "en-US"
         self.sttSource = AudioSource(rawValue: defaults.string(forKey: Keys.sttSource) ?? "") ?? .native
         self.ttsSource = AudioSource(rawValue: defaults.string(forKey: Keys.ttsSource) ?? "") ?? .native
         self.sttModel = defaults.string(forKey: Keys.sttModel) ?? "mlx-community/whisper-large-v3-turbo-asr-fp16"
@@ -546,6 +550,7 @@ final class AppSettings {
         static let speechRate = "konishi.speechRate"
         static let conversationBargeIn = "konishi.conversationBargeIn"
         static let conversationBackchannelANE = "konishi.conversationBackchannelANE"
+        static let conversationSpeechLocale = "konishi.conversationSpeechLocale"
         static let sttSource = "konishi.sttSource"
         static let ttsSource = "konishi.ttsSource"
         static let sttModel = "konishi.sttModel"

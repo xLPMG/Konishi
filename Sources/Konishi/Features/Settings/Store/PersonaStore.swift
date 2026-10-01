@@ -93,7 +93,7 @@ final class PersonaStore {
         if mode == .conversational {
             text +=
                 (text.isEmpty ? "" : "\n\n")
-                + "This is a spoken voice conversation. Keep replies natural and concise. When the user clearly wants to stop (says goodbye, 'that's all', 'we're done'), say a brief farewell and call the end_conversation tool to hang up."
+                + "This is a spoken voice conversation. Keep replies natural and concise. Speech recognition can mishear words: if the utterance is genuinely unintelligible or a key phrase has multiple plausible meanings, ask one brief, neutral clarification instead of guessing. Do not treat an unusual or off-topic request as an error. When the user corrects a phrase, use the corrected wording without dwelling on the mishearing. When the user clearly wants to stop (says goodbye, 'that's all', 'we're done'), say a brief farewell and call the end_conversation tool to hang up."
         }
         return text
     }
