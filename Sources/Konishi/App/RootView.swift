@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showFiles = false
     @State private var showConversation = false
 
@@ -117,8 +118,8 @@ struct RootView: View {
                 .padding(.vertical, 6)
             }
         }
-        .toolbarBackground(.regularMaterial, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
+        .toolbarBackground(.hidden, for: .windowToolbar)
+        .toolbarColorScheme(colorScheme, for: .windowToolbar)
     }
 }
 

@@ -64,47 +64,44 @@ struct StatsBar: View {
 
     var body: some View {
         let stats = model.selectedConversation?.lastStats
-        HStack(spacing: 14) {
-            ModelChip()
-            Rectangle().fill(KonishiPalette.border).frame(width: 1, height: 13)
+        HStack(spacing: 7) {
+            StatBubble { ModelChip() }
             if model.isStreaming {
-                Label("Generating", systemImage: "circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.green.opacity(0.1), in: Capsule())
-                    .symbolEffect(.pulse)
+                StatBubble {
+                    Label("Generating", systemImage: "circle.fill")
+                        .foregroundStyle(.green)
+                        .symbolEffect(.pulse)
+                }
             }
             if !model.activeToolNames.isEmpty {
-                Label("\(model.activeToolNames.count) tools", systemImage: "wrench.and.screwdriver")
-                    .foregroundStyle(model.currentAccent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(model.currentAccent.opacity(0.1), in: Capsule())
-                    .help("Tools available: " + model.activeToolNames.joined(separator: ", "))
+                StatBubble {
+                    Label("\(model.activeToolNames.count) tools", systemImage: "wrench.and.screwdriver")
+                        .foregroundStyle(model.currentAccent)
+                        .help("Tools available: " + model.activeToolNames.joined(separator: ", "))
+                }
             }
             if let s = model.selectedConversation?.summary, !s.isEmpty {
-                Label("compressed", systemImage: "arrow.down.right.and.arrow.up.left")
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(KonishiPalette.surface, in: Capsule())
-                    .help("Older turns folded into a rolling summary")
+                StatBubble {
+                    Label("compressed", systemImage: "arrow.down.right.and.arrow.up.left")
+                        .help("Older turns folded into a rolling summary")
+                }
             }
             if let ttft = stats?.timeToFirstToken {
-                metric("bolt", String(format: "%.0f ms", ttft * 1000))
+                metric("bolt", String(format: "%.0f ms", ttft * 1000), tint: .yellow, weight: .bold)
             }
             if let tps = stats?.tokensPerSecond {
-                metric("gauge.with.dots.needle.67percent", String(format: "%.1f tok/s", tps))
+                metric("clock", String(format: "%.1f tok/s", tps), tint: .green)
             }
             if let ct = stats?.completionTokens {
                 metric("text.word.spacing", "\(ct) tok")
             }
             Spacer()
             if model.connectionOK == false {
-                Label("No server", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-                    .help("Can't reach the model server. Check Settings › Endpoints.")
+                StatBubble {
+                    Label("No server", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .help("Can't reach the model server. Check Settings › Endpoints.")
+                }
             }
         }
         .font(.caption)
@@ -115,8 +112,31 @@ struct StatsBar: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func metric(_ symbol: String, _ text: String) -> some View {
-        Label(text, systemImage: symbol).monospacedDigit()
+    private func metric(
+        _ symbol: String,
+        _ text: String,
+        tint: Color = .secondary,
+        weight: Font.Weight = .regular
+    ) -> some View {
+        StatBubble {
+            Label(text, systemImage: symbol)
+                .monospacedDigit()
+                .fontWeight(weight)
+                .foregroundStyle(tint)
+        }
+    }
+}
+
+private struct StatBubble<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .font(.caption)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(KonishiPalette.border.opacity(0.5), lineWidth: 1))
     }
 }
 

@@ -11,26 +11,38 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
 
     var body: some View {
-        messageList
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                if let error = model.errorMessage { errorBanner(error) }
-                if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
-                if model.isStreaming, let activity = model.activity { activityLine(activity) }
-                if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
-                StatsBar()
-                attachmentStrip
-                inputBar
+        HStack(spacing: 0) {
+            messageList
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 0) {
+                        if let error = model.errorMessage { errorBanner(error) }
+                        if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
+                        if model.isStreaming, let activity = model.activity { activityLine(activity) }
+                        if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
+                        StatsBar()
+                        attachmentStrip
+                        inputBar
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if showTaskBoard {
+                ConversationTaskBoard()
+                    .environment(model)
+                    .frame(minWidth: 270, idealWidth: 330, maxWidth: 420)
+                    .frame(maxHeight: .infinity)
+                    .background(KonishiPalette.surface.ignoresSafeArea())
+                    .overlay(alignment: .leading) {
+                        KonishiPalette.border
+                            .frame(width: 1)
+                            .ignoresSafeArea(edges: .vertical)
+                            .allowsHitTesting(false)
+                    }
             }
-            .background(.regularMaterial)
         }
         .animation(.easeInOut(duration: 0.15), value: model.activity)
-        .navigationTitle(model.selectedConversation?.title ?? "Konishi")
-        .inspector(isPresented: $showTaskBoard) {
-            ConversationTaskBoard()
-                .environment(model)
-                .inspectorColumnWidth(min: 270, ideal: 330, max: 420)
-        }
+        .animation(.easeInOut(duration: 0.18), value: showTaskBoard)
+        .navigationTitle("")
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
                 Button {
@@ -389,70 +401,80 @@ struct ChatView: View {
 
     private var inputBar: some View {
         @Bindable var model = model
-        return HStack(alignment: .center, spacing: 10) {
-            Menu {
-                Button { showImporter = true } label: { Label("Image…", systemImage: "photo") }
-                Button { showDocImporter = true } label: { Label("PDF or Text File…", systemImage: "doc") }
-            } label: {
-                Image(systemName: "plus.circle").font(.title3)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Attach image or file")
+        return HStack(alignment: .center, spacing: 8) {
+            HStack(spacing: 9) {
+                Menu {
+                    Button { showImporter = true } label: { Label("Image…", systemImage: "photo") }
+                    Button { showDocImporter = true } label: { Label("PDF or Text File…", systemImage: "doc") }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 20, weight: .semibold))
+                        .frame(width: 44, height: 42)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Attach image or file")
 
-            ContextGauge(used: model.selectedConversation?.lastStats?.promptTokens ?? 0, window: model.contextWindow)
+                ContextGauge(used: model.selectedConversation?.lastStats?.promptTokens ?? 0, window: model.contextWindow)
 
-            Button { model.settings.reasoningEnabled.toggle() } label: {
-                Image(systemName: "brain")
-                    .font(.title3)
-                    .foregroundStyle(model.settings.reasoningEnabled ? AnyShapeStyle(model.currentAccent) : AnyShapeStyle(.secondary))
-                    .opacity(model.settings.reasoningEnabled ? 1 : 0.55)
+                Button { model.settings.reasoningEnabled.toggle() } label: {
+                    Image(systemName: "brain")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(model.settings.reasoningEnabled ? AnyShapeStyle(model.currentAccent) : AnyShapeStyle(.secondary))
+                        .opacity(model.settings.reasoningEnabled ? 1 : 0.55)
+                        .frame(width: 26, height: 30)
+                }
+                .buttonStyle(.plain)
+                .help(model.settings.reasoningEnabled ? "Reasoning on — model thinks before answering (slower). Click to turn off." : "Reasoning off — faster replies. Click to turn on.")
+
+                TextField("Message \(model.currentAssistantName)…", text: $model.draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: model.settings.fontSize))
+                    .lineLimit(1...8)
+                    .padding(.vertical, 4)
+                    .focused($inputFocused)
+                    .onKeyPress(keys: [.return]) { keyPress in
+                        if keyPress.modifiers.contains(.shift) {
+                            model.draft.append("\n")
+                            return .handled
+                        }
+                        model.send()
+                        return .handled
+                    }
             }
-            .buttonStyle(.plain)
-            .help(model.settings.reasoningEnabled ? "Reasoning on — model thinks before answering (slower). Click to turn off." : "Reasoning off — faster replies. Click to turn on.")
+            .padding(.horizontal, 13)
+            .padding(.vertical, 5)
+            .frame(minHeight: 42)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().stroke(KonishiPalette.border.opacity(0.55), lineWidth: 1))
 
             Button { model.toggleDictation() } label: {
                 Image(systemName: model.voice.isListening ? "mic.fill" : "mic")
-                    .font(.title3)
+                    .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(model.voice.isListening ? .red : .primary)
                     .symbolEffect(.pulse, isActive: model.voice.isListening)
+                    .frame(width: 42, height: 42)
             }
-            .buttonStyle(.plain).help("Dictate")
-
-            TextField("Message \(model.currentAssistantName)…", text: $model.draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: model.settings.fontSize))
-                .lineLimit(1...8)
-                .padding(.vertical, 4)
-                .focused($inputFocused)
-                .onKeyPress(keys: [.return]) { keyPress in
-                    if keyPress.modifiers.contains(.shift) {
-                        model.draft.append("\n")
-                        return .handled
-                    }
-                    model.send()
-                    return .handled
-                }
+            .buttonStyle(.plain)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().stroke(KonishiPalette.border.opacity(0.55), lineWidth: 1))
+            .help("Dictate")
 
             Button { model.send() } label: {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .background(model.currentAccent, in: RoundedRectangle(cornerRadius: 11))
+                    .frame(width: 42, height: 42)
+                    .background(model.currentAccent, in: Circle())
             }
-                .buttonStyle(.plain)
-                .disabled(!model.canSend)
+            .buttonStyle(.plain)
+            .disabled(!model.canSend)
             .opacity(model.canSend ? 1 : 0.45)
-                .keyboardShortcut(.return, modifiers: .command)
+            .keyboardShortcut(.return, modifiers: .command)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
         .frame(maxWidth: 860)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(KonishiPalette.border.opacity(0.7), lineWidth: 1))
-        .shadow(color: .black.opacity(0.06), radius: 12, y: 3)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
         .padding(.bottom, 12)
