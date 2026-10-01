@@ -38,9 +38,9 @@ if [[ "$INSTALL" == "1" ]]; then
   osascript -e 'quit app "Konishi"' 2>/dev/null || true
   rm -rf "$DEST"
   ditto "$APP" "$DEST"
-  echo "Installed to $DEST — launching …"
+  echo "Installed to $DEST — launching"
   open "$DEST"
 else
-  echo "Launching $APP …"
+  echo "Launching $APP"
   open "$APP"
 fi

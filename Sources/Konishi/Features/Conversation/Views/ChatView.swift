@@ -65,11 +65,13 @@ struct ChatView: View {
         var currentAssistantInterrupted = false
         var currentAssistantImages: [String] = []
         var currentAssistantAttachments: [Attachment] = []
+        var currentAssistantCreatedAt: Date?
 
         func flushAssistant() {
             guard !currentAssistantSteps.isEmpty else { return }
             let turn = AssistantTurn(
                 id: currentAssistantSteps[0].id,
+                createdAt: currentAssistantCreatedAt,
                 steps: currentAssistantSteps,
                 toolResults: currentAssistantToolResults,
                 sources: currentAssistantSources,
@@ -88,6 +90,7 @@ struct ChatView: View {
             currentAssistantInterrupted = false
             currentAssistantImages = []
             currentAssistantAttachments = []
+            currentAssistantCreatedAt = nil
         }
 
         for msg in raw {
@@ -101,6 +104,7 @@ struct ChatView: View {
                 flushAssistant()
                 items.append(.user(msg))
             case .assistant:
+                if currentAssistantCreatedAt == nil { currentAssistantCreatedAt = msg.createdAt }
                 currentAssistantAllIDs.append(msg.id)
                 currentAssistantSteps.append(AssistantStep(
                     id: msg.id,
@@ -131,19 +135,47 @@ struct ChatView: View {
         return items
     }
 
+    private var datedChatItems: [ChatItem] {
+        let calendar = Calendar.current
+        var result: [ChatItem] = []
+        var previousDay: Date?
+
+        for item in chatItems {
+            guard let timestamp = item.timestamp else {
+                result.append(item)
+                continue
+            }
+            let day = calendar.startOfDay(for: timestamp)
+            if previousDay.map({ !calendar.isDate($0, inSameDayAs: day) }) ?? true {
+                result.append(.dayBreak(day))
+                previousDay = day
+            }
+            result.append(item)
+        }
+        return result
+    }
+
     private var messageList: some View {
-        let items = self.chatItems
+        let items = self.datedChatItems
         let lastMessage = model.selectedConversation?.messages.last
         return ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if items.isEmpty { emptyState }
-                    ForEach(items) { item in
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         switch item {
                         case .user(let message):
-                            UserMessageRow(message: message).id(item.id)
+                            UserMessageRow(message: message)
+                                .padding(.top, verticalGap(at: index, in: items))
+                                .id(item.id)
                         case .assistant(let turn):
-                            AssistantTurnRow(turn: turn).id(item.id)
+                            AssistantTurnRow(turn: turn)
+                                .padding(.top, verticalGap(at: index, in: items))
+                                .id(item.id)
+                        case .dayBreak(let day):
+                            dateBreak(day)
+                                .padding(.vertical, 8)
+                                .id(item.id)
                         }
                     }
                 }
@@ -175,6 +207,35 @@ struct ChatView: View {
                 if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
+    }
+
+    private func verticalGap(at index: Int, in items: [ChatItem]) -> CGFloat {
+        guard index > 0 else { return 0 }
+        let previous = items[index - 1]
+        if case .dayBreak = previous { return 3 }
+        if items[index].isAssistant && previous.isUser { return 4 }
+        if items[index].isUser && previous.isAssistant { return 18 }
+        return 10
+    }
+
+    private func dateBreak(_ day: Date) -> some View {
+        HStack(spacing: 12) {
+            Rectangle().fill(KonishiPalette.border).frame(height: 1)
+            Text(Self.dateLabel(day))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .fixedSize()
+            Rectangle().fill(KonishiPalette.border).frame(height: 1)
+        }
+        .padding(.horizontal, 72)
+        .accessibilityElement(children: .combine)
+    }
+
+    private static func dateLabel(_ day: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(day) { return "Today" }
+        if calendar.isDateInYesterday(day) { return "Yesterday" }
+        return day.formatted(date: .long, time: .omitted)
     }
 
     private var emptyState: some View {
@@ -495,6 +556,7 @@ struct AssistantStep: Identifiable, Sendable {
 
 struct AssistantTurn: Identifiable, Sendable {
     let id: UUID
+    let createdAt: Date?
     let steps: [AssistantStep]
     let toolResults: [String: String]
     let sources: [Source]
@@ -513,12 +575,32 @@ struct AssistantTurn: Identifiable, Sendable {
 enum ChatItem: Identifiable {
     case user(ChatMessage)
     case assistant(AssistantTurn)
+    case dayBreak(Date)
 
-    var id: UUID {
+    var id: String {
         switch self {
-        case .user(let msg): return msg.id
-        case .assistant(let turn): return turn.id
+        case .user(let msg): return "message-\(msg.id.uuidString)"
+        case .assistant(let turn): return "turn-\(turn.id.uuidString)"
+        case .dayBreak(let date): return "day-\(Int(date.timeIntervalSince1970))"
         }
+    }
+
+    var timestamp: Date? {
+        switch self {
+        case .user(let message): message.createdAt
+        case .assistant(let turn): turn.createdAt
+        case .dayBreak: nil
+        }
+    }
+
+    var isUser: Bool {
+        if case .user = self { return true }
+        return false
+    }
+
+    var isAssistant: Bool {
+        if case .assistant = self { return true }
+        return false
     }
 }
 

@@ -33,6 +33,7 @@ struct Source: Identifiable, Equatable, Codable, Sendable {
 
 struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     var id = UUID()
+    var createdAt: Date?
     var role: Role
     var content: String
     var stats: MessageStats?
@@ -57,6 +58,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
 
     init(
         id: UUID = UUID(),
+        createdAt: Date? = .now,
         role: Role,
         content: String,
         stats: MessageStats? = nil,
@@ -71,6 +73,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         localOnly: Bool = false
     ) {
         self.id = id
+        self.createdAt = createdAt
         self.role = role
         self.content = content
         self.stats = stats
@@ -89,13 +92,14 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     var attachmentBytes: Int { attachments.reduce(0) { $0 + $1.text.utf8.count } }
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, content, stats, reasoning, images, attachments, sources, interrupted, toolCalls, toolCallId, toolName, localOnly
+        case id, createdAt, role, content, stats, reasoning, images, attachments, sources, interrupted, toolCalls, toolCallId, toolName, localOnly
     }
 
     // Tolerant decode so conversations saved before `images`/`attachments` existed still load.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
         role = try c.decode(Role.self, forKey: .role)
         content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
         stats = try c.decodeIfPresent(MessageStats.self, forKey: .stats)
