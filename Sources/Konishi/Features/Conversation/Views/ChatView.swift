@@ -179,9 +179,9 @@ struct ChatView: View {
                         }
                     }
                 }
-                .frame(maxWidth: 860)
+                .frame(maxWidth: 1100)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 18)
                 .padding(.vertical, 24)
             }
             .background(KonishiPalette.canvas)
@@ -625,7 +625,7 @@ private struct UserMessageRow: View {
                     .foregroundStyle(.primary)
                 if hovering { actions }
             }
-            .frame(maxWidth: 680, alignment: .leading)
+            .frame(maxWidth: 860, alignment: .leading)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .background(model.currentAccent.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
@@ -737,7 +737,7 @@ private struct AssistantTurnRow: View {
                 if !turn.sources.isEmpty { sourcesView }
                 if hovering { actions }
             }
-            .frame(maxWidth: 780, alignment: .leading)
+            .frame(maxWidth: 960, alignment: .leading)
             .padding(14)
             .background(KonishiPalette.surface, in: RoundedRectangle(cornerRadius: 15))
             .overlay(RoundedRectangle(cornerRadius: 15).stroke(KonishiPalette.border.opacity(0.65), lineWidth: 1))
