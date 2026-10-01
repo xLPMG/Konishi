@@ -78,8 +78,14 @@ extension AppModel {
     }
 
     private func onConversationPartial(_ update: VoiceManager.DictationUpdate) {
-        let text = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        let transcript = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !transcript.isEmpty else { return }
+        bargeInLatestTranscript = transcript
+        let text = Self.transcriptSuffix(transcript, after: bargeInTranscriptBaseline)
+        guard !text.isEmpty else {
+            if update.isFinal { resumeConversationDictation(after: liveTranscript) }
+            return
+        }
         liveTranscript = text
         // New speech invalidates any in-flight speculative request.
         if text != speculativeText { cancelSpeculativeRequest() }
@@ -92,7 +98,7 @@ extension AppModel {
     private func resumeConversationDictation(after prefix: String) {
         Task { [weak self] in
             await Task.yield()  // VoiceManager stops the finalized recognition task after its callback.
-            guard let self, self.conversationActive, self.voiceState == .listening,
+            guard let self, self.conversationActive, self.voiceState != .idle,
                 self.liveTranscript == prefix, !self.voice.isListening
             else { return }
             self.voice.startNativeDictation { [weak self] update in
@@ -158,7 +164,10 @@ extension AppModel {
         let transcript = update.text.trimmingCharacters(in: .whitespacesAndNewlines)
         bargeInLatestTranscript = transcript
         let text = Self.transcriptSuffix(transcript, after: bargeInTranscriptBaseline)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty else {
+            if update.isFinal { resumeConversationDictation(after: liveTranscript) }
+            return
+        }
         bargeInCandidate = text
         bargeInCandidateFinal = update.isFinal
         guard bargeInConfirmationTask == nil else { return }
@@ -309,8 +318,6 @@ extension AppModel {
         }
         bargeInCandidate = ""
         bargeInCandidateFinal = false
-        bargeInTranscriptBaseline = ""
-        bargeInLatestTranscript = ""
         liveTranscript = text
         voiceState = .listening
         scheduleConversationEndpoint(text: text, isFinal: isFinal)
@@ -335,13 +342,23 @@ extension AppModel {
             return
         }
         liveTranscript = ""
+        if voice.isListening {
+            bargeInTranscriptBaseline = bargeInLatestTranscript.isEmpty
+                ? text : bargeInLatestTranscript
+        }
+        guard let convoID = conversationSessionID, let idx = conversationIndex(convoID) else {
+            cancelSpeculativeRequest()
+            return
+        }
+        conversations[idx].messages.append(ChatMessage(role: .user, content: text))
+        touch(idx)
+        maybeAutoTitle(conversationID: convoID)
         voiceState = .thinking
 
         // Fast-path: if a speculative request already fired for exactly this transcript,
         // promote it rather than starting from scratch.
         if speculativeText == text, speculativeResponseTask != nil {
-            // The speculative task is still running — it will call promoteSpeculativeResult()
-            // when it finishes.  Dictation stays alive until promotion commits the turn.
+            // Keep listening while it runs so speech can still interrupt the model.
             return
         }
         if speculativeText == text, !speculativeReplyDraft.isEmpty {
@@ -361,9 +378,6 @@ extension AppModel {
         guard let convoID = conversationSessionID, let idx = conversationIndex(convoID) else {
             return
         }
-        conversations[idx].messages.append(ChatMessage(role: .user, content: text))
-        touch(idx)
-        maybeAutoTitle(conversationID: convoID)
         let persona = personaStore.persona(for: conversations[idx])
         let allHistory = conversations[idx].messages
         let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
@@ -425,10 +439,13 @@ extension AppModel {
 
     private func beginInterruptionMonitoring() {
         guard conversationActive, settings.conversationBargeIn else { return }
+        let dictationAlreadyRunning = voice.isListening
         bargeInCandidate = ""
         bargeInCandidateFinal = false
-        bargeInTranscriptBaseline = ""
-        bargeInLatestTranscript = ""
+        if !dictationAlreadyRunning {
+            bargeInTranscriptBaseline = ""
+            bargeInLatestTranscript = ""
+        }
         bargeInConfirmationTask?.cancel()
         bargeInConfirmationTask = nil
         cancelBackchannelDecision()
@@ -599,10 +616,10 @@ extension AppModel {
         }
     }
 
-    /// Promotes the buffered speculative result: commits the turn to history, releases audio.
+    /// Promotes the buffered speculative reply for a confirmed turn and releases its audio.
     /// Must be called on the main actor (same as all AppModel mutations).
     private func promoteSpeculativeResult(text: String) {
-        guard let convoID = conversationSessionID, let idx = conversationIndex(convoID) else {
+        guard let convoID = conversationSessionID, conversationIndex(convoID) != nil else {
             cancelSpeculativeRequest()
             respond(to: text)
             return
@@ -620,15 +637,12 @@ extension AppModel {
             return
         }
 
-        // Commit the user message and reply to conversation history.
+        // The user message was committed when the endpoint confirmed the utterance.
         if let requestTrace {
             traceStore.trace(
                 conversationID: convoID, kind: .request, text: requestTrace.summary,
                 saveTraces: settings.saveTraces, detail: requestTrace.detail)
         }
-        conversations[idx].messages.append(ChatMessage(role: .user, content: text))
-        touch(idx)
-        maybeAutoTitle(conversationID: convoID)
         if !toolCalls.isEmpty { handleConversationalToolCalls(toolCalls, convoID: convoID) }
         finishConversationTurn(convoID: convoID, reply: reply)
         let audioDetail = audioBuffer.isEmpty ? "native TTS" : "\(audioBuffer.count) pre-synthesized clips"
