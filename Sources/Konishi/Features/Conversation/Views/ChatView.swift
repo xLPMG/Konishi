@@ -738,9 +738,6 @@ private struct AssistantTurnRow: View {
                 if hovering { actions }
             }
             .frame(maxWidth: 960, alignment: .leading)
-            .padding(14)
-            .background(KonishiPalette.surface, in: RoundedRectangle(cornerRadius: 15))
-            .overlay(RoundedRectangle(cornerRadius: 15).stroke(KonishiPalette.border.opacity(0.65), lineWidth: 1))
             Spacer(minLength: 20)
         }
         .onHover { hovering = $0 }
