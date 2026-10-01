@@ -113,7 +113,6 @@ struct StatsBar: View {
         .padding(.vertical, 8)
         .frame(maxWidth: 860)
         .frame(maxWidth: .infinity)
-        .overlay(alignment: .top) { KonishiPalette.border.opacity(0.55).frame(height: 1) }
     }
 
     private func metric(_ symbol: String, _ text: String) -> some View {

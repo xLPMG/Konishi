@@ -11,15 +11,18 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            messageList
-            if let error = model.errorMessage { errorBanner(error) }
-            if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
-            if model.isStreaming, let activity = model.activity { activityLine(activity) }
-            if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
-            StatsBar()
-            attachmentStrip
-            inputBar
+        messageList
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if let error = model.errorMessage { errorBanner(error) }
+                if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
+                if model.isStreaming, let activity = model.activity { activityLine(activity) }
+                if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
+                StatsBar()
+                attachmentStrip
+                inputBar
+            }
+            .background(.regularMaterial)
         }
         .animation(.easeInOut(duration: 0.15), value: model.activity)
         .navigationTitle(model.selectedConversation?.title ?? "Konishi")
@@ -447,7 +450,7 @@ struct ChatView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: 860)
-        .background(KonishiPalette.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(KonishiPalette.border.opacity(0.7), lineWidth: 1))
         .shadow(color: .black.opacity(0.06), radius: 12, y: 3)
         .frame(maxWidth: .infinity)

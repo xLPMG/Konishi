@@ -117,7 +117,8 @@ struct RootView: View {
                 .padding(.vertical, 6)
             }
         }
-        .toolbarBackground(.hidden, for: .windowToolbar)
+        .toolbarBackground(.regularMaterial, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
     }
 }
 
