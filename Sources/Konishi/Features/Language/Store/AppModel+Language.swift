@@ -42,6 +42,7 @@ extension AppModel {
         if let name = persona.assistantName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
             lines.append("Your name is \(name).")
         }
+        lines.append(PersonaStore.contextSourceInstruction)
 
         guard let p = activeLanguageProfile else {
             lines.append(

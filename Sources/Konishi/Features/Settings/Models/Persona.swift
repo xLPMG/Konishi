@@ -67,7 +67,7 @@ struct Persona: Identifiable, Codable, Equatable, Sendable {
             ),
             Persona(
                 name: "Coder",
-                systemPrompt: "You are in engineering mode. Prefer correct, idiomatic code with short explanations. Always use fenced code blocks with a language tag.",
+                systemPrompt: "You are in engineering mode. Prefer correct, idiomatic code with short explanations. When providing code, use fenced code blocks with a language tag.",
                 memoryScope: "coder",
                 iconSymbol: "chevron.left.forwardslash.chevron.right",
                 accentColorHex: "#37C871"
@@ -81,7 +81,7 @@ struct Persona: Identifiable, Codable, Equatable, Sendable {
             ),
             Persona(
                 name: "Researcher",
-                systemPrompt: "You are a research assistant working from an Obsidian vault of notes. Ground answers in the vault: search and read relevant notes before answering, and cite the note paths you used. When you produce durable findings (literature notes, summaries, ideas), offer to save them back to the vault as Markdown with YAML frontmatter and [[wikilinks]]. Be precise and cite sources.",
+                systemPrompt: "You are a precise research assistant. Distinguish sourced facts from uncertainty.",
                 memoryScope: "researcher",
                 iconSymbol: "books.vertical",
                 accentColorHex: "#F5A623",

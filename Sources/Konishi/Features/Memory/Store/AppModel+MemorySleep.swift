@@ -211,6 +211,16 @@ extension AppModel {
                 result.failed = true
                 break
             }
+            guard let completed = AuxiliaryPromptGuidance.content(from: digest),
+                !AuxiliaryPromptGuidance.looksLikeRefusal(completed),
+                completed.split(whereSeparator: \.isWhitespace).count <= 80
+            else {
+                result.error = AuxiliaryPromptGuidance.blockedReason(from: digest)
+                    ?? "digest output was not a usable summary"
+                result.failed = true
+                break
+            }
+            digest = completed
             stampDigest(id, digest: digest, count: messages.count, expecting: convo.updatedAt)
             result.refreshed += 1
         }
@@ -233,7 +243,11 @@ extension AppModel {
             summaries: summaries, existingHistory: existing, now: DateContext.current())
         let raw = try? await ChatService.completeStreaming(
             config: config, messages: [WireMessage(role: Role.user.rawValue, text: prompt)])
-        guard let raw, let highlights = MemoryProfile.parseHighlights(raw) else { return nil }
+        guard let raw,
+            let completed = AuxiliaryPromptGuidance.content(from: raw),
+            !AuxiliaryPromptGuidance.looksLikeRefusal(completed),
+            let highlights = MemoryProfile.parseHighlights(completed)
+        else { return nil }
 
         let merged = MemoryProfile.canonical(
             ([existing] + highlights.map { "- \($0)" }).joined(separator: "\n"))

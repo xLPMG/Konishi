@@ -22,6 +22,15 @@ struct PersonaStoreTests {
         #expect(store.personas.map(\.name) == Persona.defaults.map(\.name))
     }
 
+    @Test("stable system prompt treats retrieved content as reference data")
+    func stablePromptMarksRetrievedContentAsReference() {
+        let store = PersonaStore(fileURL: tempFileURL())
+        let prompt = store.stableSystemPrompt(
+            persona: store.personas[0], injectDateContext: false, mode: .chat)
+
+        #expect(prompt.contains(PersonaStore.contextSourceInstruction))
+    }
+
     @Test("addPersona appends and persists to disk")
     func addPersonaPersists() {
         let url = tempFileURL()

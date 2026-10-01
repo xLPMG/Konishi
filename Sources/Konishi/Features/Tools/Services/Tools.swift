@@ -231,14 +231,13 @@ enum Tools {
             name: "python_exec",
             summary: "Run Python in the science venv",
             description: """
-            Execute Python 3 code in Konishi's managed virtual environment and return combined \
-            stdout/stderr. A scientific toolkit is pre-imported — call these directly and print() \
-            the result (each returns a JSON string): \(SciTools.catalog). numpy (as np), scipy, sympy, \
-            pandas, matplotlib, and arxiv are available. You MUST print() anything you want to see. \
-            Plots saved by plot_function/plot_data are shown to you as images automatically on your next turn.
+            Run Python 3 code in Konishi's managed virtual environment; return combined stdout/stderr. \\
+            The scientific toolkit is pre-imported: \(SciTools.catalog). numpy (as np), scipy, sympy, \\
+            pandas, matplotlib, and arxiv are available. Print values you want returned. \\
+            Plots created with the toolkit or saved in the conversation folder are attached as images on your next turn.
             """,
             parameters: .schema(
-                properties: ["code": .property("string", "Python source to execute; print() results")],
+                properties: ["code": .property("string", "Python source code to execute")],
                 required: ["code"]
             ),
             group: .compute, mutating: true,

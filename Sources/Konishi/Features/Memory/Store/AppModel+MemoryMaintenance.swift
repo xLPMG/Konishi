@@ -141,9 +141,9 @@ extension AppModel {
                 self.isReflecting = false
                 self.isMemorizing = false
             }
-            let result: String?
+            let rawResult: String?
             do {
-                result = try await ChatService.completeStreaming(
+                rawResult = try await ChatService.completeStreaming(
                     config: config,
                     messages: [WireMessage(role: Role.user.rawValue, text: instruction)])
             } catch {
@@ -154,10 +154,26 @@ extension AppModel {
                     saveTraces: settings.saveTraces)
                 return
             }
-            guard let result, !result.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard let rawResult, !rawResult.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 traceStore.trace(
                     conversationID: conversationID, kind: .error,
                     text: "memory update produced no output (model returned an empty reply)",
+                    saveTraces: settings.saveTraces)
+                return
+            }
+            guard let result = AuxiliaryPromptGuidance.content(from: rawResult) else {
+                let reason = AuxiliaryPromptGuidance.blockedReason(from: rawResult)
+                    ?? "model returned no usable content"
+                traceStore.trace(
+                    conversationID: conversationID, kind: .error,
+                    text: "memory update not applied: \(reason)",
+                    saveTraces: settings.saveTraces)
+                return
+            }
+            guard !AuxiliaryPromptGuidance.looksLikeRefusal(result) else {
+                traceStore.trace(
+                    conversationID: conversationID, kind: .error,
+                    text: "memory update not applied: model returned a refusal instead of structured data",
                     saveTraces: settings.saveTraces)
                 return
             }
@@ -166,11 +182,11 @@ extension AppModel {
             var newDigest: String?
             if consolidate {
                 let sections = MemoryProfile.parse(result)
-                guard !sections.isEmpty else {
+                guard MemoryCategory.allCases.allSatisfy({ sections[$0] != nil }) else {
                     traceStore.trace(
                         conversationID: conversationID, kind: .error,
                         text:
-                            "memory consolidation skipped: could not parse category sections from output",
+                            "memory consolidation skipped: output was missing one or more category sections",
                         saveTraces: settings.saveTraces)
                     return
                 }
