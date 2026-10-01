@@ -11,31 +11,6 @@ enum AudioSource: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 }
 
-/// What the Reflect action distills from a conversation into memory.
-enum ReflectionStyle: String, CaseIterable, Codable, Sendable, Identifiable {
-    case preferences
-    case balanced
-    case detailed
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .preferences: "Preferences only"
-        case .balanced: "Preferences + key topics"
-        case .detailed: "Preferences + topics + facts"
-        }
-    }
-    var guidance: String {
-        switch self {
-        case .preferences:
-            return "durable user preferences, decisions, and stable personal context"
-        case .balanced:
-            return "durable user preferences and decisions, plus the important topics or subjects explored (kept brief)"
-        case .detailed:
-            return "durable user preferences and decisions, the key topics explored, and any notable facts or conclusions worth remembering later"
-        }
-    }
-}
-
 /// Global, app-wide configuration persisted to `UserDefaults` (except the token → Keychain).
 @Observable
 @MainActor
@@ -94,16 +69,6 @@ final class AppSettings {
         didSet { Keychain.set(apiToken, for: Keys.apiToken) }
     }
 
-    // Local mlx-lm server launcher
-    var serverCommand: String {
-        didSet { defaults.set(serverCommand, forKey: Keys.serverCommand) }
-    }
-    var serverModelPath: String {
-        didSet { defaults.set(serverModelPath, forKey: Keys.serverModelPath) }
-    }
-    var serverPort: Int {
-        didSet { defaults.set(serverPort, forKey: Keys.serverPort) }
-    }
     /// Kill managed servers when the app quits (off = leave them running).
     var stopServersOnQuit: Bool {
         didSet { defaults.set(stopServersOnQuit, forKey: Keys.stopServersOnQuit) }
@@ -130,9 +95,6 @@ final class AppSettings {
     /// Persist each conversation's request/response trace to disk so it survives restarts.
     var saveTraces: Bool {
         didSet { defaults.set(saveTraces, forKey: Keys.saveTraces) }
-    }
-    var reflectionStyle: ReflectionStyle {
-        didSet { defaults.set(reflectionStyle.rawValue, forKey: Keys.reflectionStyle) }
     }
     var reflectionCustomPrompt: String {
         didSet { defaults.set(reflectionCustomPrompt, forKey: Keys.reflectionCustomPrompt) }
@@ -338,10 +300,6 @@ final class AppSettings {
         self.fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 14
         self.accentColorHex = defaults.string(forKey: Keys.accentColorHex) ?? "#6C8CFF"
         self.apiToken = Keychain.get(Keys.apiToken)
-        self.serverCommand = defaults.string(forKey: Keys.serverCommand) ?? "mlx_lm.server"
-        self.serverModelPath = defaults.string(forKey: Keys.serverModelPath)
-            ?? "~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit"
-        self.serverPort = defaults.object(forKey: Keys.serverPort) as? Int ?? 8080
         self.stopServersOnQuit = defaults.object(forKey: Keys.stopServersOnQuit) as? Bool ?? true
         self.stopSequences = defaults.string(forKey: Keys.stopSequences) ?? ""
         self.seed = defaults.object(forKey: Keys.seed) as? Int ?? -1
@@ -349,7 +307,6 @@ final class AppSettings {
         self.frequencyPenalty = defaults.object(forKey: Keys.frequencyPenalty) as? Double ?? 0
         self.autoTitle = defaults.object(forKey: Keys.autoTitle) as? Bool ?? true
         self.saveTraces = defaults.object(forKey: Keys.saveTraces) as? Bool ?? true
-        self.reflectionStyle = ReflectionStyle(rawValue: defaults.string(forKey: Keys.reflectionStyle) ?? "") ?? .balanced
         self.reflectionCustomPrompt = defaults.string(forKey: Keys.reflectionCustomPrompt) ?? ""
         self.autoMemory = defaults.object(forKey: Keys.autoMemory) as? Bool ?? true
         self.autoMemoryEvery = defaults.object(forKey: Keys.autoMemoryEvery) as? Int ?? 2
@@ -535,9 +492,6 @@ final class AppSettings {
         static let fontSize = "konishi.fontSize"
         static let accentColorHex = "konishi.accentColorHex"
         static let apiToken = "konishi.apiToken"
-        static let serverCommand = "konishi.serverCommand"
-        static let serverModelPath = "konishi.serverModelPath"
-        static let serverPort = "konishi.serverPort"
         static let stopServersOnQuit = "konishi.stopServersOnQuit"
         static let stopSequences = "konishi.stopSequences"
         static let seed = "konishi.seed"
@@ -545,7 +499,6 @@ final class AppSettings {
         static let frequencyPenalty = "konishi.frequencyPenalty"
         static let autoTitle = "konishi.autoTitle"
         static let saveTraces = "konishi.saveTraces"
-        static let reflectionStyle = "konishi.reflectionStyle"
         static let reflectionCustomPrompt = "konishi.reflectionCustomPrompt"
         static let autoMemory = "konishi.autoMemory"
         static let autoMemoryEvery = "konishi.autoMemoryEvery"

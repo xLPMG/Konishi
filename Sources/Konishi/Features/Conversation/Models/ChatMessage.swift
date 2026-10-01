@@ -52,10 +52,6 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     /// For tool-result messages.
     var toolCallId: String?
     var toolName: String?
-    /// Rendered in the UI but never sent to the model (e.g. auto-attached plot images for servers
-    /// that reject image content).
-    var localOnly: Bool = false
-
     init(
         id: UUID = UUID(),
         createdAt: Date? = .now,
@@ -69,8 +65,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         interrupted: Bool = false,
         toolCalls: [ToolCall]? = nil,
         toolCallId: String? = nil,
-        toolName: String? = nil,
-        localOnly: Bool = false
+        toolName: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -85,14 +80,13 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         self.toolCalls = toolCalls
         self.toolCallId = toolCallId
         self.toolName = toolName
-        self.localOnly = localOnly
     }
 
     /// Rough byte size of extracted attachment text, for token budgeting.
     var attachmentBytes: Int { attachments.reduce(0) { $0 + $1.text.utf8.count } }
 
     private enum CodingKeys: String, CodingKey {
-        case id, createdAt, role, content, stats, reasoning, images, attachments, sources, interrupted, toolCalls, toolCallId, toolName, localOnly
+        case id, createdAt, role, content, stats, reasoning, images, attachments, sources, interrupted, toolCalls, toolCallId, toolName
     }
 
     // Tolerant decode so conversations saved before `images`/`attachments` existed still load.
@@ -111,7 +105,6 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         toolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
         toolCallId = try c.decodeIfPresent(String.self, forKey: .toolCallId)
         toolName = try c.decodeIfPresent(String.self, forKey: .toolName)
-        localOnly = try c.decodeIfPresent(Bool.self, forKey: .localOnly) ?? false
     }
 }
 
