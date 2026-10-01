@@ -20,6 +20,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .searchable(text: $model.searchText, placement: .sidebar, prompt: isLanguage ? "Search sessions" : "Search chats")
         .safeAreaInset(edge: .top) {
             VStack(alignment: .leading, spacing: 14) {
@@ -54,14 +55,9 @@ struct SidebarView: View {
             .padding(.horizontal, 14)
             .padding(.top, 12)
             .padding(.bottom, 10)
-            .background(KonishiPalette.canvas)
+            .background(KonishiPalette.surface)
         }
-        .background(KonishiPalette.canvas)
-        .overlay(alignment: .trailing) {
-            KonishiPalette.border.opacity(0.8)
-                .frame(width: 1)
-                .allowsHitTesting(false)
-        }
+        .background(KonishiPalette.surface.ignoresSafeArea())
     }
 
     @ViewBuilder

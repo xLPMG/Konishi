@@ -6,6 +6,7 @@ struct ChatView: View {
     @Environment(AppModel.self) private var model
     @State private var showImporter = false
     @State private var showDocImporter = false
+    @State private var showTaskBoard = false
     @State private var pinnedToBottom = true
     @FocusState private var inputFocused: Bool
 
@@ -22,8 +23,19 @@ struct ChatView: View {
         }
         .animation(.easeInOut(duration: 0.15), value: model.activity)
         .navigationTitle(model.selectedConversation?.title ?? "Konishi")
+        .inspector(isPresented: $showTaskBoard) {
+            ConversationTaskBoard()
+                .environment(model)
+                .inspectorColumnWidth(min: 270, ideal: 330, max: 420)
+        }
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
+                Button {
+                    showTaskBoard.toggle()
+                } label: {
+                    Label("Tasks", systemImage: "checklist")
+                }
+                .help("Open conversation tasks and notes")
                 if model.voice.isSpeaking {
                     Button { model.voice.stopSpeaking() } label: {
                         Label("Stop Voice", systemImage: "speaker.slash")

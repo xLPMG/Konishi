@@ -1,5 +1,25 @@
 import Foundation
 
+struct ConversationTask: Identifiable, Codable, Equatable, Sendable {
+    enum Status: String, Codable, Sendable {
+        case pending
+        case inProgress
+        case done
+    }
+
+    var id = UUID()
+    var title: String
+    var notes: String
+    var status: Status
+
+    init(id: UUID = UUID(), title: String, notes: String = "", status: Status = .pending) {
+        self.id = id
+        self.title = title
+        self.notes = notes
+        self.status = status
+    }
+}
+
 struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var id = UUID()
     var title: String
@@ -25,6 +45,8 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var digestUpdatedAt: Date?
     /// When the digest's durable highlights were folded into long-term History (see the sleep pass).
     var digestRolledUpAt: Date?
+    /// User-managed task plan and notes for this conversation.
+    var tasks: [ConversationTask]?
 
     init(
         id: UUID = UUID(),
@@ -40,7 +62,8 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         lastTitledMessageCount: Int? = nil,
         digest: String? = nil,
         digestCount: Int? = nil,
-        digestUpdatedAt: Date? = nil
+        digestUpdatedAt: Date? = nil,
+        tasks: [ConversationTask]? = nil
     ) {
         self.id = id
         self.title = title
@@ -56,6 +79,7 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.digest = digest
         self.digestCount = digestCount
         self.digestUpdatedAt = digestUpdatedAt
+        self.tasks = tasks
     }
 
     var lastStats: MessageStats? {
@@ -82,6 +106,7 @@ struct ConversationMeta: Decodable {
     var digestCount: Int?
     var digestUpdatedAt: Date?
     var digestRolledUpAt: Date?
+    var tasks: [ConversationTask]?
 
     /// A body-less `Conversation` (empty `messages`) carrying just the metadata.
     func asConversation() -> Conversation {
@@ -90,7 +115,7 @@ struct ConversationMeta: Decodable {
             createdAt: createdAt, updatedAt: updatedAt,
             summary: summary, summarizedCount: summarizedCount, memorizedCount: memorizedCount,
             isLanguage: isLanguage, lastTitledMessageCount: lastTitledMessageCount,
-            digest: digest, digestCount: digestCount, digestUpdatedAt: digestUpdatedAt
+            digest: digest, digestCount: digestCount, digestUpdatedAt: digestUpdatedAt, tasks: tasks
         )
         convo.digestRolledUpAt = digestRolledUpAt
         return convo
