@@ -13,7 +13,7 @@ struct LanguageView: View {
     @State private var showDeck = false
     @State private var editorTarget: EditorTarget?
     @State private var profileToDelete: LanguageProfile?
-    @State private var due = 0
+    @State private var stats = LanguageStore.Stats()
     @State private var cardCounts: [UUID: Int] = [:]
 
     var body: some View {
@@ -81,34 +81,18 @@ struct LanguageView: View {
 
             TextField("Topic (optional)", text: $model.languageSession.topic)
                 .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 200)
+                .frame(minWidth: 100, maxWidth: .infinity)
 
-            if let p = model.activeLanguageProfile {
-                Menu {
-                    Picker("Mic language", selection: $model.languageInputTarget) {
-                        Text(p.targetName).tag(true)
-                        Text(p.baseName).tag(false)
-                    }
-                } label: {
-                    Label(model.languageInputTarget ? p.targetName : p.baseName, systemImage: "mic")
-                }
-                .fixedSize()
-                .help("Language the mic listens for when you dictate")
-            }
-
-            Spacer()
-
-            if due > 0 {
-                Label("\(due) due", systemImage: "clock.badge.exclamationmark")
-                    .font(.caption).foregroundStyle(.orange)
-            }
+            reviewProgress
             Button { showDeck = true } label: { Label("Deck", systemImage: "rectangle.stack") }
+                .fixedSize()
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
     private func profileMenu(model: AppModel) -> some View {
-        Menu {
+        @Bindable var model = model
+        return Menu {
             ForEach(model.languageProfiles) { p in
                 Button {
                     model.setActiveLanguageProfile(p.id)
@@ -119,6 +103,13 @@ struct LanguageView: View {
                     } else {
                         Text(label)
                     }
+                }
+            }
+            if let p = model.activeLanguageProfile {
+                Divider()
+                Picker("Mic language", selection: $model.languageInputTarget) {
+                    Text(p.targetName).tag(true)
+                    Text(p.baseName).tag(false)
                 }
             }
             Divider()
@@ -145,12 +136,43 @@ struct LanguageView: View {
         .fixedSize()
     }
 
+    private var reviewProgress: some View {
+        let reviewQueue = stats.reviewedToday + stats.due
+        return Group {
+            if stats.total == 0 {
+                Label("No cards yet", systemImage: "rectangle.stack")
+                    .foregroundStyle(.secondary)
+            } else if reviewQueue == 0 {
+                Label("All caught up", systemImage: "checkmark.circle")
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 4) {
+                        Text("\(stats.reviewedToday)")
+                            .foregroundStyle(model.currentAccent)
+                        Text("reviewed")
+                        Text("·")
+                        Text("\(stats.due)").monospacedDigit()
+                        Text("due")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    ProgressView(value: Double(stats.reviewedToday), total: Double(reviewQueue))
+                        .tint(model.currentAccent)
+                        .frame(width: 104)
+                }
+            }
+        }
+        .fixedSize()
+        .help("\(stats.reviewedToday) reviewed today · \(stats.due) still due")
+    }
+
     private func cardCount(_ p: LanguageProfile) -> Int {
         cardCounts[p.id] ?? 0
     }
 
     private func refresh() {
-        due = model.activeLanguageProfile.map { model.languageStore.stats(profileID: $0.id).due } ?? 0
+        stats = model.activeLanguageProfile.map { model.languageStore.stats(profileID: $0.id) } ?? .init()
         cardCounts = model.languageStore.cardCounts()
     }
 }

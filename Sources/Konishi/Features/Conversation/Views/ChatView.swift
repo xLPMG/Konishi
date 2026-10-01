@@ -319,6 +319,73 @@ struct ChatView: View {
         return day.formatted(date: .long, time: .omitted)
     }
 
+    private var recentConversation: Conversation? {
+        model.filteredConversations.first { conversation in
+            guard conversation.id != model.selectedConversationID else { return false }
+            return conversation.title != "New Chat"
+                || conversation.lastTitledMessageCount != nil
+                || conversation.updatedAt.timeIntervalSince(conversation.createdAt) > 5
+        }
+    }
+
+    private var starterPrompts: [(title: String, icon: String, prompt: String)] {
+        if model.mode == .language, let profile = model.activeLanguageProfile {
+            let enteredTopic = model.languageSession.topic.trimmingCharacters(in: .whitespacesAndNewlines)
+            let topic = enteredTopic.isEmpty ? "everyday life" : enteredTopic
+            switch model.languageSession.kind {
+            case .study:
+                return [
+                    ("Learn a phrase", "textformat.abc", "Teach me a useful \(profile.targetName) phrase about \(topic), with pronunciation and an example."),
+                    ("Understand grammar", "text.book.closed", "Explain one useful \(profile.targetName) grammar point related to \(topic), with examples."),
+                    ("Build vocabulary", "sparkles", "Teach me three useful \(profile.targetName) words about \(topic), one at a time.")
+                ]
+            case .practice:
+                return [
+                    ("Review due words", "checkmark.circle", "Quiz me on words due for review in \(profile.targetName). Ask one question at a time and record each answer."),
+                    ("Quick quiz", "questionmark.circle", "Give me a short \(profile.targetName) quiz about \(topic), one question at a time."),
+                    ("Practice a dialogue", "bubble.left.and.bubble.right", "Start a short \(profile.targetName) dialogue about \(topic) and let me respond.")
+                ]
+            case .free:
+                return [
+                    ("Start a conversation", "bubble.left.and.bubble.right", "Start a natural \(profile.targetName) conversation about \(topic). Ask me one question at a time."),
+                    ("Tell a short story", "book", "Tell me a short, level-appropriate story in \(profile.targetName) about \(topic), then ask what I understood."),
+                    ("Practice speaking", "waveform", "Have a relaxed spoken \(profile.targetName) conversation about \(topic), gently correcting my mistakes.")
+                ]
+            }
+        }
+
+        let persona = model.currentPersona
+        let personaName = persona.name.lowercased()
+        let personaPrompt = persona.systemPrompt.lowercased()
+        if personaName.contains("coder") || personaPrompt.contains("engineering") || personaPrompt.contains("software") {
+            return [
+                ("Debug an issue", "ladybug", "Help me debug a coding issue. Ask me for the relevant code and exact error first."),
+                ("Design a solution", "point.3.connected.trianglepath.dotted", "Help me design a simple, idiomatic solution to a programming problem."),
+                ("Explain code", "curlybraces", "Explain a programming concept with a concrete example, then check my understanding.")
+            ]
+        }
+        if persona.vaultAccessEnabled || personaName.contains("research") || personaPrompt.contains("research assistant") {
+            return [
+                ("Investigate a question", "magnifyingglass", "Help me investigate a question. Start by finding relevant evidence in my research notes."),
+                ("Connect ideas", "point.3.connected.trianglepath.dotted", "Look for connections across my research notes about a topic I will give you."),
+                ("Shape a finding", "text.alignleft", "Help me turn a research finding into a concise, well-supported note.")
+            ]
+        }
+        if personaName.contains("muse") || personaPrompt.contains("creative") {
+            return [
+                ("Explore an idea", "lightbulb", "Help me explore a creative idea. Ask one question to find an interesting angle."),
+                ("Find a fresh angle", "sparkles", "Give me a few unexpected angles on a creative project I will describe."),
+                ("Draft something", "pencil.and.outline", "Help me shape a rough draft while keeping my voice and intent.")
+            ]
+        }
+
+        return [
+            ("Explore an idea", "lightbulb", "As my \(persona.name) assistant, help me explore an idea. Ask one question to get started."),
+            ("Make a plan", "list.bullet", "As my \(persona.name) assistant, help me make a clear, practical plan for a goal."),
+            ("Explain a topic", "sparkle.magnifyingglass", "As my \(persona.name) assistant, explain a topic with an intuitive example.")
+        ]
+    }
+
     private var emptyState: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
@@ -328,9 +395,9 @@ struct ChatView: View {
                     .frame(width: 48, height: 48)
                     .background(model.currentAccent.opacity(0.13), in: RoundedRectangle(cornerRadius: 15))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("A little room to think.")
+                    Text(emptyStateTitle)
                         .font(.system(size: 28, weight: .semibold, design: .rounded))
-                    Text("Start a conversation with \(model.currentAssistantName).")
+                    Text(emptyStateSubtitle)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -345,16 +412,57 @@ struct ChatView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let recentConversation {
+                Button {
+                    model.selectedConversationID = recentConversation.id
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(model.currentAccent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Continue recent conversation")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Text(recentConversation.title)
+                                .font(.callout.weight(.medium))
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Return to \(recentConversation.title)")
+            }
+
             HStack(spacing: 8) {
-                starterButton("Explore an idea", icon: "lightbulb", prompt: "Help me explore an idea. Ask me one question to get started.")
-                starterButton("Make a plan", icon: "list.bullet", prompt: "Help me make a clear, practical plan for my next goal.")
-                starterButton("Explain a topic", icon: "sparkle.magnifyingglass", prompt: "Explain a topic clearly, with an intuitive example. Ask me what topic first.")
+                ForEach(starterPrompts.indices, id: \.self) { index in
+                    let suggestion = starterPrompts[index]
+                    starterButton(suggestion.title, icon: suggestion.icon, prompt: suggestion.prompt)
+                }
             }
         }
         .padding(24)
         .frame(maxWidth: 660, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 72)
+    }
+
+    private var emptyStateTitle: String {
+        if model.mode == .language, let profile = model.activeLanguageProfile {
+            return "A little more \(profile.targetName) today."
+        }
+        return "A little room to think."
+    }
+
+    private var emptyStateSubtitle: String {
+        if model.mode == .language, let profile = model.activeLanguageProfile {
+            return "\(model.languageSession.kind.label) with \(model.currentAssistantName), at \(profile.level.code)."
+        }
+        return "Start a conversation with \(model.currentAssistantName)."
     }
 
     private func starterButton(_ title: String, icon: String, prompt: String) -> some View {

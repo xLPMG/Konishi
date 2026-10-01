@@ -12,6 +12,7 @@ final class LanguageStore {
         var total = 0
         var due = 0
         var mastered = 0            // box == max
+        var reviewedToday = 0
         var perKind: [LearnKind: Int] = [:]
     }
 
@@ -285,7 +286,8 @@ final class LanguageStore {
 
     func stats(profileID: UUID, at now: Date = Date()) -> Stats {
         var s = Stats()
-        prepared("SELECT box, kind, dueDate FROM items WHERE profileID = ?;") { stmt in
+        let startOfDay = Calendar.current.startOfDay(for: now).timeIntervalSince1970
+        prepared("SELECT box, kind, dueDate, lastReviewedAt FROM items WHERE profileID = ?;") { stmt in
             bind(stmt, 1, profileID.uuidString)
             while sqlite3_step(stmt) == SQLITE_ROW {
                 s.total += 1
@@ -295,6 +297,11 @@ final class LanguageStore {
                     s.perKind[kind, default: 0] += 1
                 }
                 if sqlite3_column_double(stmt, 2) <= now.timeIntervalSince1970 { s.due += 1 }
+                if sqlite3_column_type(stmt, 3) != SQLITE_NULL,
+                    sqlite3_column_double(stmt, 3) >= startOfDay
+                {
+                    s.reviewedToday += 1
+                }
             }
         }
         return s
@@ -304,7 +311,8 @@ final class LanguageStore {
     func deckSummary(profileID: UUID, tagLimit: Int = 6, at now: Date = Date()) -> (stats: Stats, topTags: [String]) {
         var s = Stats()
         var tagCounts: [String: Int] = [:]
-        prepared("SELECT box, kind, dueDate, tags FROM items WHERE profileID = ?;") { stmt in
+        let startOfDay = Calendar.current.startOfDay(for: now).timeIntervalSince1970
+        prepared("SELECT box, kind, dueDate, tags, lastReviewedAt FROM items WHERE profileID = ?;") { stmt in
             bind(stmt, 1, profileID.uuidString)
             while sqlite3_step(stmt) == SQLITE_ROW {
                 s.total += 1
@@ -316,6 +324,11 @@ final class LanguageStore {
                 if sqlite3_column_double(stmt, 2) <= now.timeIntervalSince1970 { s.due += 1 }
                 for t in Self.decodeArray(Self.text(stmt, 3)) where !t.isEmpty {
                     tagCounts[t, default: 0] += 1
+                }
+                if sqlite3_column_type(stmt, 4) != SQLITE_NULL,
+                    sqlite3_column_double(stmt, 4) >= startOfDay
+                {
+                    s.reviewedToday += 1
                 }
             }
         }
