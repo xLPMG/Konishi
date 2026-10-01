@@ -21,12 +21,46 @@ extension AppModel {
         executeAndContinue(batch: batch, approved: false)
     }
 
-    func executeAndContinue(batch: PendingToolBatch, approved: Bool) {
+    func routeToolBatch(_ batch: PendingToolBatch) {
+        if let session = workSession,
+            let reason = session.pauseBeforeToolCalls(batch.calls.count)
+        {
+            pauseAgentWork(reason: reason, batch: batch)
+            return
+        }
+        if workSession?.autopilot == true {
+            executeAndContinue(batch: batch, approved: true, autopilot: true)
+            return
+        }
+        let names = batch.calls.compactMap { $0.function.name }
+        if !names.isEmpty && batch.calls.allSatisfy({ toolCallIsAutoApproved($0, mode: mode) }) {
+            activity = "Calling \(names.joined(separator: ", "))…"
+            executeAndContinue(batch: batch, approved: true)
+        } else {
+            activity = nil
+            isStreaming = false
+            streamingConversationID = nil
+            pendingApproval = batch
+        }
+    }
+
+    func executeAndContinue(
+        batch: PendingToolBatch, approved: Bool, autopilot: Bool = false
+    ) {
         isStreaming = true
         streamingConversationID = batch.conversationID   // protect across the tool loop
-        Task { [weak self] in
+        toolExecutionTask?.cancel()
+        toolExecutionTask = Task { [weak self] in
             guard let self else { return }
-            for call in batch.calls {
+            var forceContinuation = false
+            var stopForToolLoop = false
+            for (callIndex, call) in batch.calls.enumerated() {
+                guard !Task.isCancelled else {
+                    self.closePendingToolCalls(
+                        batch, message: "Not run: the user stopped this work session.",
+                        calls: Array(batch.calls.dropFirst(callIndex)))
+                    break
+                }
                 let name = call.function.name ?? "tool"
                 self.activity = "Calling \(name)…"
                 let sig = name + ":" + call.function.arguments
@@ -35,15 +69,23 @@ extension AppModel {
                 let result: String
                 if !approved {
                     result = "User denied execution of \(name)."
+                } else if autopilot && !self.toolCallIsAutoApproved(call, mode: self.mode) {
+                    result = "Unavailable in Autopilot: `\(name)` is not auto-approved. Continue with available tools or tell the user what approval is needed."
+                    forceContinuation = true
                 } else if repeats >= 2 {
                     // Third identical call in a row — break the loop instead of running it again.
                     result = "You have called `\(name)` with identical arguments \(repeats + 1) times in a row without making progress. Stop repeating it: try different arguments, a different tool, or give the user your answer based on what you already have."
+                    forceContinuation = true
+                    stopForToolLoop = AgentToolLoopPolicy.shouldStopAutopilotBatch(
+                        repeats: repeats, autopilot: autopilot)
                 } else if Self.readOnlyTools.contains(name), self.loopSignatures.contains(sig) {
                     result = "[identical `\(name)` call already ran this turn; the result is unchanged — reuse the earlier output instead of calling it again]"
+                    forceContinuation = true
                 } else {
                     result = await self.executeTool(call, conversationID: batch.conversationID)
                 }
                 self.loopSignatures.append(sig)
+                self.recordAgentToolCalls(1)
                 traceStore.trace(
                     conversationID: batch.conversationID, kind: .result,
                     text: "\(name) → \(result.prefix(400))",
@@ -57,9 +99,35 @@ extension AppModel {
                     }
                 }
                 self.activity = "Received result."
+                if stopForToolLoop {
+                    self.closePendingToolCalls(
+                        batch,
+                        message: "Not run: Autopilot stopped the batch after a repeated tool call.",
+                        calls: AgentToolLoopPolicy.remainingCalls(after: callIndex, in: batch.calls))
+                    break
+                }
             }
+            guard !Task.isCancelled else {
+                self.toolExecutionTask = nil
+                if let conversationID = self.pendingToolStopNotice {
+                    self.pendingToolStopNotice = nil
+                    self.appendWorkNotice(
+                        "The user manually stopped the previous work session. Do not resume autonomously; wait for the next user message.",
+                        conversationID: conversationID)
+                }
+                    self.isStoppingWork = false
+                return
+            }
+            self.toolExecutionTask = nil
             if let i = self.conversationIndex(batch.conversationID) { self.touch(i) }
-            if approved && !batch.continueAfter {
+            if stopForToolLoop {
+                self.stopAutopilot(reason: .repeatedOutput)
+                return
+            }
+            if let note = batch.continuationNote {
+                self.appendWorkNotice(note, conversationID: batch.conversationID)
+            }
+            if approved && !forceContinuation && !batch.continueAfter {
                 self.finishToolTurn(conversationID: batch.conversationID)   // fire-and-forget: turn done
             } else {
                 self.startTurn(conversationID: batch.conversationID)
@@ -72,9 +140,11 @@ extension AppModel {
         activity = nil
         isStreaming = false
         streamingConversationID = nil
+        finishAgentWork()
         compressIfNeeded(conversationID: conversationID)
         updateMemoryIfNeeded(conversationID: conversationID)
         maybeRefineTitle(conversationID: conversationID)
+        clearWorkNotices(conversationID: conversationID)
     }
 
     /// Attach images a python_exec run created in the conversation's files folder, so the vision

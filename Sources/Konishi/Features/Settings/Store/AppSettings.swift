@@ -28,8 +28,15 @@ final class AppSettings {
     var topP: Double {
         didSet { defaults.set(topP, forKey: Keys.topP) }
     }
-    var maxTokens: Int {
-        didSet { defaults.set(maxTokens, forKey: Keys.maxTokens) }
+    /// Soft cumulative output budget for one user task; the stream is counted as UTF-8 bytes / 4.
+    var workOutputTokenLimit: Int {
+        didSet { defaults.set(workOutputTokenLimit, forKey: Keys.workOutputTokenLimit) }
+    }
+    var workTurnLimit: Int {
+        didSet { defaults.set(workTurnLimit, forKey: Keys.workTurnLimit) }
+    }
+    var workToolCallLimit: Int {
+        didSet { defaults.set(workToolCallLimit, forKey: Keys.workToolCallLimit) }
     }
     /// Manual context-window size (0 = auto-detect from server or config.json).
     var contextWindowOverride: Int {
@@ -289,7 +296,19 @@ final class AppSettings {
         self.model = defaults.string(forKey: Keys.model) ?? "gemma-4-26b-a4b-it-qat-mlx-4bit"
         self.temperature = defaults.object(forKey: Keys.temperature) as? Double ?? 0.7
         self.topP = defaults.object(forKey: Keys.topP) as? Double ?? 1.0
-        self.maxTokens = defaults.object(forKey: Keys.maxTokens) as? Int ?? -1
+        let legacyMaxTokens = defaults.object(forKey: Keys.legacyMaxTokens) as? Int ?? -1
+        let outputTokenLimit = defaults.object(forKey: Keys.workOutputTokenLimit) as? Int
+            ?? (legacyMaxTokens > 0 ? legacyMaxTokens : AgentWorkLimits.defaults.outputTokens)
+        let turnLimit = defaults.object(forKey: Keys.workTurnLimit) as? Int
+            ?? AgentWorkLimits.defaults.modelTurns
+        let toolCallLimit = defaults.object(forKey: Keys.workToolCallLimit) as? Int
+            ?? AgentWorkLimits.defaults.toolCalls
+        self.workOutputTokenLimit = outputTokenLimit
+        self.workTurnLimit = turnLimit
+        self.workToolCallLimit = toolCallLimit
+        defaults.set(outputTokenLimit, forKey: Keys.workOutputTokenLimit)
+        defaults.set(turnLimit, forKey: Keys.workTurnLimit)
+        defaults.set(toolCallLimit, forKey: Keys.workToolCallLimit)
         self.contextWindowOverride = defaults.object(forKey: Keys.contextWindowOverride) as? Int ?? 0
         self.compressionEnabled = defaults.object(forKey: Keys.compressionEnabled) as? Bool ?? true
         self.compressionBudget = defaults.object(forKey: Keys.compressionBudget) as? Int ?? 16000
@@ -406,11 +425,6 @@ final class AppSettings {
         self.activeLanguageProfileID = defaults.string(forKey: Keys.activeLanguageProfileID) ?? ""
     }
 
-    /// `maxTokens <= 0` means "let the server decide".
-    var effectiveMaxTokens: Int? {
-        maxTokens > 0 ? maxTokens : nil
-    }
-
     private func url(path: String) -> URL? {
         urlFrom(base: baseURL, path: path)
     }
@@ -463,7 +477,7 @@ final class AppSettings {
             model: (modelOverride?.isEmpty == false ? modelOverride! : model),
             temperature: temperature,
             topP: topP == 1.0 ? nil : topP,
-            maxTokens: effectiveMaxTokens,
+            maxTokens: nil,
             stop: parsedStop,
             seed: seed >= 0 ? seed : nil,
             presencePenalty: presencePenalty == 0 ? nil : presencePenalty,
@@ -481,7 +495,10 @@ final class AppSettings {
         static let model = "konishi.model"
         static let temperature = "konishi.temperature"
         static let topP = "konishi.topP"
-        static let maxTokens = "konishi.maxTokens"
+        static let legacyMaxTokens = "konishi.maxTokens"
+        static let workOutputTokenLimit = "konishi.workOutputTokenLimit"
+        static let workTurnLimit = "konishi.workTurnLimit"
+        static let workToolCallLimit = "konishi.workToolCallLimit"
         static let contextWindowOverride = "konishi.contextWindowOverride"
         static let compressionEnabled = "konishi.compressionEnabled"
         static let compressionBudget = "konishi.compressionBudget"

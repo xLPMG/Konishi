@@ -4,7 +4,8 @@ extension AppModel {
 
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !draftImages.isEmpty || !draftAttachments.isEmpty, !isStreaming,
+        guard !text.isEmpty || !draftImages.isEmpty || !draftAttachments.isEmpty,
+            canBeginAgentTask,
             let convoID = selectedConversationID, let idx = conversationIndex(convoID)
         else { return }
 
@@ -17,6 +18,7 @@ extension AppModel {
         draftAttachments = []
         loopSignatures.removeAll()
         turnSources.removeAll()
+        beginAgentWork(conversationID: convoID)
         conversations[idx].messages.append(
             ChatMessage(role: .user, content: text, images: images, attachments: attachments))
 
@@ -29,7 +31,8 @@ extension AppModel {
     }
 
     func regenerate(messageID: UUID) {
-        guard let convoID = selectedConversationID, let idx = conversationIndex(convoID),
+        guard canBeginAgentTask,
+            let convoID = selectedConversationID, let idx = conversationIndex(convoID),
             let msgIdx = conversations[idx].messages.firstIndex(where: { $0.id == messageID })
         else { return }
         conversations[idx].messages.removeSubrange(msgIdx...)
@@ -37,6 +40,7 @@ extension AppModel {
         loopSignatures.removeAll()
         turnSources.removeAll()
         resetSpeech()
+        beginAgentWork(conversationID: convoID)
         touch(idx)
         startTurn(conversationID: convoID)
     }
@@ -62,6 +66,15 @@ extension AppModel {
 
     func startTurn(conversationID: UUID) {
         guard let idx = conversationIndex(conversationID) else { return }
+        guard pendingWorkGate == nil else { return }
+        if var session = workSession, session.conversationID == conversationID {
+            let pauseReason = session.beginTurn()
+            workSession = session
+            if let pauseReason {
+                pauseAgentWork(reason: pauseReason)
+                return
+            }
+        }
         flushTask?.cancel()
         flushTask = nil
         deltaBuffer = ""
@@ -138,9 +151,11 @@ extension AppModel {
             var usage: Usage?
             var toolCalls: [ToolCall]?
             var caughtError = false
+            var interruption: AgentWorkPauseReason?
             var stripper = ThinkStripper()  // strip inline chain-of-thought some models emit as content
+            var repeatedLineGuard = RepeatedLineGuard()
             do {
-                for try await event in ChatService.stream(
+                streamLoop: for try await event in ChatService.stream(
                     config: config, messages: wire, tools: tools, toolChoice: nil)
                 {
                     switch event {
@@ -173,6 +188,16 @@ extension AppModel {
                                 out.visible, conversationID: conversationID,
                                 assistantID: assistantID)
                         }
+                        if let reason = self.observeAgentOutput(out.reasoning + out.visible) {
+                            interruption = reason
+                            break streamLoop
+                        }
+                        if !out.visible.isEmpty,
+                            repeatedLineGuard.consume(out.visible) != nil
+                        {
+                            interruption = .repeatedOutput
+                            break streamLoop
+                        }
                     case .reasoning(let r):
                         if !r.isEmpty {
                             if firstGenerationAt == nil { firstGenerationAt = Date() }
@@ -180,6 +205,15 @@ extension AppModel {
                             reasoning += r
                             self.appendReasoning(
                                 r, conversationID: conversationID, assistantID: assistantID)
+                            if let reason = self.observeAgentOutput(r) {
+                                interruption = reason
+                                break streamLoop
+                            }
+                        }
+                    case .toolCallDelta(let generated):
+                        if let reason = self.observeAgentOutput(generated) {
+                            interruption = reason
+                            break streamLoop
                         }
                     case .usage(let u):
                         usage = u
@@ -213,6 +247,15 @@ extension AppModel {
                     answer += tail.visible
                     self.appendDelta(
                         tail.visible, conversationID: conversationID, assistantID: assistantID)
+                    if interruption == nil {
+                        interruption = self.observeAgentOutput(tail.visible)
+                    }
+                }
+                if interruption == nil, repeatedLineGuard.finish() != nil {
+                    interruption = .repeatedOutput
+                }
+                if interruption == nil, finishReason == "length" {
+                    interruption = .responseLength
                 }
                 if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     traceStore.trace(
@@ -228,13 +271,10 @@ extension AppModel {
                 }
                 if deltaCount == 0 && (toolCalls?.isEmpty ?? true) {
                     if finishReason == "length" {
-                        let hint =
-                            "The model hit the token limit while reasoning and produced no answer. Raise Max tokens in Settings › Generation."
                         traceStore.trace(
                             conversationID: conversationID, kind: .info,
-                            text: hint,
+                            text: "The server ended this response at its output limit; continuation is available.",
                             saveTraces: settings.saveTraces)
-                        self.errorMessage = hint
                     } else {
                         traceStore.trace(
                             conversationID: conversationID, kind: .info,
@@ -260,6 +300,7 @@ extension AppModel {
                 charCount: charCount,
                 usage: usage,
                 toolCalls: toolCalls,
+                interruption: interruption,
                 failed: caughtError
             )
         }
@@ -332,6 +373,7 @@ extension AppModel {
         charCount: Int,
         usage: Usage?,
         toolCalls: [ToolCall]?,
+        interruption: AgentWorkPauseReason? = nil,
         failed: Bool = false
     ) {
         guard streamPresentation.matches(conversationID: conversationID, assistantID: assistantID) else { return }
@@ -360,6 +402,50 @@ extension AppModel {
 
         let hasTools = !(toolCalls?.isEmpty ?? true)
         let hasReasoning = !(conversations[idx].messages[mIdx].reasoning?.isEmpty ?? true)
+        if let interruption {
+            let partialContent = conversations[idx].messages[mIdx].content
+            let batch: PendingToolBatch? = {
+                guard let toolCalls, !toolCalls.isEmpty else { return nil }
+                conversations[idx].messages[mIdx].toolCalls = toolCalls
+                return PendingToolBatch(
+                    conversationID: conversationID, calls: toolCalls,
+                    continueAfter: Self.needsToolContinuation(content: partialContent, calls: toolCalls))
+            }()
+            if partialContent.isEmpty, !hasTools, !hasReasoning {
+                conversations[idx].messages.remove(at: mIdx)
+            }
+            touch(idx)
+            streamPresentation.clear()
+            activity = nil
+            isStreaming = false
+            streamingConversationID = nil
+
+            if interruption == .repeatedOutput {
+                if recordAgentLoopRecovery() {
+                    appendWorkNotice(
+                        "The previous generation was stopped after it repeated the same line five times. Change approach and continue without repeating it.",
+                        conversationID: conversationID)
+                    if let batch { routeToolBatch(batch) } else { startTurn(conversationID: conversationID) }
+                } else if workSession?.autopilot == true {
+                    stopAutopilot(reason: interruption, batch: batch)
+                } else {
+                    pauseAgentWork(reason: interruption, batch: batch)
+                }
+                return
+            }
+
+            if interruption == .safetyCeiling {
+                stopAutopilot(reason: interruption, batch: batch)
+            } else if workSession?.autopilot == true {
+                appendWorkNotice(
+                    "The previous response ended at a server output boundary. Continue from its last unfinished point without repeating completed work.",
+                    conversationID: conversationID)
+                if let batch { routeToolBatch(batch) } else { startTurn(conversationID: conversationID) }
+            } else {
+                pauseAgentWork(reason: interruption, batch: batch)
+            }
+            return
+        }
         if conversations[idx].messages[mIdx].content.isEmpty, !hasTools, !hasReasoning {
             conversations[idx].messages.remove(at: mIdx)
             touch(idx)
@@ -367,6 +453,7 @@ extension AppModel {
             activity = nil
             isStreaming = false
             streamingConversationID = nil
+            finishAgentWork()
             return
         }
 
@@ -386,16 +473,7 @@ extension AppModel {
             let batch = PendingToolBatch(
                 conversationID: conversationID, calls: toolCalls,
                 continueAfter: Self.needsToolContinuation(content: content, calls: toolCalls))
-            let names = toolCalls.compactMap { $0.function.name }
-            if !names.isEmpty && toolCalls.allSatisfy({ toolCallIsAutoApproved($0, mode: mode) }) {
-                activity = "Calling \(names.joined(separator: ", "))…"
-                executeAndContinue(batch: batch, approved: true)  // auto-approved: keeps streaming
-            } else {
-                activity = nil
-                isStreaming = false
-                streamingConversationID = nil
-                pendingApproval = batch
-            }
+            routeToolBatch(batch)
             return
         }
 
@@ -409,11 +487,13 @@ extension AppModel {
         activity = nil
         isStreaming = false
         streamingConversationID = nil
+        finishAgentWork()
         compressIfNeeded(conversationID: conversationID)
         updateMemoryIfNeeded(conversationID: conversationID)
         maybeRefineTitle(conversationID: conversationID)
         emitFinalSpeech(
             assistantID: assistantID, content: conversations[idx].messages[mIdx].content)
+        clearWorkNotices(conversationID: conversationID)
     }
 
     static func needsToolContinuation(content: String, calls: [ToolCall]) -> Bool {
@@ -447,8 +527,12 @@ extension AppModel {
     }
 
     func stop() {
+        let wasExecutingTools = toolExecutionTask != nil
         streamTask?.cancel()
         streamTask = nil
+        toolExecutionTask?.cancel()
+        toolExecutionTask = nil
+        if wasExecutingTools { isStoppingWork = true }
         cancelInteraction()  // resume/clear any paused multiple-choice prompt
         resetSpeech()
         flushTask?.cancel()
@@ -464,6 +548,7 @@ extension AppModel {
                 let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
             {
                 conversations[idx].messages[mIdx].content += streamPresentation.content
+                conversations[idx].messages[mIdx].interrupted = true
                 if !streamPresentation.reasoning.isEmpty {
                     conversations[idx].messages[mIdx].reasoning =
                         (conversations[idx].messages[mIdx].reasoning ?? "") + streamPresentation.reasoning
@@ -479,6 +564,16 @@ extension AppModel {
         streamingConversationID = nil
         activity = nil
         isStreaming = false
+        if let session = workSession {
+            if wasExecutingTools {
+                pendingToolStopNotice = session.conversationID
+            } else {
+                appendWorkNotice(
+                    "The user manually stopped the previous work session. Do not resume autonomously; wait for the next user message.",
+                    conversationID: session.conversationID)
+            }
+            finishAgentWork()
+        }
     }
 
     func buildWire(
@@ -514,17 +609,16 @@ extension AppModel {
         for (i, msg) in budgeted.enumerated() {
             switch msg.role {
             case .system:
-                continue
+                if msg.content.hasPrefix("[Konishi work-session note]") {
+                    wire.append(WireMessage(role: Role.system.rawValue, text: msg.content))
+                }
             case .tool:
                 let content = keepFullTool.contains(i) ? msg.content : Self.stubToolResult(msg)
                 wire.append(
                     .toolResult(
                         id: msg.toolCallId ?? "", name: msg.toolName ?? "tool", content: content))
             case .assistant:
-                let assistantText =
-                    msg.interrupted
-                    ? msg.content + "\n\n[Response interrupted by the user.]"
-                    : msg.content
+                let assistantText = msg.assistantPromptText
                 if let calls = msg.toolCalls, !calls.isEmpty {
                     wire.append(
                         WireMessage(
@@ -576,7 +670,7 @@ extension AppModel {
     /// Keep the most recent turns that fit the model's context window.
     private func budget(history: [ChatMessage]) -> [ChatMessage] {
         guard let window = contextWindow else { return history }
-        let reserve = max(settings.effectiveMaxTokens ?? 1024, 512)
+        let reserve = 1024
         let budgetTokens = max(1000, window - reserve - 256)
         var total = 0
         var kept: [ChatMessage] = []

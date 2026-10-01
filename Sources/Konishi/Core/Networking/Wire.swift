@@ -165,6 +165,7 @@ struct ChatCompletionResponse: Decodable, Sendable {
 enum StreamEvent: Sendable {
     case delta(String)
     case reasoning(String)
+    case toolCallDelta(String)
     case usage(Usage)
     case toolCalls([ToolCall])
     case finish(String?)

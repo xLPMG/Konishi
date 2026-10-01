@@ -16,4 +16,13 @@ struct ChatMessageTests {
         let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         #expect(object["localOnly"] == nil)
     }
+
+    @Test("only explicitly user-interrupted replies say the user interrupted them")
+    func assistantPromptTextReflectsUserInterruption() {
+        let workPaused = ChatMessage(role: .assistant, content: "Partial answer")
+        let userStopped = ChatMessage(role: .assistant, content: "Partial answer", interrupted: true)
+
+        #expect(workPaused.assistantPromptText == "Partial answer")
+        #expect(userStopped.assistantPromptText == "Partial answer\n\n[Response interrupted by the user.]")
+    }
 }

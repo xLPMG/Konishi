@@ -25,6 +25,8 @@ struct ChatView: View {
                         if let error = model.errorMessage { errorBanner(error) }
                         if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
                         if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
+                        if let gate = model.pendingWorkGate { WorkLimitBar(gate: gate) }
+                        if model.isAutopilotActive || model.isStoppingWork { AutopilotStatusBar() }
                         StatsBar()
                         attachmentStrip
                         inputBar
@@ -57,6 +59,19 @@ struct ChatView: View {
                     Label("Tasks", systemImage: "checklist")
                 }
                 .help("Open conversation tasks and notes")
+                Button {
+                    model.autopilotArmed.toggle()
+                } label: {
+                    Label(
+                        model.autopilotArmed ? "Autopilot: On" : "Autopilot: Off",
+                        systemImage: "infinity")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(model.autopilotArmed ? AnyShapeStyle(model.currentAccent) : AnyShapeStyle(.secondary))
+                .opacity(model.autopilotArmed ? 1 : 0.55)
+                .disabled(model.isStreaming || model.workSession != nil || model.pendingApproval != nil
+                    || model.pendingWorkGate != nil)
+                .help("Use auto-approved tools for the next task. Other tools are reported unavailable; Autopilot stops at its safety ceiling.")
                 if model.voice.isSpeaking {
                     Button { model.voice.stopSpeaking() } label: {
                         Label("Stop Voice", systemImage: "speaker.slash")
@@ -693,6 +708,51 @@ private struct ToolApprovalBar: View {
     private func decodeArguments<T: Decodable>(_ call: ToolCall) -> T? {
         guard let data = call.function.arguments.data(using: .utf8) else { return nil }
         return try? Wire.decoder.decode(T.self, from: data)
+    }
+}
+
+private struct WorkLimitBar: View {
+    @Environment(AppModel.self) private var model
+    let gate: AppModel.PendingWorkGate
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label("Continue working?", systemImage: "hourglass")
+                .font(.callout.weight(.semibold))
+            Text(gate.reason.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("Continue") { model.continueAgentWork() }
+                    .buttonStyle(.borderedProminent)
+                Button("Stop", role: .destructive) { model.stopAgentWork() }
+                Spacer()
+            }
+        }
+        .padding(10)
+        .background(model.currentAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+}
+
+private struct AutopilotStatusBar: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(
+                model.isStoppingWork ? "Stopping after current tool…" : "Autopilot active",
+                systemImage: model.isStoppingWork ? "hourglass" : "sparkles")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(model.currentAccent)
+            Text(model.isStoppingWork ? "The current tool operation must finish first." : "Only auto-approved tools are available.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
     }
 }
 

@@ -104,10 +104,18 @@ enum ChatService {
             if let calls = delta?.toolCalls {
                 for call in calls {
                     var entry = toolAccum[call.index] ?? (id: call.id ?? "", name: "", args: "")
+                    var generated = ""
                     if let id = call.id { entry.id = id }
-                    if let name = call.function?.name { entry.name += name }
-                    if let args = call.function?.arguments { entry.args += args }
+                    if let name = call.function?.name {
+                        entry.name += name
+                        generated += name
+                    }
+                    if let args = call.function?.arguments {
+                        entry.args += args
+                        generated += args
+                    }
                     toolAccum[call.index] = entry
+                    if !generated.isEmpty { continuation.yield(.toolCallDelta(generated)) }
                 }
             }
             if let reason = chunk.choices?.first?.finishReason { finishReason = reason }

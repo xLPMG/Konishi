@@ -58,6 +58,13 @@ final class AppModel {
         didSet { if searchText != oldValue { scheduleSearch() } }
     }
     var pendingApproval: PendingToolBatch?
+    var pendingWorkGate: PendingWorkGate?
+    @ObservationIgnored
+    var workSession: AgentWorkSession?
+    var isAutopilotActive = false
+    var pendingToolStopNotice: UUID?
+    var isStoppingWork = false
+    var autopilotArmed = false
     /// A paused turn waiting on the user to answer an `ask_multiple_choice` prompt.
     var pendingInteraction: PendingInteraction?
     var mode: AppMode = .chat
@@ -103,6 +110,14 @@ final class AppModel {
         let calls: [ToolCall]
         /// Whether the model needs another turn to act on a tool's output.
         var continueAfter: Bool = true
+        var continuationNote: String?
+    }
+
+    struct PendingWorkGate: Identifiable {
+        let id = UUID()
+        let conversationID: UUID
+        let reason: AgentWorkPauseReason
+        var batch: PendingToolBatch?
     }
 
     init() {
@@ -289,9 +304,17 @@ final class AppModel {
 
     // MARK: - Sending & streaming
 
+    var canBeginAgentTask: Bool {
+        AgentTaskEntry.isAvailable(
+            isStreaming: isStreaming,
+            awaitingToolApproval: pendingApproval != nil,
+            awaitingWorkDecision: pendingWorkGate != nil,
+            finishingToolOperation: isStoppingWork)
+    }
+
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
-            || !draftAttachments.isEmpty) && !isStreaming
+            || !draftAttachments.isEmpty) && canBeginAgentTask
     }
 
     // Streamed tokens are buffered and flushed on a timer so the UI re-renders (and re-parses
@@ -310,6 +333,7 @@ final class AppModel {
     /// Serial server-TTS pipeline for streamed chat replies: sentences synthesized in order.
     var speechSegCont: AsyncStream<String>.Continuation?
     var speechSynthTask: Task<Void, Never>?
+    var toolExecutionTask: Task<Void, Never>?
     /// True once we've surfaced a server-TTS failure this session, so we don't nag on every reply.
     /// Reset when TTS succeeds again or the audio endpoint/source changes.
     var warnedServerTTSFailure = false

@@ -152,12 +152,16 @@ private struct GenerationSettings: View {
                 slider("Top-p", value: $settings.topP, range: 0...1, step: 0.05)
                 slider("Presence penalty", value: $settings.presencePenalty, range: -2...2, step: 0.1)
                 slider("Frequency penalty", value: $settings.frequencyPenalty, range: -2...2, step: 0.1)
-                NumberField("Max tokens", value: $settings.maxTokens, range: -1...1_048_576, step: 128)
-                Text("-1 or 0 = server default (mlx-lm defaults to 512 — raise for reasoning models).")
-                    .font(.caption).foregroundStyle(.secondary)
                 NumberField("Seed", value: $settings.seed, range: -1...9_999_999, step: 1)
                 Text("-1 = random.").font(.caption).foregroundStyle(.secondary)
                 TextField("Stop sequences (comma-separated)", text: $settings.stopSequences)
+            }
+            Section("Agent work limits") {
+                NumberField("Output tokens before asking", value: $settings.workOutputTokenLimit, range: 0...1_048_576, step: 512)
+                NumberField("Model turns before asking", value: $settings.workTurnLimit, range: 0...100, step: 1)
+                NumberField("Tool calls before asking", value: $settings.workToolCallLimit, range: 0...500, step: 1)
+                Text("Soft limits apply across one task. Output tokens are estimated from streamed text; Continue adds another allowance. 0 disables a limit. Konishi does not set a per-response token cap, though a server may impose its own.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Context") {
                 NumberField("Window override", value: $settings.contextWindowOverride, range: 0...2_097_152, step: 1024)

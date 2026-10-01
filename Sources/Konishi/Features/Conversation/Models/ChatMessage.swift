@@ -45,7 +45,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     var attachments: [Attachment]
     /// Web sources gathered via web_search/web_fetch while writing this reply.
     var sources: [Source]
-    /// True when the user spoke over this assistant response before it finished playing.
+    /// True only when the user explicitly stopped or spoke over this assistant response.
     var interrupted: Bool
     /// Tool calls requested by the assistant on this turn.
     var toolCalls: [ToolCall]?
@@ -84,6 +84,10 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
 
     /// Rough byte size of extracted attachment text, for token budgeting.
     var attachmentBytes: Int { attachments.reduce(0) { $0 + $1.text.utf8.count } }
+
+    var assistantPromptText: String {
+        interrupted ? content + "\n\n[Response interrupted by the user.]" : content
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, role, content, stats, reasoning, images, attachments, sources, interrupted, toolCalls, toolCallId, toolName
