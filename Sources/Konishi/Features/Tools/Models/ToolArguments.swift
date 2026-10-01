@@ -43,6 +43,48 @@ enum ToolArguments {
     struct Calculation: Decodable { let expression: String }
     struct DueItems: Decodable { var limit: Int? }
 
+    struct CalendarEvents: Decodable {
+        var days: Int?
+        var calendar: String?
+    }
+    struct CalendarCreateEvent: Decodable {
+        let title: String
+        let startDate: String
+        let endDate: String
+        var location: String?
+        var notes: String?
+        var calendar: String?
+    }
+    struct CalendarUpdateEvent: Decodable {
+        let eventID: String
+        var title: String?
+        var startDate: String?
+        var endDate: String?
+        var location: String?
+        var notes: String?
+    }
+    struct RemindersList: Decodable {
+        var days: Int?
+        var includeUndated: Bool?
+        var query: String?
+        var limit: Int?
+    }
+    struct ReminderCreate: Decodable {
+        let title: String
+        var dueDate: String?
+        var notes: String?
+        var priority: Int?
+    }
+    struct ReminderUpdate: Decodable {
+        let reminderID: String
+        var title: String?
+        var dueDate: String?
+        var clearDueDate: Bool?
+        var notes: String?
+        var priority: Int?
+        var completed: Bool?
+    }
+
     struct VaultSearch: Decodable {
         let query: String
         var maxResults: Int?

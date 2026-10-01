@@ -3,6 +3,7 @@ import Foundation
 extension AppModel {
     func toolCallIsAutoApproved(_ call: ToolCall, mode: AppMode) -> Bool {
         guard let name = call.function.name else { return false }
+        guard Tools.spec(name)?.requiresApproval != true else { return false }
         if settings.autoApproveTools(for: mode).contains(name) { return true }
         guard name == "run_shell", let args: ToolArguments.Shell = Self.decodeToolArgs(call) else { return false }
         return settings.shellCommandIsAutoApproved(args.command, for: mode)
@@ -209,6 +210,69 @@ extension AppModel {
             }
             do {
                 return "\(args.expression) = \(Calculator.format(try Calculator.evaluate(args.expression)))"
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "calendar_events":
+            guard toolEnabled("calendar_events"),
+                let args: ToolArguments.CalendarEvents = Self.decodeToolArgs(call)
+            else { return "Error: calendar_events is disabled or arguments are invalid" }
+            do {
+                return try calendarStore.listEvents(days: args.days, calendarName: args.calendar)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "calendar_create_event":
+            guard toolEnabled("calendar_create_event"),
+                let args: ToolArguments.CalendarCreateEvent = Self.decodeToolArgs(call)
+            else { return "Error: calendar_create_event is disabled or arguments are invalid" }
+            do {
+                return try calendarStore.createEvent(
+                    title: args.title, startDate: args.startDate, endDate: args.endDate,
+                    location: args.location, notes: args.notes, calendarName: args.calendar)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "calendar_update_event":
+            guard toolEnabled("calendar_update_event"),
+                let args: ToolArguments.CalendarUpdateEvent = Self.decodeToolArgs(call)
+            else { return "Error: calendar_update_event is disabled or arguments are invalid" }
+            do {
+                return try calendarStore.updateEvent(
+                    identifier: args.eventID, title: args.title, startDate: args.startDate,
+                    endDate: args.endDate, location: args.location, notes: args.notes)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "reminders_list":
+            guard toolEnabled("reminders_list") else { return "Error: reminders_list is disabled" }
+            let args: ToolArguments.RemindersList? = Self.decodeToolArgs(call)
+            do {
+                return try await calendarStore.listReminders(
+                    days: args?.days, includeUndated: args?.includeUndated,
+                    query: args?.query, limit: args?.limit)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "reminder_create":
+            guard toolEnabled("reminder_create"),
+                let args: ToolArguments.ReminderCreate = Self.decodeToolArgs(call)
+            else { return "Error: reminder_create is disabled or arguments are invalid" }
+            do {
+                return try calendarStore.createReminder(
+                    title: args.title, dueDate: args.dueDate, notes: args.notes, priority: args.priority)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "reminder_update":
+            guard toolEnabled("reminder_update"),
+                let args: ToolArguments.ReminderUpdate = Self.decodeToolArgs(call)
+            else { return "Error: reminder_update is disabled or arguments are invalid" }
+            do {
+                return try calendarStore.updateReminder(
+                    identifier: args.reminderID, title: args.title, dueDate: args.dueDate,
+                    clearDueDate: args.clearDueDate, notes: args.notes,
+                    priority: args.priority, completed: args.completed)
             } catch {
                 return "Error: \(error.localizedDescription)"
             }

@@ -55,6 +55,7 @@ final class AppModel {
     let fileStore = FileStore()
     let documentStore = DocumentStore()
     let vaultStore = VaultStore()
+    let calendarStore = AppleCalendarStore()
     let personaStore = PersonaStore()
     let runtime = Runtime()
     let voice = VoiceManager()
@@ -296,6 +297,7 @@ final class AppModel {
         "search_deck", "get_due_items", "calculate",
         "vault_search", "vault_read", "vault_list",
         "conversation_search", "conversation_list", "conversation_read",
+        "calendar_events", "reminders_list",
     ]
     /// Tools whose OUTPUT the model must read to finish its reply, so a continuation turn is warranted.
     /// After fire-and-forget writes (e.g. banking a card) with a written reply, the turn is complete.
@@ -304,6 +306,7 @@ final class AppModel {
         "memory_list", "memory_read", "calculate", "python_exec", "run_shell", "ask_multiple_choice",
         "vault_search", "vault_read", "vault_list",
         "conversation_search", "conversation_list", "conversation_read",
+        "calendar_events", "reminders_list",
     ]
 
     /// How many trailing tool results are kept verbatim in the wire; older ones are stubbed.

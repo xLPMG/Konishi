@@ -323,6 +323,26 @@ private struct ToolsSettings: View {
     var body: some View {
         @Bindable var settings = model.settings
         Form {
+            Section("Apple Calendar & Reminders") {
+                LabeledContent("Calendar", value: model.calendarStore.calendarAccess.label)
+                Button("Connect Calendar") {
+                    Task { await model.calendarStore.requestCalendarAccess() }
+                }
+                .disabled(model.calendarStore.calendarAccess == .fullAccess || model.calendarStore.requestingCalendarAccess)
+
+                LabeledContent("Reminders", value: model.calendarStore.remindersAccess.label)
+                Button("Connect Reminders") {
+                    Task { await model.calendarStore.requestRemindersAccess() }
+                }
+                .disabled(model.calendarStore.remindersAccess == .fullAccess || model.calendarStore.requestingRemindersAccess)
+
+                if let error = model.calendarStore.accessError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                Text("Access is requested separately for each app. Event and reminder details are sent to the configured chat model when a tool runs. Create and update actions always ask for approval.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 Toggle("Enable tool calling", isOn: $settings.toolsEnabled)
                 Text("Master switch. Configure which tools each mode may use below.")
@@ -371,6 +391,7 @@ private struct ToolsSettings: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { model.calendarStore.refreshAuthorizationStatus() }
     }
 }
 
@@ -411,8 +432,8 @@ private struct ToolRow: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .frame(width: toolColumnWidth)
-            .disabled(!enabled)
-            .help("Run without asking for approval.")
+            .disabled(!enabled || spec.requiresApproval)
+            .help(spec.requiresApproval ? "This action always requires approval." : "Run without asking for approval.")
         }
     }
 }

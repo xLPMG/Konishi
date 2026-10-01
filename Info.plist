@@ -22,5 +22,9 @@
     <string>Konishi uses the microphone for voice dictation.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Konishi uses speech recognition to transcribe your voice into text.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Konishi reads your calendars and creates or updates events only when you enable those tools.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Konishi reads your reminders and creates or updates them only when you enable those tools.</string>
 </dict>
 </plist>

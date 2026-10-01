@@ -6,6 +6,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
     case files
     case web
     case compute
+    case calendar
     case system
     case language
     case interactive
@@ -19,6 +20,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
         case .files: "Files"
         case .web: "Web"
         case .compute: "Compute"
+        case .calendar: "Calendar & Reminders"
         case .system: "System"
         case .language: "Language deck"
         case .interactive: "Interactive"
@@ -41,6 +43,23 @@ struct ToolSpec: Identifiable, Sendable {
     let mutating: Bool
     let defaultEnabled: Bool
     let defaultAutoApprove: Bool
+    let requiresApproval: Bool
+
+    init(
+        name: String, summary: String, description: String, parameters: JSONValue,
+        group: ToolGroup, mutating: Bool, defaultEnabled: Bool, defaultAutoApprove: Bool,
+        requiresApproval: Bool = false
+    ) {
+        self.name = name
+        self.summary = summary
+        self.description = description
+        self.parameters = parameters
+        self.group = group
+        self.mutating = mutating
+        self.defaultEnabled = defaultEnabled
+        self.defaultAutoApprove = defaultAutoApprove
+        self.requiresApproval = requiresApproval
+    }
 
     var id: String { name }
 }
@@ -244,6 +263,112 @@ enum Tools {
         )
     ]
 
+    // MARK: Apple Calendar & Reminders
+
+    static let calendarSpecs: [ToolSpec] = [
+        ToolSpec(
+            name: "calendar_events",
+            summary: "List upcoming calendar events",
+            description: "List events from today through the next N days (default 1, maximum 30), optionally limited to an exact calendar name. Includes current local date/time, event IDs, and local timezone. Use before resolving relative event times.",
+            parameters: .schema(
+                properties: [
+                    "days": .property("integer", "number of days ahead, including today (default 1, maximum 30)"),
+                    "calendar": .property("string", "optional exact calendar name")
+                ],
+                required: []
+            ),
+            group: .calendar, mutating: false,
+            defaultEnabled: false, defaultAutoApprove: true
+        ),
+        ToolSpec(
+            name: "calendar_create_event",
+            summary: "Create a calendar event",
+            description: "Create an event in the default calendar or a named calendar. Dates must be ISO 8601 with timezone offset, e.g. 2026-10-01T14:00:00-07:00. For relative times, call calendar_events first; ask the user if the time is ambiguous. This action always requires user approval.",
+            parameters: .schema(
+                properties: [
+                    "title": .property("string", "event title"),
+                    "start_date": .property("string", "ISO 8601 start date/time including UTC offset"),
+                    "end_date": .property("string", "ISO 8601 end date/time including UTC offset"),
+                    "location": .property("string", "optional location"),
+                    "notes": .property("string", "optional event notes"),
+                    "calendar": .property("string", "optional exact calendar name; otherwise the default calendar")
+                ],
+                required: ["title", "start_date", "end_date"]
+            ),
+            group: .calendar, mutating: true,
+            defaultEnabled: false, defaultAutoApprove: false, requiresApproval: true
+        ),
+        ToolSpec(
+            name: "calendar_update_event",
+            summary: "Update a calendar event",
+            description: "Update an event by its event ID from calendar_events. Supply only fields to change. Dates must be ISO 8601 with timezone offset. Empty location or notes clears that field. This action always requires user approval.",
+            parameters: .schema(
+                properties: [
+                    "event_id": .property("string", "event ID returned by calendar_events"),
+                    "title": .property("string", "replacement title"),
+                    "start_date": .property("string", "replacement ISO 8601 start date/time including UTC offset"),
+                    "end_date": .property("string", "replacement ISO 8601 end date/time including UTC offset"),
+                    "location": .property("string", "replacement location; empty string clears it"),
+                    "notes": .property("string", "replacement notes; empty string clears them")
+                ],
+                required: ["event_id"]
+            ),
+            group: .calendar, mutating: true,
+            defaultEnabled: false, defaultAutoApprove: false, requiresApproval: true
+        ),
+        ToolSpec(
+            name: "reminders_list",
+            summary: "List upcoming reminders",
+            description: "List incomplete reminders that are overdue or due within N days (default 7, maximum 90). Undated reminders are omitted unless include_undated is true. Can filter by title text.",
+            parameters: .schema(
+                properties: [
+                    "days": .property("integer", "number of days ahead, including today (default 7, maximum 90)"),
+                    "include_undated": .property("boolean", "include incomplete reminders with no due date (default false)"),
+                    "query": .property("string", "optional case-insensitive title substring"),
+                    "limit": .property("integer", "maximum results (default 50, maximum 100)")
+                ],
+                required: []
+            ),
+            group: .calendar, mutating: false,
+            defaultEnabled: false, defaultAutoApprove: true
+        ),
+        ToolSpec(
+            name: "reminder_create",
+            summary: "Create a reminder",
+            description: "Create a reminder in the default Reminders list. due_date may be YYYY-MM-DD or ISO 8601 with timezone offset. Priority is 0 (none) through 9 (lowest), where 1 is highest. This action always requires user approval.",
+            parameters: .schema(
+                properties: [
+                    "title": .property("string", "reminder title"),
+                    "due_date": .property("string", "optional YYYY-MM-DD or ISO 8601 due date/time"),
+                    "notes": .property("string", "optional reminder notes"),
+                    "priority": .property("integer", "optional priority from 0 to 9; 1 is highest")
+                ],
+                required: ["title"]
+            ),
+            group: .calendar, mutating: true,
+            defaultEnabled: false, defaultAutoApprove: false, requiresApproval: true
+        ),
+        ToolSpec(
+            name: "reminder_update",
+            summary: "Update a reminder",
+            description: "Update a reminder by its ID from reminders_list. Supply only fields to change. Set clear_due_date true to remove a due date. This action always requires user approval.",
+            parameters: .schema(
+                properties: [
+                    "reminder_id": .property("string", "reminder ID returned by reminders_list"),
+                    "title": .property("string", "replacement title"),
+                    "due_date": .property("string", "replacement YYYY-MM-DD or ISO 8601 due date/time"),
+                    "clear_due_date": .property("boolean", "remove the existing due date"),
+                    "notes": .property("string", "replacement notes; empty string clears them"),
+                    "priority": .property("integer", "replacement priority from 0 to 9; 1 is highest"),
+                    "completed": .property("boolean", "mark complete or incomplete")
+                ],
+                required: ["reminder_id"]
+            ),
+            group: .calendar, mutating: true,
+            defaultEnabled: false, defaultAutoApprove: false, requiresApproval: true
+        )
+    ]
+
     // MARK: Language deck (used in Learn mode; registered so they appear in per-mode settings)
 
     static let languageSpecs: [ToolSpec] = [
@@ -353,7 +478,7 @@ enum Tools {
         )
     ]
 
-    static let all: [ToolSpec] = baseSpecs + languageSpecs + interactiveSpecs + vaultSpecs
+    static let all: [ToolSpec] = baseSpecs + languageSpecs + interactiveSpecs + vaultSpecs + calendarSpecs
 
     // MARK: Research vault (Obsidian) — gated per-persona by Persona.vaultAccessEnabled.
 
@@ -440,7 +565,7 @@ enum Tools {
         parameters: .schema(properties: [:], required: [])
     )
 
-    static let defaultEnabled: Set<String> = Set((baseSpecs + vaultSpecs).filter(\.defaultEnabled).map(\.name))
+    static let defaultEnabled: Set<String> = Set((baseSpecs + vaultSpecs + calendarSpecs).filter(\.defaultEnabled).map(\.name))
     static let defaultAutoApprove: Set<String> = Set(all.filter(\.defaultAutoApprove).map(\.name))
 
     /// Every deck tool plus the interactive picker — the sensible default toolset for Learn mode.
