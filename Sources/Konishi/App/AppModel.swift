@@ -4,6 +4,36 @@ import SwiftUI
 
 @Observable
 @MainActor
+final class StreamPresentation {
+    private(set) var conversationID: UUID?
+    private(set) var assistantID: UUID?
+    var content = ""
+    var reasoning = ""
+
+    func begin(conversationID: UUID, assistantID: UUID) {
+        self.conversationID = conversationID
+        self.assistantID = assistantID
+        clearText()
+    }
+
+    func matches(conversationID: UUID, assistantID: UUID) -> Bool {
+        self.conversationID == conversationID && self.assistantID == assistantID
+    }
+
+    func clearText() {
+        content = ""
+        reasoning = ""
+    }
+
+    func clear() {
+        conversationID = nil
+        assistantID = nil
+        clearText()
+    }
+}
+
+@Observable
+@MainActor
 final class AppModel {
     // Persisted state
     var settings: AppSettings
@@ -63,6 +93,7 @@ final class AppModel {
     let languageStore = LanguageStore()
     let traceStore = TraceStore()
     var streamTask: Task<Void, Never>?
+    let streamPresentation = StreamPresentation()
     /// Resumed with the tool result once the user answers a pending multiple-choice prompt.
     var interactionContinuation: CheckedContinuation<String, Never>?
 
@@ -78,6 +109,10 @@ final class AppModel {
         Paths.ensure()
         self.settings = AppSettings()
         self.conversations = Self.loadConversations().sorted { $0.updatedAt > $1.updatedAt }
+        let searchIndex = ConversationSearchIndex()
+        Persistence.ioQueue.async {
+            try? searchIndex.rebuildIfNeeded(conversationsDirectory: Paths.conversations)
+        }
         self.languageProfiles = languageStore.allProfiles()
         self.selectedConversationID = conversations.first(where: { $0.isLanguage != true })?.id
         VoiceManager.warmVoices()  // preload the slow system voice catalog off-main

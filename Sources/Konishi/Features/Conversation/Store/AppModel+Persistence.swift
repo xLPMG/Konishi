@@ -41,12 +41,12 @@ extension AppModel {
         return try? Persistence.decoder.decode(Conversation.self, from: data)
     }
 
-    /// Off-main content search across all conversation files; returns ids whose body matches.
+    /// Fallback content search used only if the SQLite full-text index is unavailable.
     nonisolated static func searchDisk(query q: String) -> Set<UUID> {
         let urls = (try? FileManager.default.contentsOfDirectory(
             at: Paths.conversations, includingPropertiesForKeys: nil
         )) ?? []
-        let decoder = Persistence.decoder
+        let decoder = JSONDecoder()
         var ids: Set<UUID> = []
         for url in urls where url.pathExtension == "json" {
             guard let data = try? Data(contentsOf: url),
@@ -61,12 +61,19 @@ extension AppModel {
     static func saveConversation(_ conversation: Conversation) {
         let url = Paths.conversations.appendingPathComponent("\(conversation.id.uuidString).json")
         guard let data = try? Persistence.encoder.encode(conversation) else { return }
-        Persistence.ioQueue.async { try? data.write(to: url, options: .atomic) }
+        let searchRecord = ConversationSearchIndex.Record(conversation)
+        Persistence.ioQueue.async {
+            guard (try? data.write(to: url, options: .atomic)) != nil else { return }
+            try? ConversationSearchIndex().upsert(searchRecord)
+        }
     }
 
     static func deleteConversationFile(_ id: UUID) {
         let url = Paths.conversations.appendingPathComponent("\(id.uuidString).json")
         // Same serial queue as saves so a delete never races ahead of a queued write for this id.
-        Persistence.ioQueue.async { try? FileManager.default.removeItem(at: url) }
+        Persistence.ioQueue.async {
+            try? FileManager.default.removeItem(at: url)
+            try? ConversationSearchIndex().delete(id)
+        }
     }
 }

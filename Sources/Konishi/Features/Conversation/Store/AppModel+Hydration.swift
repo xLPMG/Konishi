@@ -64,7 +64,15 @@ extension AppModel {
         searchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
-            let ids = await Task.detached { Self.searchDisk(query: q) }.value
+            let ids = await Task.detached {
+                Persistence.ioQueue.sync {
+                    do {
+                        return try ConversationSearchIndex().search(query: q)
+                    } catch {
+                        return Self.searchDisk(query: q)
+                    }
+                }
+            }.value
             guard !Task.isCancelled else { return }
             self?.contentMatchIDs = ids
         }

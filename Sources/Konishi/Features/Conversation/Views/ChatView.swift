@@ -186,7 +186,6 @@ struct ChatView: View {
 
     private var messageList: some View {
         let items = self.datedChatItems
-        let lastMessage = model.selectedConversation?.messages.last
         let activeAssistantID = model.isStreaming
             && model.streamingConversationID == model.selectedConversationID
             ? items.last(where: { $0.isAssistant })?.id
@@ -202,7 +201,15 @@ struct ChatView: View {
                                 .padding(.top, verticalGap(at: index, in: items))
                                 .id(item.id)
                         case .assistant(let turn):
-                            AssistantTurnRow(turn: turn, isActive: item.id == activeAssistantID)
+                            AssistantTurnRow(
+                                turn: turn,
+                                isActive: item.id == activeAssistantID,
+                                onStreamUpdate: {
+                                    guard pinnedToBottom else { return }
+                                    withAnimation(.easeOut(duration: 0.12)) {
+                                        proxy.scrollTo(item.id, anchor: .bottom)
+                                    }
+                                })
                                 .padding(.top, verticalGap(at: index, in: items))
                                 .id(item.id)
                         case .dayBreak(let day):
@@ -222,14 +229,6 @@ struct ChatView: View {
                 geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 40
             } action: { _, atBottom in
                 pinnedToBottom = atBottom
-            }
-            .onChange(of: lastMessage?.content) {
-                guard pinnedToBottom, let last = items.last else { return }
-                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(last.id, anchor: .bottom) }
-            }
-            .onChange(of: lastMessage?.reasoning) {
-                guard pinnedToBottom, let last = items.last else { return }
-                withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(last.id, anchor: .bottom) }
             }
             .onChange(of: model.selectedConversation?.messages.count) {
                 guard pinnedToBottom, let last = items.last else { return }
@@ -724,8 +723,19 @@ private struct AssistantTurnRow: View {
     @Environment(AppModel.self) private var model
     let turn: AssistantTurn
     let isActive: Bool
+    let onStreamUpdate: () -> Void
     @State private var hovering = false
     @State private var zoom: IdentifiableImage?
+
+    private var visibleSteps: [AssistantStep] {
+        var visibleSteps = turn.steps.filter(\.hasVisibleContent)
+        if isActive, let activeStep = turn.steps.last,
+            !visibleSteps.contains(where: { $0.id == activeStep.id })
+        {
+            visibleSteps.append(activeStep)
+        }
+        return visibleSteps
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
@@ -741,32 +751,41 @@ private struct AssistantTurnRow: View {
                 if !turn.images.isEmpty { imageGrid }
                 if !turn.attachments.isEmpty { attachmentChips }
 
-                let visibleSteps = turn.steps.filter(\.hasVisibleContent)
                 let reasoningCount = turn.steps.filter { !($0.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }.count
 
                 ForEach(Array(visibleSteps.enumerated()), id: \.element.id) { idx, step in
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let reasoning = step.reasoning,
-                           !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            let title = reasoningCount > 1 ? "Reasoning (Step \(idx + 1))" : "Reasoning"
-                            ReasoningDisclosureView(reasoning: reasoning, title: title)
-                        }
-                        if !step.content.isEmpty {
-                            MarkdownView(
-                                text: step.content,
-                                baseSize: model.settings.fontSize,
-                                sources: turn.sources
-                            )
-                                .textSelection(.enabled)
-                        }
-                        if let toolCalls = step.toolCalls, !toolCalls.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(toolCalls) { call in
-                                    ToolCallView(
-                                        call: call,
-                                        result: turn.toolResults[call.id],
-                                        sources: turn.sources
-                                    )
+                    if isActive, step.id == turn.steps.last?.id {
+                        LiveAssistantStepView(
+                            step: step,
+                            presentation: model.streamPresentation,
+                            baseSize: model.settings.fontSize,
+                            sources: turn.sources,
+                            onStreamUpdate: onStreamUpdate
+                        )
+                    } else {
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let reasoning = step.reasoning,
+                               !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                let title = reasoningCount > 1 ? "Reasoning (Step \(idx + 1))" : "Reasoning"
+                                ReasoningDisclosureView(reasoning: reasoning, title: title)
+                            }
+                            if !step.content.isEmpty {
+                                MarkdownView(
+                                    text: step.content,
+                                    baseSize: model.settings.fontSize,
+                                    sources: turn.sources
+                                )
+                                    .textSelection(.enabled)
+                            }
+                            if let toolCalls = step.toolCalls, !toolCalls.isEmpty {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ForEach(toolCalls) { call in
+                                        ToolCallView(
+                                            call: call,
+                                            result: turn.toolResults[call.id],
+                                            sources: turn.sources
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -881,6 +900,32 @@ private struct AssistantTurnRow: View {
             .joined(separator: "\n\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+private struct LiveAssistantStepView: View {
+    let step: AssistantStep
+    let presentation: StreamPresentation
+    let baseSize: Double
+    let sources: [Source]
+    let onStreamUpdate: () -> Void
+
+    var body: some View {
+        let isCurrent = presentation.assistantID == step.id
+        let content = step.content + (isCurrent ? presentation.content : "")
+        let reasoning = (step.reasoning ?? "") + (isCurrent ? presentation.reasoning : "")
+
+        VStack(alignment: .leading, spacing: 6) {
+            if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                ReasoningDisclosureView(reasoning: reasoning, title: "Reasoning")
+            }
+            if !content.isEmpty {
+                MarkdownView(text: content, baseSize: baseSize, sources: sources)
+                    .textSelection(.enabled)
+            }
+        }
+        .onChange(of: presentation.content) { onStreamUpdate() }
+        .onChange(of: presentation.reasoning) { onStreamUpdate() }
     }
 }
 

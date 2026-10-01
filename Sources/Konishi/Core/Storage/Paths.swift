@@ -16,6 +16,8 @@ enum Paths {
     /// PIDs of servers Konishi launched, so orphans survive app restarts and port edits.
     static let runningServersFile = root.appendingPathComponent("running-servers.json")
     static let cache = root.appendingPathComponent("cache", isDirectory: true)
+    /// Rebuildable full-text index for conversation content search.
+    static let conversationSearchIndex = cache.appendingPathComponent("conversations.sqlite")
     static let logs = root.appendingPathComponent("logs", isDirectory: true)
     static let pythonDir = root.appendingPathComponent("python", isDirectory: true)
     /// Working directory for agent-created files (python_exec), one folder per conversation.

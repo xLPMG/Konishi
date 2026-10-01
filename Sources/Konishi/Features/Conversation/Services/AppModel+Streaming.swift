@@ -62,9 +62,16 @@ extension AppModel {
 
     func startTurn(conversationID: UUID) {
         guard let idx = conversationIndex(conversationID) else { return }
+        flushTask?.cancel()
+        flushTask = nil
+        deltaBuffer = ""
+        reasoningFlushTask?.cancel()
+        reasoningFlushTask = nil
+        reasoningBuffer = ""
         streamingConversationID = conversationID
         let assistant = ChatMessage(role: .assistant, content: "")
         conversations[idx].messages.append(assistant)
+        streamPresentation.begin(conversationID: conversationID, assistantID: assistant.id)
         runStream(conversationID: conversationID, assistantID: assistant.id)
     }
 
@@ -257,6 +264,7 @@ extension AppModel {
     }
 
     private func appendDelta(_ delta: String, conversationID: UUID, assistantID: UUID) {
+        guard streamPresentation.matches(conversationID: conversationID, assistantID: assistantID) else { return }
         deltaBuffer += delta
         let interval = settings.streamFlushMs
         if interval <= 0 {
@@ -272,19 +280,21 @@ extension AppModel {
         }
     }
 
-    /// Apply the buffered tokens to the assistant message in a single mutation.
-    private func flushDeltas(conversationID: UUID, assistantID: UUID) {
+    /// Apply buffered tokens to the active row without mutating conversation history.
+    private func flushDeltas(conversationID: UUID, assistantID: UUID, speak: Bool = true) {
         guard !deltaBuffer.isEmpty else { return }
         let pending = deltaBuffer
         deltaBuffer = ""
         guard let idx = conversationIndex(conversationID),
-            let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
+            conversations[idx].messages.contains(where: { $0.id == assistantID }),
+            streamPresentation.matches(conversationID: conversationID, assistantID: assistantID)
         else { return }
-        conversations[idx].messages[mIdx].content += pending
-        streamSpeak(delta: pending, assistantID: assistantID)
+        streamPresentation.content += pending
+        if speak { streamSpeak(delta: pending, assistantID: assistantID) }
     }
 
     private func appendReasoning(_ chunk: String, conversationID: UUID, assistantID: UUID) {
+        guard streamPresentation.matches(conversationID: conversationID, assistantID: assistantID) else { return }
         reasoningBuffer += chunk
         let interval = settings.streamFlushMs
         if interval <= 0 {
@@ -305,10 +315,10 @@ extension AppModel {
         let pending = reasoningBuffer
         reasoningBuffer = ""
         guard let idx = conversationIndex(conversationID),
-            let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
+            conversations[idx].messages.contains(where: { $0.id == assistantID }),
+            streamPresentation.matches(conversationID: conversationID, assistantID: assistantID)
         else { return }
-        conversations[idx].messages[mIdx].reasoning =
-            (conversations[idx].messages[mIdx].reasoning ?? "") + pending
+        streamPresentation.reasoning += pending
     }
 
     private func finishStream(
@@ -322,6 +332,7 @@ extension AppModel {
         toolCalls: [ToolCall]?,
         failed: Bool = false
     ) {
+        guard streamPresentation.matches(conversationID: conversationID, assistantID: assistantID) else { return }
         streamTask = nil
         flushTask?.cancel()
         flushTask = nil
@@ -332,16 +343,25 @@ extension AppModel {
         guard let idx = conversationIndex(conversationID),
             let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
         else {
+            streamPresentation.clear()
             isStreaming = false
             streamingConversationID = nil
             return
         }
+
+        conversations[idx].messages[mIdx].content += streamPresentation.content
+        if !streamPresentation.reasoning.isEmpty {
+            conversations[idx].messages[mIdx].reasoning =
+                (conversations[idx].messages[mIdx].reasoning ?? "") + streamPresentation.reasoning
+        }
+        streamPresentation.clearText()
 
         let hasTools = !(toolCalls?.isEmpty ?? true)
         let hasReasoning = !(conversations[idx].messages[mIdx].reasoning?.isEmpty ?? true)
         if conversations[idx].messages[mIdx].content.isEmpty, !hasTools, !hasReasoning {
             conversations[idx].messages.remove(at: mIdx)
             touch(idx)
+            streamPresentation.clear()
             activity = nil
             isStreaming = false
             streamingConversationID = nil
@@ -357,6 +377,7 @@ extension AppModel {
             conversations[idx].messages[mIdx].toolCalls = toolCalls
             touch(idx)
             let content = conversations[idx].messages[mIdx].content
+            streamPresentation.clear()
             emitFinalSpeech(assistantID: assistantID, content: content)
             // Only loop back for another turn if the model must act on a tool's OUTPUT. A written
             // reply plus fire-and-forget writes (e.g. banking a card) is already a complete answer.
@@ -382,6 +403,7 @@ extension AppModel {
             turnSources.removeAll()
             touch(idx)
         }
+        streamPresentation.clear()
         activity = nil
         isStreaming = false
         streamingConversationID = nil
@@ -429,10 +451,29 @@ extension AppModel {
         resetSpeech()
         flushTask?.cancel()
         flushTask = nil
-        deltaBuffer = ""
         reasoningFlushTask?.cancel()
         reasoningFlushTask = nil
-        reasoningBuffer = ""
+        if let conversationID = streamPresentation.conversationID,
+            let assistantID = streamPresentation.assistantID
+        {
+            flushDeltas(conversationID: conversationID, assistantID: assistantID, speak: false)
+            flushReasoning(conversationID: conversationID, assistantID: assistantID)
+            if let idx = conversationIndex(conversationID),
+                let mIdx = conversations[idx].messages.firstIndex(where: { $0.id == assistantID })
+            {
+                conversations[idx].messages[mIdx].content += streamPresentation.content
+                if !streamPresentation.reasoning.isEmpty {
+                    conversations[idx].messages[mIdx].reasoning =
+                        (conversations[idx].messages[mIdx].reasoning ?? "") + streamPresentation.reasoning
+                }
+                touch(idx)
+            }
+            streamPresentation.clearText()
+        } else {
+            deltaBuffer = ""
+            reasoningBuffer = ""
+        }
+        streamPresentation.clear()
         streamingConversationID = nil
         activity = nil
         isStreaming = false
