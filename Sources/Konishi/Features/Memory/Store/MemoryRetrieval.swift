@@ -1,8 +1,8 @@
 import Foundation
 
-/// Local lexical retrieval primitives for long-term memory.
-enum MemoryRetrieval {
-    struct ScoredChunk {
+/// Shared hybrid lexical and semantic retrieval for memory, documents, conversations, and vaults.
+enum HybridRetrieval {
+    struct ScoredChunk: Sendable {
         // label is the memory chunk's identifier (scope/file), text is the content of the chunk.
         let chunk: (label: String, text: String)
         let score: Double
@@ -16,9 +16,17 @@ enum MemoryRetrieval {
         0.7 * semantic + 0.3 * lexical
     }
 
-    struct Ranking {
+    struct Ranking: Sendable {
         let scored: [ScoredChunk]
+        let candidateCount: Int
         /// Set when embeddings were unavailable and scoring fell back to BM25 alone.
+        let failure: String?
+    }
+
+    struct Context {
+        let text: String
+        let scored: [ScoredChunk]
+        let candidateCount: Int
         let failure: String?
     }
 
@@ -29,35 +37,78 @@ enum MemoryRetrieval {
         chunks: [(label: String, text: String)], query: String, cache: EmbeddingCache,
         requestConfig: RequestConfig, hybridThreshold: Double, lexicalThreshold: Double
     ) async -> Ranking {
-        let rawLexical = bm25(query: query, documents: chunks.map(\.text))
-        let lexical = rawLexical.map(boundedBM25)
+        let lexicalTask = Task.detached(priority: .userInitiated) {
+            Self.bm25(query: query, documents: chunks.map(\.text))
+        }
         do {
             let (q, blockEmb) = try await cache.embedWithCache(
                 query: query, blocks: chunks.map(\.text), requestConfig: requestConfig)
-            // Cosine mapped to [0, 1] so it is comparable with bounded BM25.
-            let semantic = blockEmb.map { (EmbeddingCache.cosine(q, $0) + 1.0) / 2.0 }
-            let scored = chunks.indices
-                .map { i in
-                    ScoredChunk(
-                        chunk: chunks[i],
-                        score: hybridScore(semantic: semantic[i], lexical: lexical[i]),
-                        semanticScore: semantic[i], lexicalScore: lexical[i],
-                        rawLexicalScore: rawLexical[i])
-                }
-                .filter { $0.score >= hybridThreshold }
-                .sorted { $0.score > $1.score }
-            return Ranking(scored: scored, failure: nil)
+            let rawLexical = await lexicalTask.value
+            return await Task.detached(priority: .userInitiated) {
+                let semantic = blockEmb.map { (EmbeddingCache.cosine(q, $0) + 1.0) / 2.0 }
+                return Self.score(
+                    chunks: chunks, rawLexical: rawLexical, semantic: semantic,
+                    hybridThreshold: hybridThreshold, lexicalThreshold: lexicalThreshold,
+                    failure: nil)
+            }.value
         } catch {
-            let scored = chunks.indices
-                .map { i in
-                    ScoredChunk(
-                        chunk: chunks[i], score: lexical[i], semanticScore: nil,
-                        lexicalScore: lexical[i], rawLexicalScore: rawLexical[i])
-                }
-                .filter { $0.score >= lexicalThreshold }
-                .sorted { $0.score > $1.score }
-            return Ranking(scored: scored, failure: error.localizedDescription)
+            let rawLexical = await lexicalTask.value
+            let failure = error.localizedDescription
+            return await Task.detached(priority: .userInitiated) {
+                Self.score(
+                    chunks: chunks, rawLexical: rawLexical, semantic: nil,
+                    hybridThreshold: hybridThreshold, lexicalThreshold: lexicalThreshold,
+                    failure: failure)
+            }.value
         }
+    }
+
+    static func score(
+        chunks: [(label: String, text: String)], rawLexical: [Double], semantic: [Double]?,
+        hybridThreshold: Double, lexicalThreshold: Double, failure: String?
+    ) -> Ranking {
+        let lexical = rawLexical.map(boundedBM25)
+        let scored = chunks.indices.compactMap { index -> ScoredChunk? in
+            let score: Double
+            let semanticScore: Double?
+            if let semantic {
+                semanticScore = semantic[index]
+                score = hybridScore(semantic: semantic[index], lexical: lexical[index])
+            } else {
+                semanticScore = nil
+                score = lexical[index]
+            }
+            let threshold = semantic == nil ? lexicalThreshold : hybridThreshold
+            guard score >= threshold else { return nil }
+            return ScoredChunk(
+                chunk: chunks[index], score: score, semanticScore: semanticScore,
+                lexicalScore: lexical[index], rawLexicalScore: rawLexical[index])
+        }
+        .sorted { $0.score > $1.score }
+        return Ranking(scored: scored, candidateCount: chunks.count, failure: failure)
+    }
+
+    /// Rank passages and format the top results consistently for prompt or tool context.
+    @MainActor
+    static func retrieve(
+        chunks: [(label: String, text: String)], query: String, cache: EmbeddingCache,
+        requestConfig: RequestConfig, topK: Int, hybridThreshold: Double,
+        lexicalThreshold: Double
+    ) async -> Context {
+        guard !chunks.isEmpty, !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return Context(text: "", scored: [], candidateCount: chunks.count, failure: nil)
+        }
+        let ranking = await rank(
+            chunks: chunks, query: query, cache: cache, requestConfig: requestConfig,
+            hybridThreshold: hybridThreshold, lexicalThreshold: lexicalThreshold)
+        return context(from: ranking, topK: topK)
+    }
+
+    static func context(from ranking: Ranking, topK: Int) -> Context {
+        let scored = Array(ranking.scored.prefix(max(1, topK)))
+        return Context(
+            text: groupedSections(scored).joined(separator: "\n\n"), scored: scored,
+            candidateCount: ranking.candidateCount, failure: ranking.failure)
     }
 
     /// Groups scored chunks by source file, preserving score order between files.
@@ -73,7 +124,7 @@ enum MemoryRetrieval {
 
     /// Trace details for the exact bullets injected this turn, in retrieval order.
     static func traceDetail(_ scored: [ScoredChunk]) -> String {
-        guard !scored.isEmpty else { return "No memory bullets met the retrieval criteria." }
+        guard !scored.isEmpty else { return "No passages met the retrieval criteria." }
         return scored.enumerated().map { rank, item in
             let scores: String
             if let semantic = item.semanticScore {

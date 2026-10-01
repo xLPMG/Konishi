@@ -234,20 +234,12 @@ final class AppModel {
         guard let query = history.last(where: { $0.role == .user })?.content, !query.isEmpty else {
             return ""
         }
-        do {
-            return try await documentStore.context(
-                for: conversationID, query: query, cache: embeddingCache,
-                topK: settings.ragTopK,
-                requestConfig: settings.requestConfig(modelOverride: nil)
-            ).get()
-        } catch {
-            traceStore.trace(
-                conversationID: conversationID, kind: .error,
-                text:
-                    "Document retrieval failed: \(error.localizedDescription). Is your embedding model reachable?",
-                saveTraces: settings.saveTraces)
-            return ""
-        }
+        let result = await documentStore.context(
+            for: conversationID, query: query, cache: embeddingCache,
+            topK: settings.ragTopK,
+            requestConfig: settings.requestConfig(modelOverride: nil))
+        traceRetrievalFallback(result, source: "Document", conversationID: conversationID)
+        return result.text
     }
 
     // MARK: - Research vault
@@ -262,17 +254,20 @@ final class AppModel {
         let result = await vaultStore.context(
             vaultPath: settings.vaultPath, query: query, cache: embeddingCache,
             topK: settings.vaultTopK, requestConfig: settings.requestConfig(modelOverride: nil))
-        switch result {
-        case .success(let text):
-            return text
-        case .failure(let error):
-            traceStore.trace(
-                conversationID: conversationID, kind: .error,
-                text:
-                    "Vault retrieval failed: \(error.localizedDescription). Is your embedding model reachable?",
-                saveTraces: settings.saveTraces)
-            return ""
-        }
+        traceRetrievalFallback(result, source: "Vault", conversationID: conversationID)
+        return result.text
+    }
+
+    func traceRetrievalFallback(
+        _ result: HybridRetrieval.Context, source: String, conversationID: UUID
+    ) {
+        guard let failure = result.failure else { return }
+        traceStore.trace(
+            conversationID: conversationID, kind: .error,
+            text:
+                "\(source) embedding retrieval failed; BM25 fallback selected \(result.scored.count)/\(result.candidateCount) passages: \(failure)",
+            saveTraces: settings.saveTraces,
+            detail: HybridRetrieval.traceDetail(result.scored))
     }
 
     // MARK: - Lazy conversation bodies

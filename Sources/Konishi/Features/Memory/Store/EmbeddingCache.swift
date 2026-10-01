@@ -88,7 +88,7 @@ final class EmbeddingCache {
         save()
     }
 
-    static func cosine(_ a: [Double], _ b: [Double]) -> Double {
+    nonisolated static func cosine(_ a: [Double], _ b: [Double]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return 0 }
         var dot = 0.0
         var na = 0.0

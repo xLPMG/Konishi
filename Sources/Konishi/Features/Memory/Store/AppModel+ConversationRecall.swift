@@ -10,7 +10,7 @@ extension AppModel {
         let entries = ConversationRecall.entries(from: conversations, excluding: conversationID)
         guard !entries.isEmpty else { return "" }
         let refersToPast = ConversationRecall.mentionsPast(query)
-        let ranking = await MemoryRetrieval.rank(
+        let ranking = await HybridRetrieval.rank(
             chunks: entries.map { (ConversationRecall.shortID($0.id), ConversationRecall.chunkText($0)) },
             query: query, cache: embeddingCache, requestConfig: config,
             hybridThreshold: settings.memoryThreshold + (refersToPast ? 0 : ConversationRecall.normalMargin),
@@ -34,7 +34,7 @@ extension AppModel {
     func conversationSearchResult(query: String, limit: Int?, current: UUID) async -> String {
         let entries = ConversationRecall.entries(from: conversations, excluding: current)
         guard !entries.isEmpty else { return "(no conversation summaries yet)" }
-        let ranking = await MemoryRetrieval.rank(
+        let ranking = await HybridRetrieval.rank(
             chunks: entries.map { (ConversationRecall.shortID($0.id), ConversationRecall.chunkText($0)) },
             query: query, cache: embeddingCache,
             requestConfig: settings.requestConfig(modelOverride: nil),

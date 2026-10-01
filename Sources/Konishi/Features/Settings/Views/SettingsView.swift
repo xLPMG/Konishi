@@ -273,7 +273,7 @@ private struct MemorySettings: View {
                 Stepper(value: $settings.ragTopK, in: 1...20) {
                     LabeledContent("Passages per turn", value: "\(settings.ragTopK)")
                 }
-                Text("Files larger than the threshold are chunked, embedded, and stored with the conversation; each turn only the most relevant passages are retrieved (needs an embedding model). Smaller files are inlined into the message as before.")
+                Text("Files larger than the threshold are chunked and stored with the conversation; each turn retrieves relevant passages using embeddings when available, with lexical matching as a fallback. Smaller files are inlined into the message as before.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -299,7 +299,7 @@ private struct VaultSettings: View {
                 Stepper(value: $settings.vaultTopK, in: 1...20) {
                     LabeledContent("Passages per turn", value: "\(settings.vaultTopK)")
                 }
-                Text("Point Konishi at an Obsidian vault (a folder of Markdown notes). Only personas with “Research vault access” retrieve from it or can read and write notes, so vault content never leaks into your everyday chats. Needs an embedding model.")
+                Text("Point Konishi at an Obsidian vault (a folder of Markdown notes). Only personas with “Research vault access” retrieve from it or can read and write notes, so vault content never leaks into your everyday chats. Retrieval uses embeddings when available and lexical matching as a fallback.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

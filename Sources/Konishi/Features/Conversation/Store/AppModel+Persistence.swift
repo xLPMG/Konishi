@@ -61,9 +61,9 @@ extension AppModel {
     static func saveConversation(_ conversation: Conversation) {
         let url = Paths.conversations.appendingPathComponent("\(conversation.id.uuidString).json")
         guard let data = try? Persistence.encoder.encode(conversation) else { return }
-        let searchRecord = ConversationSearchIndex.Record(conversation)
         Persistence.ioQueue.async {
             guard (try? data.write(to: url, options: .atomic)) != nil else { return }
+            let searchRecord = ConversationSearchIndex.Record(conversation)
             try? ConversationSearchIndex().upsert(searchRecord)
         }
     }

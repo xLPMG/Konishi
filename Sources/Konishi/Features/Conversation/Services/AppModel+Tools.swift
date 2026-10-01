@@ -386,10 +386,8 @@ extension AppModel {
                 vaultPath: settings.vaultPath, query: args.query, cache: embeddingCache,
                 topK: min(max(1, args.maxResults ?? 6), 20),
                 requestConfig: settings.requestConfig(modelOverride: nil))
-            switch result {
-            case .success(let text): return text.isEmpty ? "No matching notes." : text
-            case .failure(let error): return "Error: \(error.localizedDescription)"
-            }
+            traceRetrievalFallback(result, source: "Vault search", conversationID: conversationID)
+            return result.text.isEmpty ? "No matching notes." : result.text
         case "vault_read":
             guard toolEnabled("vault_read"), persona.vaultAccessEnabled else {
                 return "Error: research vault access is off for this persona"

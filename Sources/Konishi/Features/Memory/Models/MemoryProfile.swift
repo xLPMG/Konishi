@@ -183,7 +183,7 @@ enum MemoryProfile {
         }
         var kept = entries.indices.map { $0 }
         if entries.count > limit {
-            let scores = MemoryRetrieval.bm25(query: query, documents: entries.map(\.line))
+            let scores = HybridRetrieval.bm25(query: query, documents: entries.map(\.line))
             kept = entries.indices
                 .filter { scores[$0] > 0 }
                 .sorted { scores[$0] > scores[$1] }

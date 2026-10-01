@@ -198,28 +198,28 @@ struct MemoryStore {
         guard !chunks.isEmpty, !query.isEmpty else {
             return Retrieval(text: sections.joined(separator: "\n\n"), trace: nil)
         }
-        let ranking = await MemoryRetrieval.rank(
+        let ranking = await HybridRetrieval.rank(
             chunks: chunks, query: query, cache: cache, requestConfig: requestConfig,
             hybridThreshold: threshold, lexicalThreshold: 0.2)
-        let scored = Array(ranking.scored.prefix(max(1, topK)))
-        sections.append(contentsOf: MemoryRetrieval.groupedSections(scored))
-        let hits = scored.compactMap { item in
+        let context = HybridRetrieval.context(from: ranking, topK: topK)
+        if !context.text.isEmpty { sections.append(context.text) }
+        let hits = context.scored.compactMap { item in
             item.chunk.label.hasPrefix("recent/") ? recentIDs[item.chunk.text] : nil
         }
         let trace: Retrieval.Trace
-        if let failure = ranking.failure {
+        if let failure = context.failure {
             // An embeddings server is optional: retain targeted lexical retrieval when it is down.
             trace = Retrieval.Trace(
                 kind: .error,
                 text:
-                    "memory embedding retrieval failed; BM25 fallback injected \(scored.count)/\(chunks.count) bullets: \(failure)",
-                detail: MemoryRetrieval.traceDetail(scored))
+                    "memory embedding retrieval failed; BM25 fallback injected \(context.scored.count)/\(chunks.count) bullets: \(failure)",
+                detail: HybridRetrieval.traceDetail(context.scored))
         } else {
             trace = Retrieval.Trace(
                 kind: .memory,
                 text:
-                    "memory retrieval: \(scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", threshold)) injected",
-                detail: MemoryRetrieval.traceDetail(scored))
+                    "memory retrieval: \(context.scored.count)/\(chunks.count) bullets ≥ \(String(format: "%.2f", threshold)) injected",
+                detail: HybridRetrieval.traceDetail(context.scored))
         }
         return Retrieval(text: sections.joined(separator: "\n\n"), trace: trace, stmHits: hits)
     }

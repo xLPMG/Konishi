@@ -12,9 +12,14 @@ struct StoredDocument: Codable, Identifiable, Sendable, Equatable {
 
 /// Persists retrieval documents under `~/Konishi/documents/<conversationID>/<docID>.json`.
 struct DocumentStore {
+    private let root: URL
+
+    init(root: URL = Paths.documents) {
+        self.root = root
+    }
 
     private func dir(_ conversationID: UUID) -> URL {
-        let url = Paths.documents.appendingPathComponent(
+        let url = root.appendingPathComponent(
             conversationID.uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
@@ -82,10 +87,10 @@ struct DocumentStore {
     func context(
         for conversationID: UUID, query: String,
         cache: EmbeddingCache, topK: Int, requestConfig: RequestConfig
-    ) async -> Result<String, Error> {
+    ) async -> HybridRetrieval.Context {
         let docs = self.documents(for: conversationID)
         guard !docs.isEmpty, !query.isEmpty else {
-            return .success("")
+            return HybridRetrieval.Context(text: "", scored: [], candidateCount: 0, failure: nil)
         }
 
         /// Collect all chunks from all documents, filtering out too short ones.
@@ -96,22 +101,8 @@ struct DocumentStore {
                 if t.count >= 3 { chunks.append((label: doc.name, text: t)) }
             }
         }
-        guard !chunks.isEmpty else { return .success("") }
-
-        do {
-            let (q, blockEmb) = try await cache.embedWithCache(
-                query: query, blocks: chunks.map(\.text), requestConfig: requestConfig
-            )
-            let scored = zip(chunks, blockEmb)
-                .map { (chunk: $0.0, score: EmbeddingCache.cosine(q, $0.1)) }
-                .sorted { $0.score > $1.score }
-            return .success(
-                scored.prefix(max(1, topK))
-                    .map { "## \($0.chunk.label)\n\($0.chunk.text)" }
-                    .joined(separator: "\n\n")
-            )
-        } catch {
-            return .failure(error)
-        }
+        return await HybridRetrieval.retrieve(
+            chunks: chunks, query: query, cache: cache, requestConfig: requestConfig,
+            topK: topK, hybridThreshold: 0, lexicalThreshold: 0.15)
     }
 }

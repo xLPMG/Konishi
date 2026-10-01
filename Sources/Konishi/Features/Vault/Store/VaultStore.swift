@@ -77,22 +77,12 @@ final class VaultStore {
     func context(
         vaultPath: String, query: String, cache: EmbeddingCache, topK: Int,
         requestConfig: RequestConfig
-    ) async -> Result<String, Error> {
+    ) async -> HybridRetrieval.Context {
         let chunks = self.chunks(vaultPath: vaultPath)
-        guard !chunks.isEmpty, !query.isEmpty else { return .success("") }
-        do {
-            let (q, blockEmb) = try await cache.embedWithCache(
-                query: query, blocks: chunks.map(\.text), requestConfig: requestConfig)
-            let scored = zip(chunks, blockEmb)
-                .map { (chunk: $0.0, score: EmbeddingCache.cosine(q, $0.1)) }
-                .sorted { $0.score > $1.score }
-            return .success(
-                scored.prefix(max(1, topK))
-                    .map { "## \($0.chunk.label)\n\($0.chunk.text)" }
-                    .joined(separator: "\n\n"))
-        } catch {
-            return .failure(error)
-        }
+        return await HybridRetrieval.retrieve(
+            chunks: chunks.map { (label: $0.label, text: $0.text) },
+            query: query, cache: cache, requestConfig: requestConfig,
+            topK: topK, hybridThreshold: 0, lexicalThreshold: 0.15)
     }
 
     // MARK: - Note access (tools)
