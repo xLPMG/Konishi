@@ -7,6 +7,7 @@ struct ChatView: View {
     @State private var showImporter = false
     @State private var showDocImporter = false
     @State private var showContextPins = false
+    @State private var activeStarterBrief: StarterBriefKind?
     @State private var pendingChatJump: ChatJump?
     @State private var pinnedToBottom = true
     @FocusState private var inputFocused: Bool
@@ -14,6 +15,200 @@ struct ChatView: View {
     private struct ChatJump: Equatable {
         var requestID = UUID()
         var messageID: UUID
+    }
+
+    private enum StarterBriefKind: String, Identifiable, Equatable {
+        case research
+        case decision
+        case idea
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .research: "Build a research brief"
+            case .decision: "Help me make a decision"
+            case .idea: "Develop an idea"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .research: "doc.text.magnifyingglass"
+            case .decision: "arrow.triangle.branch"
+            case .idea: "lightbulb"
+            }
+        }
+
+        var introduction: String {
+            switch self {
+            case .research: "Set the question, evidence, scope, and what the answer needs to help you do."
+            case .decision: "Lay out the options, stakes, priorities, and constraints."
+            case .idea: "Share the audience, goal, current state, and constraints so the next step fits your situation."
+            }
+        }
+
+        var subjectLabel: String {
+            switch self {
+            case .research: "Research question or topic"
+            case .decision: "What decision are you facing?"
+            case .idea: "What is the idea?"
+            }
+        }
+
+        var goalLabel: String {
+            switch self {
+            case .research: "What do you need to understand or decide?"
+            case .decision: "What options are on the table?"
+            case .idea: "Who is it for, and what should it achieve?"
+            }
+        }
+
+        var contextLabel: String {
+            switch self {
+            case .research: "What do you already know or suspect?"
+            case .decision: "What matters most to you? Rank priorities if you can."
+            case .idea: "What exists so far? What have you tried?"
+            }
+        }
+
+        var constraintsLabel: String {
+            switch self {
+            case .research: "Scope, timeframe, or sources to include or exclude"
+            case .decision: "Constraints, deadline, risks, or what cannot be changed"
+            case .idea: "Constraints: time, budget, tools, or requirements"
+            }
+        }
+
+        var outcomeLabel: String {
+            switch self {
+            case .research: "What would a useful result look like?"
+            case .decision: "What would make the choice feel clear?"
+            case .idea: "What help do you need next: critique, options, plan, or draft?"
+            }
+        }
+
+        func prompt(subject: String, goal: String, context: String, constraints: String, outcome: String) -> String {
+            let details = [
+                (subjectLabel, subject),
+                (goalLabel, goal),
+                (contextLabel, context),
+                (constraintsLabel, constraints),
+                (outcomeLabel, outcome)
+            ]
+            .filter { !$0.1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { "\($0.0): \($0.1.trimmingCharacters(in: .whitespacesAndNewlines))" }
+            .joined(separator: "\n")
+
+            switch self {
+            case .research:
+                return """
+                Help me investigate this research brief. Use available research tools and provided source material where relevant; ground claims in sources, distinguish evidence from inference, and never invent citations. If no sources are available, say so and ask me for material rather than simulating a sourced review. Identify important uncertainty and give me a useful synthesis with next steps. Ask a targeted clarification only if an ambiguity would materially change the result.
+
+                \(details)
+                """
+            case .decision:
+                return """
+                Help me reason through this decision using my priorities and constraints, not generic pros and cons. Compare the options against the criteria I gave, distinguish facts from assumptions, consider risks and reversibility, and recommend a path with clear rationale. Explain what missing information could change the recommendation. If critical context is missing, ask focused questions before recommending.
+
+                \(details)
+                """
+            case .idea:
+                return """
+                Help me develop this idea using the goals, audience, context, and constraints below. Avoid generic brainstorming: identify the main opportunity and risks, offer a few meaningfully different options where useful, recommend a practical next step, and state any assumptions that affect the recommendation.
+
+                \(details)
+                """
+            }
+        }
+    }
+
+    private enum StarterAction {
+        case draft(String)
+        case send(String)
+        case brief(StarterBriefKind)
+    }
+
+    private struct StarterPrompt: Identifiable {
+        let title: String
+        let detail: String
+        let icon: String
+        let action: StarterAction
+
+        var id: String { title }
+    }
+
+    private struct StarterBriefSheet: View {
+        @Environment(\.dismiss) private var dismiss
+        let kind: StarterBriefKind
+        let onPrepare: (String) -> Void
+
+        @State private var subject = ""
+        @State private var goal = ""
+        @State private var context = ""
+        @State private var constraints = ""
+        @State private var outcome = ""
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 12) {
+                    Image(systemName: kind.icon)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.tint)
+                        .frame(width: 38, height: 38)
+                        .background(.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(kind.title).font(.title3.weight(.semibold))
+                        Text(kind.introduction).font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.bottom, 18)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        briefField(kind.subjectLabel, text: $subject)
+                        briefField(kind.goalLabel, text: $goal)
+                        briefField(kind.contextLabel, text: $context)
+                        briefField(kind.constraintsLabel, text: $constraints)
+                        briefField(kind.outcomeLabel, text: $outcome)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                HStack {
+                    Button("Cancel", role: .cancel) { dismiss() }
+                    Spacer()
+                    Button {
+                        onPrepare(kind.prompt(
+                            subject: subject,
+                            goal: goal,
+                            context: context,
+                            constraints: constraints,
+                            outcome: outcome
+                        ))
+                        dismiss()
+                    } label: {
+                        Label("Add brief to composer", systemImage: "arrow.down.to.line")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.top, 18)
+            }
+            .padding(24)
+            .frame(minWidth: 500, idealWidth: 560, minHeight: 560, idealHeight: 660)
+        }
+
+        private func briefField(_ label: String, text: Binding<String>) -> some View {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                TextField(label, text: text, axis: .vertical)
+                    .lineLimit(2...4)
+                    .textFieldStyle(.roundedBorder)
+            }
+        }
     }
 
     var body: some View {
@@ -62,6 +257,12 @@ struct ChatView: View {
                       allowedContentTypes: [.pdf, .plainText, .text, .sourceCode, .json, .xml, .commaSeparatedText, .rtf],
                       allowsMultipleSelection: true) { result in
             if case let .success(urls) = result { urls.forEach(addDocument) }
+        }
+        .sheet(item: $activeStarterBrief) { kind in
+            StarterBriefSheet(kind: kind) { prompt in
+                model.draft = prompt
+                inputFocused = true
+            }
         }
     }
 
@@ -305,62 +506,112 @@ struct ChatView: View {
         }
     }
 
-    private var starterPrompts: [(title: String, icon: String, prompt: String)] {
+    private var starterPrompts: [StarterPrompt] {
         if model.mode == .language, let profile = model.activeLanguageProfile {
             let enteredTopic = model.languageSession.topic.trimmingCharacters(in: .whitespacesAndNewlines)
             let topic = enteredTopic.isEmpty ? "everyday life" : enteredTopic
             switch model.languageSession.kind {
             case .study:
                 return [
-                    ("Learn a phrase", "textformat.abc", "Teach me a useful \(profile.targetName) phrase about \(topic), with pronunciation and an example."),
-                    ("Understand grammar", "text.book.closed", "Explain one useful \(profile.targetName) grammar point related to \(topic), with examples."),
-                    ("Build vocabulary", "sparkles", "Teach me three useful \(profile.targetName) words about \(topic), one at a time.")
+                    StarterPrompt(title: "Learn a phrase", detail: "Pronunciation and a natural example", icon: "textformat.abc", action: .draft("Teach me a useful \(profile.targetName) phrase about \(topic), with pronunciation and an example.")),
+                    StarterPrompt(title: "Understand grammar", detail: "One pattern, explained with examples", icon: "text.book.closed", action: .draft("Explain one useful \(profile.targetName) grammar point related to \(topic), with examples.")),
+                    StarterPrompt(title: "Build vocabulary", detail: "Three useful words, one at a time", icon: "sparkles", action: .draft("Teach me three useful \(profile.targetName) words about \(topic), one at a time."))
                 ]
             case .practice:
-                return [
-                    ("Review due words", "checkmark.circle", "Quiz me on words due for review in \(profile.targetName). Ask one question at a time and record each answer."),
-                    ("Quick quiz", "questionmark.circle", "Give me a short \(profile.targetName) quiz about \(topic), one question at a time."),
-                    ("Practice a dialogue", "bubble.left.and.bubble.right", "Start a short \(profile.targetName) dialogue about \(topic) and let me respond.")
+                var prompts: [StarterPrompt] = []
+                if enabledStarterTools.contains("get_due_items") {
+                    if enabledStarterTools.contains("record_review") {
+                        prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz and record reviews from your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName). Ask one question at a time and record each answer.")))
+                    } else {
+                        prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz cards currently due in your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName). Ask one question at a time.")))
+                    }
+                } else {
+                    prompts.append(StarterPrompt(title: "Build vocabulary", detail: "Learn three useful words, one at a time", icon: "textformat.abc", action: .draft("Teach me three useful \(profile.targetName) words about \(topic), one at a time.")))
+                }
+                prompts += [
+                    StarterPrompt(title: "Quick quiz", detail: "A short, one-question-at-a-time quiz", icon: "questionmark.circle", action: .draft("Give me a short \(profile.targetName) quiz about \(topic), one question at a time.")),
+                    StarterPrompt(title: "Practice a dialogue", detail: "Take turns in a short conversation", icon: "bubble.left.and.bubble.right", action: .draft("Start a short \(profile.targetName) dialogue about \(topic) and let me respond."))
                 ]
+                return prompts
             case .free:
                 return [
-                    ("Start a conversation", "bubble.left.and.bubble.right", "Start a natural \(profile.targetName) conversation about \(topic). Ask me one question at a time."),
-                    ("Tell a short story", "book", "Tell me a short, level-appropriate story in \(profile.targetName) about \(topic), then ask what I understood."),
-                    ("Practice speaking", "waveform", "Have a relaxed spoken \(profile.targetName) conversation about \(topic), gently correcting my mistakes.")
+                    StarterPrompt(title: "Start a conversation", detail: "A relaxed chat about \(topic)", icon: "bubble.left.and.bubble.right", action: .draft("Start a natural \(profile.targetName) conversation about \(topic). Ask me one question at a time.")),
+                    StarterPrompt(title: "Tell a short story", detail: "A short story at your level", icon: "book", action: .draft("Tell me a short, level-appropriate story in \(profile.targetName) about \(topic), then ask what I understood.")),
+                    StarterPrompt(title: "Practice speaking", detail: "Chat and gently correct mistakes", icon: "waveform", action: .draft("Have a relaxed spoken \(profile.targetName) conversation about \(topic), gently correcting my mistakes."))
                 ]
             }
+        }
+
+        var prompts: [StarterPrompt] = []
+        if model.mode == .chat {
+            let enabledTools = enabledStarterTools
+            if enabledTools.contains("calendar_events") {
+                prompts.append(StarterPrompt(
+                    title: "Check my calendar",
+                    detail: "Send now · summarize the next seven days",
+                    icon: "calendar",
+                    action: .send("Review my calendar from today through the next seven days. Group events by date with start times and calendar names, flag overlaps, and point out clear open blocks. Keep the summary concise.")
+                ))
+            }
+            prompts.append(StarterPrompt(
+                title: "Build a research brief",
+                detail: "Set the question, evidence, scope, and intended use",
+                icon: "doc.text.magnifyingglass",
+                action: .brief(.research)
+            ))
+            prompts.append(StarterPrompt(
+                title: "Develop an idea",
+                detail: "Add your audience, goal, context, and constraints",
+                icon: "lightbulb",
+                action: .brief(.idea)
+            ))
+            prompts.append(StarterPrompt(
+                title: "Help me make a decision",
+                detail: "Compare options using your priorities and constraints",
+                icon: "arrow.triangle.branch",
+                action: .brief(.decision)
+            ))
+            return Array(prompts.prefix(4))
         }
 
         let persona = model.currentPersona
         let personaName = persona.name.lowercased()
         let personaPrompt = persona.systemPrompt.lowercased()
         if personaName.contains("coder") || personaPrompt.contains("engineering") || personaPrompt.contains("software") {
-            return [
-                ("Debug an issue", "ladybug", "Help me debug a coding issue. Ask me for the relevant code and exact error first."),
-                ("Design a solution", "point.3.connected.trianglepath.dotted", "Help me design a simple, idiomatic solution to a programming problem."),
-                ("Explain code", "curlybraces", "Explain a programming concept with a concrete example, then check my understanding.")
+            prompts += [
+                StarterPrompt(title: "Debug an issue", detail: "Start with the code and exact error", icon: "ladybug", action: .draft("Help me debug a coding issue. Ask me for the relevant code and exact error first.")),
+                StarterPrompt(title: "Design a solution", detail: "Keep it simple and idiomatic", icon: "point.3.connected.trianglepath.dotted", action: .draft("Help me design a simple, idiomatic solution to a programming problem.")),
+                StarterPrompt(title: "Explain code", detail: "Use an example, then check my understanding", icon: "curlybraces", action: .draft("Explain a programming concept with a concrete example, then check my understanding."))
             ]
-        }
-        if persona.vaultAccessEnabled || personaName.contains("research") || personaPrompt.contains("research assistant") {
-            return [
-                ("Investigate a question", "magnifyingglass", "Help me investigate a question. Start by finding relevant evidence in my research notes."),
-                ("Connect ideas", "point.3.connected.trianglepath.dotted", "Look for connections across my research notes about a topic I will give you."),
-                ("Shape a finding", "text.alignleft", "Help me turn a research finding into a concise, well-supported note.")
+        } else if personaName.contains("research") || personaPrompt.contains("research assistant") {
+            prompts += [
+                StarterPrompt(title: "Investigate a question", detail: "Break it into useful sub-questions", icon: "magnifyingglass", action: .draft("Help me break down a question into useful sub-questions and suggest what evidence would answer it.")),
+                StarterPrompt(title: "Connect ideas", detail: "I will give you the topic", icon: "point.3.connected.trianglepath.dotted", action: .draft("Look for connections between ideas about a topic I will give you.")),
+                StarterPrompt(title: "Shape a finding", detail: "Turn a finding I provide into a clear note", icon: "text.alignleft", action: .draft("Help me turn a research finding I provide into a concise, well-supported note."))
             ]
-        }
-        if personaName.contains("muse") || personaPrompt.contains("creative") {
-            return [
-                ("Explore an idea", "lightbulb", "Help me explore a creative idea. Ask one question to find an interesting angle."),
-                ("Find a fresh angle", "sparkles", "Give me a few unexpected angles on a creative project I will describe."),
-                ("Draft something", "pencil.and.outline", "Help me shape a rough draft while keeping my voice and intent.")
+        } else if personaName.contains("muse") || personaPrompt.contains("creative") {
+            prompts += [
+                StarterPrompt(title: "Explore an idea", detail: "Find an interesting angle", icon: "lightbulb", action: .draft("Help me explore a creative idea. Ask one question to find an interesting angle.")),
+                StarterPrompt(title: "Find a fresh angle", detail: "Offer a few unexpected directions", icon: "sparkles", action: .draft("Give me a few unexpected angles on a creative project I will describe.")),
+                StarterPrompt(title: "Draft something", detail: "Keep my voice and intent", icon: "pencil.and.outline", action: .draft("Help me shape a rough draft while keeping my voice and intent."))
+            ]
+        } else {
+            prompts += [
+                StarterPrompt(title: "Explore an idea", detail: "Start with one useful question", icon: "lightbulb", action: .draft("As my \(persona.name) assistant, help me explore an idea. Ask one question to get started.")),
+                StarterPrompt(title: "Make a plan", detail: "Turn a goal into practical next steps", icon: "list.bullet", action: .draft("As my \(persona.name) assistant, help me make a clear, practical plan for a goal.")),
+                StarterPrompt(title: "Explain a topic", detail: "Build intuition with an example", icon: "sparkle.magnifyingglass", action: .draft("As my \(persona.name) assistant, explain a topic with an intuitive example."))
             ]
         }
 
-        return [
-            ("Explore an idea", "lightbulb", "As my \(persona.name) assistant, help me explore an idea. Ask one question to get started."),
-            ("Make a plan", "list.bullet", "As my \(persona.name) assistant, help me make a clear, practical plan for a goal."),
-            ("Explain a topic", "sparkle.magnifyingglass", "As my \(persona.name) assistant, explain a topic with an intuitive example.")
-        ]
+        return prompts
+    }
+
+    private var enabledStarterTools: Set<String> {
+        guard model.settings.toolsEnabled(for: model.mode) else { return [] }
+        let enabled = model.settings.enabledTools(for: model.mode)
+        return model.currentPersona.vaultAccessEnabled
+            ? enabled
+            : enabled.subtracting(Tools.vaultToolNames)
     }
 
     private var emptyState: some View {
@@ -415,10 +666,9 @@ struct ChatView: View {
                 .help("Return to \(recentConversation.title)")
             }
 
-            HStack(spacing: 8) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), alignment: .leading)], alignment: .leading, spacing: 8) {
                 ForEach(starterPrompts.indices, id: \.self) { index in
-                    let suggestion = starterPrompts[index]
-                    starterButton(suggestion.title, icon: suggestion.icon, prompt: suggestion.prompt)
+                    starterButton(starterPrompts[index])
                 }
             }
         }
@@ -442,17 +692,41 @@ struct ChatView: View {
         return "Start a conversation with \(model.currentAssistantName)."
     }
 
-    private func starterButton(_ title: String, icon: String, prompt: String) -> some View {
+    private func starterButton(_ suggestion: StarterPrompt) -> some View {
         Button {
-            model.draft = prompt
-            inputFocused = true
+            switch suggestion.action {
+            case .draft(let prompt):
+                model.draft = prompt
+                inputFocused = true
+            case .send(let prompt):
+                model.draft = prompt
+                model.send()
+            case .brief(let kind):
+                activeStarterBrief = kind
+            }
         } label: {
-            Label(title, systemImage: icon)
-                .font(.caption.weight(.medium))
-                .lineLimit(1)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: suggestion.icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(model.currentAccent)
+                    .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(suggestion.title)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    Text(suggestion.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
         }
         .buttonStyle(.bordered)
         .controlSize(.large)
+        .help(suggestion.detail)
     }
 
     private func errorBanner(_ text: String) -> some View {
