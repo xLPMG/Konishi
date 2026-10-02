@@ -119,7 +119,7 @@ enum Calculator {
         private mutating func parseIdentifier() -> String {
             skipWhitespace()
             let start = index
-            while !isAtEnd, input[index].isLetter || input[index] == "_" { index += 1 }
+            while !isAtEnd, input[index].isLetter || input[index] == "_" || input[index].isNumber { index += 1 }
             return String(input[start..<index]).lowercased()
         }
 

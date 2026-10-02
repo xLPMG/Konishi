@@ -34,7 +34,7 @@ struct ThinkStripper {
 
     private enum State {
         case detecting
-        case reasoning(close: String, loose: Bool)
+        case reasoning(close: String, looseFallback: String?)
         case passthrough
     }
 
@@ -53,7 +53,8 @@ struct ThinkStripper {
                 if trimmed.isEmpty { return out }   // only whitespace so far — wait for a real char
                 if let block = Self.blocks.first(where: { trimmed.hasPrefix($0.open) }) {
                     buffer = String(trimmed.dropFirst(block.open.count))
-                    state = .reasoning(close: block.close, loose: block.loose)
+                    let looseFallback = block.loose ? String(leading) + block.open : nil
+                    state = .reasoning(close: block.close, looseFallback: looseFallback)
                     continue
                 }
                 // Could the head still grow into an opener? If so, hold until it disambiguates.
@@ -66,13 +67,14 @@ struct ThinkStripper {
                 state = .passthrough
                 return out
 
-            case let .reasoning(close, _):
+            case let .reasoning(close, looseFallback):
                 if let r = buffer.range(of: close) {
                     out.reasoning += buffer[..<r.lowerBound]
                     buffer = String(buffer[r.upperBound...])
                     state = .passthrough
                     continue
                 }
+                if looseFallback != nil { return out }
                 // The close marker may be split across deltas: hold back a possible partial tail.
                 let keep = Self.partialTail(of: buffer, marker: close)
                 if buffer.count > keep {
@@ -94,10 +96,14 @@ struct ThinkStripper {
     mutating func finish() -> Output {
         var out = Output()
         switch state {
-        case let .reasoning(_, loose):
+        case let .reasoning(_, looseFallback):
             // A well-delimited block that never closed is still reasoning (truncated); a loose one
             // is ambiguous, so surface it rather than lose the message.
-            if loose { out.visible += buffer } else { out.reasoning += buffer }
+            if let looseFallback {
+                out.visible += looseFallback + buffer
+            } else {
+                out.reasoning += buffer
+            }
         default:
             out.visible += buffer
         }
