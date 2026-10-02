@@ -164,10 +164,10 @@ enum Tools {
         ToolSpec(
             name: "file_read",
             summary: "Read a text file from disk",
-            description: "Read a text file. Pass offset/limit to read a line range of a large file.",
+            description: "Read a text file. Relative paths use the current conversation workspace; absolute or ~ paths read that exact location. Pass offset/limit for a large file.",
             parameters: .schema(
                 properties: [
-                    "path": .property("string", "absolute or ~-relative path"),
+                    "path": .property("string", "workspace-relative, absolute, or ~-relative path"),
                     "offset": .property("integer", "1-based start line"),
                     "limit": .property("integer", "max lines (default 400)")
                 ],
@@ -175,6 +175,20 @@ enum Tools {
             ),
             group: .files, mutating: false,
             defaultEnabled: false, defaultAutoApprove: false
+        ),
+        ToolSpec(
+            name: "file_write",
+            summary: "Save a text file in this conversation",
+            description: "Create or overwrite a UTF-8 text file in the current conversation workspace. Use a workspace-relative path; parent folders are created, and the file appears in the Files inspector. Every write requires user approval. Use python_exec for computed or binary output; do not use shell commands for ordinary text files.",
+            parameters: .schema(
+                properties: [
+                    "path": .property("string", "workspace-relative filename, e.g. example_text.txt or results/table.csv"),
+                    "content": .property("string", "complete file contents")
+                ],
+                required: ["path", "content"]
+            ),
+            group: .files, mutating: true,
+            defaultEnabled: true, defaultAutoApprove: false, requiresApproval: true
         ),
 
         // MARK: Web
@@ -234,6 +248,8 @@ enum Tools {
             Run Python 3 code in Konishi's managed virtual environment; return combined stdout/stderr. \\
             The scientific toolkit is pre-imported: \(SciTools.catalog). numpy (as np), scipy, sympy, \\
             pandas, matplotlib, and arxiv are available. Print values you want returned. \\
+            The current conversation workspace is the working directory; use relative paths to save files there. \\
+            Use file_write for ordinary text files. This tool accepts Python source, not shell commands. \\
             Plots created with the toolkit or saved in the conversation folder are attached as images on your next turn.
             """,
             parameters: .schema(
@@ -248,7 +264,7 @@ enum Tools {
         ToolSpec(
             name: "run_shell",
             summary: "Run an arbitrary shell command",
-            description: "Run a command on the user's system with /bin/zsh -lc and return its exit status and combined output.",
+            description: "Run a command on the user's system with /bin/zsh -lc and return its exit status and combined output. By default, the working directory is this conversation's workspace; relative files created there appear in the Files inspector. For an explicitly requested external location, use an absolute path or working_directory, subject to normal tool enablement and approval. Use file_write for ordinary text files in the workspace.",
             parameters: .schema(
                 properties: [
                     "command": .property("string", "the complete shell command to run"),

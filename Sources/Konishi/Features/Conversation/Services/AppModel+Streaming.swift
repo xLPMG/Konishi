@@ -139,6 +139,7 @@ extension AppModel {
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
                 documentText: documentText, vaultText: vaultText,
+                workspacePath: Paths.conversationFiles(conversationID).path,
                 pinnedContext: pinnedContext, history: history)
 
             traceStore.trace(
@@ -595,12 +596,23 @@ extension AppModel {
         memoryText: String,
         documentText: String = "",
         vaultText: String = "",
+        workspacePath: String? = nil,
         pinnedContext: String = "",
         history: [ChatMessage]
     ) -> [WireMessage] {
         var wire: [WireMessage] = []
         if !systemText.isEmpty {
             wire.append(WireMessage(role: Role.system.rawValue, text: systemText))
+        }
+        if let workspacePath, !workspacePath.isEmpty {
+            wire.append(WireMessage(
+                role: Role.system.rawValue,
+                text: """
+                # Conversation workspace
+                Your writable workspace for this conversation is: \(workspacePath)
+                Use workspace-relative paths by default. file_read and file_write resolve relative paths here; python_exec and run_shell also start here. Files saved here appear in the Files inspector. Use another location only when the user explicitly requests one. Use file_write for ordinary text files; python_exec expects Python code, never shell syntax.
+                For explicitly requested external access, file_read accepts absolute or ~ paths; run_shell can use an absolute path or working_directory subject to its normal enablement and approval settings. file_write always stays inside this workspace.
+                """))
         }
         let summaryText = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         if !summaryText.isEmpty {

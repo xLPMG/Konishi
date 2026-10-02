@@ -415,6 +415,7 @@ extension AppModel {
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
                 documentText: documentText, vaultText: vaultText,
+                workspacePath: Paths.conversationFiles(convoID).path,
                 pinnedContext: pinnedContext, history: history)
             // The voice-only hang-up tool is offered on every conversational turn.
             let tools = [Tools.endConversationDef]
@@ -522,7 +523,8 @@ extension AppModel {
             else { return }
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
-                documentText: documentText, vaultText: vaultText, history: history)
+                documentText: documentText, vaultText: vaultText,
+                workspacePath: Paths.conversationFiles(convoID).path, history: history)
             let tools = [Tools.endConversationDef]
             self.speculativeRequestTrace = (
                 summary: self.requestSummary(

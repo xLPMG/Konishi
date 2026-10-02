@@ -407,6 +407,14 @@ final class AppSettings {
             }
             defaults.set(5, forKey: Keys.settingsVersion)
         }
+        if defaults.integer(forKey: Keys.settingsVersion) < 6 {
+            // Make the approval-gated workspace writer available to existing chat installs.
+            var enabled = enabledByMode[AppMode.chat.rawValue] ?? Tools.modeEnabledDefaults(.chat)
+            enabled.insert("file_write")
+            enabledByMode[AppMode.chat.rawValue] = enabled
+            defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(.chat))
+            defaults.set(6, forKey: Keys.settingsVersion)
+        }
         self.enabledToolsByMode = enabledByMode
         self.autoApproveByMode = autoByMode
         self.shellAutoApproveCommandsByMode = Dictionary(uniqueKeysWithValues: AppMode.allCases.compactMap { mode in

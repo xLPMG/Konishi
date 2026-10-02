@@ -44,6 +44,7 @@ final class AppModel {
         didSet {
             if let id = selectedConversationID, id != oldValue {
                 ensureHydrated(id)
+                restorePendingApproval(for: id)
                 scheduleSleepPass(after: .seconds(20))
             }
         }
@@ -135,6 +136,7 @@ final class AppModel {
             newConversation()
         } else if let id = selectedConversationID {
             ensureHydrated(id)  // property observers don't fire during init
+            restorePendingApproval(for: id)
         }
         // Ensure the last queued disk writes are flushed before the process exits.
         NotificationCenter.default.addObserver(
@@ -358,7 +360,7 @@ final class AppModel {
     /// Tools whose OUTPUT the model must read to finish its reply, so a continuation turn is warranted.
     /// After fire-and-forget writes (e.g. banking a card) with a written reply, the turn is complete.
     static let continuationTools: Set<String> = [
-        "get_due_items", "search_deck", "web_search", "web_fetch", "web_research", "file_read",
+        "get_due_items", "search_deck", "web_search", "web_fetch", "web_research", "file_read", "file_write",
         "memory_list", "memory_read", "calculate", "python_exec", "run_shell", "ask_multiple_choice",
         "vault_search", "vault_read", "vault_list",
         "conversation_search", "conversation_list", "conversation_read",

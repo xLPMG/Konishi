@@ -20,7 +20,7 @@ enum Paths {
     static let conversationSearchIndex = cache.appendingPathComponent("conversations.sqlite")
     static let logs = root.appendingPathComponent("logs", isDirectory: true)
     static let pythonDir = root.appendingPathComponent("python", isDirectory: true)
-    /// Working directory for agent-created files (python_exec), one folder per conversation.
+    /// Per-conversation workspace for files created by file_write, python_exec, and run_shell.
     static let filesRoot = root.appendingPathComponent("files", isDirectory: true)
     static let documents = root.appendingPathComponent("documents", isDirectory: true)
     /// Per-conversation request/response traces (JSON), one file per conversation.

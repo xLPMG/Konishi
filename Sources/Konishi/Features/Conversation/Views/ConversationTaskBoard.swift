@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConversationTaskBoard: View {
     @Environment(AppModel.self) private var model
+    var showsHeader = true
     @State private var newTaskTitle = ""
     @State private var selectedTaskID: UUID?
     @State private var editedTaskTitle = ""
@@ -20,8 +21,10 @@ struct ConversationTaskBoard: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
+            if showsHeader {
+                header
+                Divider()
+            }
             taskList
             addTaskRow
             Divider()
@@ -40,12 +43,14 @@ struct ConversationTaskBoard: View {
             Divider()
             footer
         }
-        .background(model.currentPalette.surface)
+        .background(showsHeader ? model.currentPalette.surface : .clear)
         .overlay(alignment: .leading) {
-            model.currentPalette.border
-                .frame(width: 1)
-                .ignoresSafeArea(edges: .vertical)
-                .allowsHitTesting(false)
+            if showsHeader {
+                model.currentPalette.border
+                    .frame(width: 1)
+                    .ignoresSafeArea(edges: .vertical)
+                    .allowsHitTesting(false)
+            }
         }
         .confirmationDialog(
             "Remove all tasks?", isPresented: $confirmingClearTasks,

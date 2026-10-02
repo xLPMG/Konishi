@@ -6,7 +6,6 @@ struct ChatView: View {
     @Environment(AppModel.self) private var model
     @State private var showImporter = false
     @State private var showDocImporter = false
-    @State private var showTaskBoard = false
     @State private var showContextPins = false
     @State private var pendingChatJump: ChatJump?
     @State private var pinnedToBottom = true
@@ -18,60 +17,24 @@ struct ChatView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            messageList
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 0) {
-                        if let error = model.errorMessage { errorBanner(error) }
-                        if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
-                        if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
-                        if let gate = model.pendingWorkGate { WorkLimitBar(gate: gate) }
-                        if model.isAutopilotActive || model.isStoppingWork { AutopilotStatusBar() }
-                        StatsBar()
-                        attachmentStrip
-                        inputBar
-                    }
+        messageList
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    if let error = model.errorMessage { errorBanner(error) }
+                    if let voiceError = model.voice.lastError { voiceBanner(voiceError) }
+                    if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
+                    if let gate = model.pendingWorkGate { WorkLimitBar(gate: gate) }
+                    if model.isAutopilotActive || model.isStoppingWork { AutopilotStatusBar() }
+                    StatsBar()
+                    attachmentStrip
+                    inputBar
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            if showTaskBoard {
-                ConversationTaskBoard()
-                    .environment(model)
-                    .frame(minWidth: 270, idealWidth: 330, maxWidth: 420)
-                    .frame(maxHeight: .infinity)
-                    .background(model.currentPalette.surface.ignoresSafeArea())
-                    .overlay(alignment: .leading) {
-                        model.currentPalette.border
-                            .frame(width: 1)
-                            .ignoresSafeArea(edges: .vertical)
-                            .allowsHitTesting(false)
-                    }
             }
-        }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeInOut(duration: 0.15), value: model.activity)
-        .animation(.easeInOut(duration: 0.18), value: showTaskBoard)
         .navigationTitle("")
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
-                Button {
-                    showTaskBoard.toggle()
-                } label: {
-                    Label("Tasks", systemImage: "checklist")
-                }
-                .help("Open conversation tasks and notes")
-                Button {
-                    model.autopilotArmed.toggle()
-                } label: {
-                    Label(
-                        model.autopilotArmed ? "Autopilot: On" : "Autopilot: Off",
-                        systemImage: "infinity")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(model.autopilotArmed ? AnyShapeStyle(model.currentAccent) : AnyShapeStyle(.secondary))
-                .opacity(model.autopilotArmed ? 1 : 0.55)
-                .disabled(model.isStreaming || model.workSession != nil || model.pendingApproval != nil
-                    || model.pendingWorkGate != nil)
-                .help("Use auto-approved tools for the next task. Other tools are reported unavailable; Autopilot stops at its safety ceiling.")
                 if model.voice.isSpeaking {
                     Button { model.voice.stopSpeaking() } label: {
                         Label("Stop Voice", systemImage: "speaker.slash")
@@ -82,8 +45,6 @@ struct ChatView: View {
                         Label("Stop", systemImage: "stop.fill")
                     }
                 }
-                Button { model.clearCurrent() } label: { Label("Clear", systemImage: "eraser") }
-                    .disabled(model.selectedConversation?.messages.isEmpty ?? true)
             }
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
@@ -776,37 +737,7 @@ private struct ToolApprovalBar: View {
         VStack(alignment: .leading, spacing: 6) {
             Label("The model wants to run \(batch.calls.count) tool call(s)", systemImage: "wrench.and.screwdriver.fill")
                 .font(.callout.weight(.semibold))
-            ForEach(batch.calls) { call in
-                if call.function.name == "run_shell",
-                   let args: ToolArguments.Shell = decodeArguments(call) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Label("Shell command", systemImage: "terminal")
-                            .font(.caption.weight(.semibold))
-                        ScrollView([.horizontal, .vertical]) {
-                            Text(args.command)
-                                .font(.system(size: 12, design: .monospaced))
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: true, vertical: true)
-                        }
-                            .defaultScrollAnchor(.topLeading)
-                        .frame(height: 18)
-                        .padding(6)
-                        .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
-                        Text("Working directory: \(args.workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path)")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                        Text("Timeout: \(max(1, min(args.timeoutSeconds ?? 120, 600))) seconds")
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                    }
-                } else {
-                    Text("• \(call.function.name ?? "tool")(\(call.function.arguments))")
-                        .font(.system(size: 12, design: .monospaced))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
-                }
-            }
+            approvalCalls
             HStack {
                 Button("Approve") { model.approveTools() }.buttonStyle(.borderedProminent)
                 Button("Deny") { model.denyTools() }
@@ -818,9 +749,69 @@ private struct ToolApprovalBar: View {
         .padding(.horizontal, 12).padding(.top, 8)
     }
 
-    private func decodeArguments<T: Decodable>(_ call: ToolCall) -> T? {
-        guard let data = call.function.arguments.data(using: .utf8) else { return nil }
-        return try? Wire.decoder.decode(T.self, from: data)
+    @ViewBuilder
+    private var approvalCalls: some View {
+        if batch.calls.count > 2 {
+            ScrollView {
+                callRows
+            }
+            .frame(height: 100)
+        } else {
+            callRows
+        }
+    }
+
+    private var callRows: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(batch.calls) { call in
+                ToolApprovalItem(call: call)
+            }
+        }
+    }
+}
+
+private struct ToolApprovalItem: View {
+    let call: ToolCall
+    @State private var argumentsExpanded = false
+
+    private var name: String { call.function.name ?? "tool" }
+
+    private var summary: String {
+        guard let data = call.function.arguments.data(using: .utf8),
+              let arguments = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return name }
+        for key in ["path", "note", "url", "query", "expression", "command"] {
+            if let value = arguments[key] as? String, !value.isEmpty {
+                return "\(name) · \(value)"
+            }
+        }
+        return name
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(summary, systemImage: name == "run_shell" ? "terminal" : "wrench.and.screwdriver")
+                .font(.caption.monospaced())
+                .lineLimit(2)
+                .textSelection(.enabled)
+
+            if !call.function.arguments.isEmpty, call.function.arguments != "{}" {
+                DisclosureGroup("Full arguments", isExpanded: $argumentsExpanded) {
+                    ScrollView {
+                        Text(call.function.arguments)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(6)
+                    }
+                    .frame(maxHeight: 110)
+                    .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                }
+                .font(.caption2)
+            }
+        }
+        .padding(6)
+        .background(.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -1070,6 +1061,7 @@ private struct AssistantTurnRow: View {
                     if isActive, step.id == turn.steps.last?.id {
                         LiveAssistantStepView(
                             step: step,
+                            toolResults: turn.toolResults,
                             presentation: model.streamPresentation,
                             baseSize: model.settings.fontSize,
                             sources: turn.sources,
@@ -1242,6 +1234,7 @@ private struct AssistantTurnRow: View {
 
 private struct LiveAssistantStepView: View {
     let step: AssistantStep
+    let toolResults: [String: String]
     let presentation: StreamPresentation
     let baseSize: Double
     let sources: [Source]
@@ -1260,6 +1253,17 @@ private struct LiveAssistantStepView: View {
                 Text(content)
                     .font(.system(size: baseSize))
                     .textSelection(.enabled)
+            }
+            if let toolCalls = step.toolCalls, !toolCalls.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(toolCalls) { call in
+                        ToolCallView(
+                            call: call,
+                            result: toolResults[call.id],
+                            sources: sources
+                        )
+                    }
+                }
             }
         }
         .onChange(of: presentation.content) { onStreamUpdate() }

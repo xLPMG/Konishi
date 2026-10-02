@@ -49,16 +49,6 @@ extension AppModel {
         touch(idx)
     }
 
-    func clearCurrent() {
-        guard let id = selectedConversationID, let idx = conversationIndex(id) else { return }
-        stop()
-        conversations[idx].messages.removeAll()
-        reconcileFoldCounters(idx)
-        traceStore.deleteTraceFile(conversationID: id)
-        errorMessage = nil
-        touch(idx)
-    }
-
     /// Keep the compression/memory counters consistent after messages are removed. If the rolling
     /// summary now covers messages that no longer exist, drop it — otherwise `runStream` would fold
     /// away (and skip) the live messages while re-injecting a stale summary.

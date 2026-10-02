@@ -63,6 +63,12 @@ struct SidebarView: View {
             }
         }
         .background(model.currentPalette.sidebar.ignoresSafeArea())
+        .overlay(alignment: .trailing) {
+            model.currentPalette.border
+                .frame(width: 1)
+                .ignoresSafeArea(edges: .vertical)
+                .allowsHitTesting(false)
+        }
     }
 
     @ViewBuilder

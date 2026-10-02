@@ -2,6 +2,41 @@ import Foundation
 
 extension AppModel {
 
+    static func recoverableToolCalls(in messages: [ChatMessage])
+        -> (content: String, calls: [ToolCall], continueAfter: Bool)?
+    {
+        var completedIDs = Set<String>()
+        for message in messages.reversed() {
+            switch message.role {
+            case .system:
+                continue
+            case .tool:
+                if let id = message.toolCallId { completedIDs.insert(id) }
+            case .assistant:
+                guard let calls = message.toolCalls, !calls.isEmpty else { return nil }
+                let pending = calls.filter { !completedIDs.contains($0.id) }
+                guard !pending.isEmpty else { return nil }
+                return (
+                    message.content, pending,
+                    Self.needsToolContinuation(content: message.content, calls: calls))
+            case .user:
+                return nil
+            }
+        }
+        return nil
+    }
+
+    func restorePendingApproval(for conversationID: UUID) {
+        guard pendingApproval == nil,
+              let index = conversationIndex(conversationID),
+              let recovered = Self.recoverableToolCalls(in: conversations[index].messages)
+        else { return }
+        pendingApproval = PendingToolBatch(
+            conversationID: conversationID,
+            calls: recovered.calls,
+            continueAfter: recovered.continueAfter)
+    }
+
     /// Load a conversation's messages into RAM if absent, and cap the working set.
     func ensureHydrated(_ id: UUID) {
         guard let idx = conversations.firstIndex(where: { $0.id == id }) else { return }

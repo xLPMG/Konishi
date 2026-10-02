@@ -248,10 +248,34 @@ extension AppModel {
                 return "Error: file_read is disabled or missing path"
             }
             let resolved = (args.path as NSString).expandingTildeInPath
-            guard let s = try? String(contentsOfFile: resolved, encoding: .utf8) else {
+            let url: URL
+            if (resolved as NSString).isAbsolutePath {
+                url = URL(fileURLWithPath: resolved)
+            } else {
+                do {
+                    url = try fileStore.resolveWorkspacePath(
+                        resolved, in: Paths.conversationFiles(conversationID))
+                } catch {
+                    return "Error: \(error.localizedDescription)"
+                }
+            }
+            guard let s = try? String(contentsOf: url, encoding: .utf8) else {
                 return "Error: could not read \(args.path)"
             }
             return Self.readSlice(s, offset: args.offset, limit: args.limit)
+        case "file_write":
+            guard toolEnabled("file_write"),
+                  let args: ToolArguments.FileWrite = Self.decodeToolArgs(call) else {
+                return "Error: file_write is disabled or arguments are invalid"
+            }
+            do {
+                let url = try fileStore.write(
+                    path: args.path, content: args.content,
+                    in: Paths.conversationFiles(conversationID))
+                return "Saved workspace file: \(url.path)"
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
         case "web_fetch":
             guard toolEnabled("web_fetch"), let args: ToolArguments.URLValue = Self.decodeToolArgs(call),
                   let url = URL(string: args.url) else {
@@ -366,9 +390,17 @@ extension AppModel {
                   !args.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return "Error: missing command"
             }
+            let workspace = Paths.conversationFiles(conversationID)
+            let requestedDirectory = args.workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let workingDirectory: String
+            if let requestedDirectory, !requestedDirectory.isEmpty {
+                workingDirectory = requestedDirectory
+            } else {
+                workingDirectory = workspace.path
+            }
             let (status, output) = await runtime.runShellCapture(
                 args.command,
-                workingDirectory: args.workingDirectory,
+                workingDirectory: workingDirectory,
                 timeoutSeconds: args.timeoutSeconds ?? 120
             )
             return "exit \(status)\n\(output.isEmpty ? "(no output)" : output)"

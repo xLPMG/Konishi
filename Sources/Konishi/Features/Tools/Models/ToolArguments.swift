@@ -17,6 +17,10 @@ enum ToolArguments {
         var offset: Int?
         var limit: Int?
     }
+    struct FileWrite: Decodable {
+        let path: String
+        let content: String
+    }
 
     struct ConversationSearch: Decodable {
         let query: String

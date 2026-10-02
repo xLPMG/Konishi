@@ -4,7 +4,7 @@ struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
     @Environment(\.colorScheme) private var colorScheme
-    @State private var showFiles = false
+    @State private var showInspector = false
     @State private var showConversation = false
 
     var body: some View {
@@ -13,25 +13,32 @@ struct RootView: View {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
         } detail: {
-            if model.selectedConversationID != nil {
-                if model.mode == .language {
-                    LanguageView()
-                } else {
-                    ChatView()
+            HSplitView {
+                Group {
+                    if model.selectedConversationID != nil {
+                        if model.mode == .language {
+                            LanguageView()
+                        } else {
+                            ChatView()
+                        }
+                    } else {
+                        ContentUnavailableView(
+                            model.mode == .language ? "No Session" : "No Conversation",
+                            systemImage: model.mode == .language ? "character.book.closed" : "bubble.left.and.bubble.right"
+                        )
+                    }
                 }
-            } else {
-                ContentUnavailableView(
-                    model.mode == .language ? "No Session" : "No Conversation",
-                    systemImage: model.mode == .language ? "character.book.closed" : "bubble.left.and.bubble.right"
-                )
+                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+
+                if showInspector {
+                    ConversationInspectorView()
+                        .environment(model)
+                        .frame(minWidth: 230, idealWidth: 300, maxWidth: 540)
+                        .frame(maxHeight: .infinity)
+                }
             }
         }
         .background(model.currentPalette.canvas)
-        .sheet(isPresented: $showFiles) {
-            FilesView()
-                .environment(model)
-                .frame(width: 720, height: 520)
-        }
         .sheet(isPresented: $showConversation) {
             ConversationView()
                 .environment(model)
@@ -39,10 +46,6 @@ struct RootView: View {
         .sheet(item: $model.pendingInteraction) { interaction in
             MultipleChoiceView(interaction: interaction)
                 .environment(model)
-        }
-        .onChange(of: model.pendingInteraction?.id) { _, id in
-            // A pending question needs its own sheet; macOS won't present it over another one.
-            if id != nil { showFiles = false }
         }
         .onChange(of: model.mode) { _, newMode in
             model.syncSelectionToMode()
@@ -94,18 +97,28 @@ struct RootView: View {
                         ? "Memory — new memories are paused (existing memory still used)."
                         : "Open memory, update it now, or pause saving new memories.")
 
-                    Menu {
-                        Button { showFiles = true } label: {
-                            Label("Files…", systemImage: "folder")
+                    if model.mode != .language {
+                        Button {
+                            model.autopilotArmed.toggle()
+                        } label: {
+                            Label(
+                                model.autopilotArmed ? "Autopilot: On" : "Autopilot: Off",
+                                systemImage: "infinity")
                         }
-                        Button { openWindow(id: "trace") } label: {
-                            Label("Trace…", systemImage: "list.bullet.rectangle")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
+                        .buttonStyle(.plain)
+                        .foregroundStyle(model.autopilotArmed ? AnyShapeStyle(model.currentAccent) : AnyShapeStyle(.secondary))
+                        .opacity(model.autopilotArmed ? 1 : 0.55)
+                        .disabled(model.isStreaming || model.workSession != nil || model.pendingApproval != nil
+                            || model.pendingWorkGate != nil)
+                        .help("Use auto-approved tools for the next task. Other tools are reported unavailable; Autopilot stops at its safety ceiling.")
                     }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .help("Files and request trace")
+
+                    Button { showInspector.toggle() } label: {
+                        Image(systemName: "folder.badge.gearshape")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(showInspector ? model.currentAccent : .primary)
+                    .help(showInspector ? "Hide conversation sidebar" : "Show conversation sidebar")
 
                     Button { openWindow(id: "settings") } label: {
                         Image(systemName: "gearshape")
