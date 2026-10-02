@@ -224,8 +224,7 @@ struct ChatView: View {
                         Label("Queued until the current tool finishes", systemImage: "hourglass")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .frame(maxWidth: 860, alignment: .leading)
-                            .padding(.horizontal, 24)
+                            .alignedToChatColumn(alignment: .leading)
                             .padding(.vertical, 4)
                     }
                     StatsBar()
@@ -414,9 +413,9 @@ struct ChatView: View {
                         }
                     }
                 }
-                .frame(maxWidth: 1100)
+                .frame(maxWidth: ChatLayout.columnWidth)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 18)
+                .padding(.horizontal, 24)
                 .padding(.vertical, 24)
             }
                 .id(model.selectedConversationID)
@@ -747,7 +746,8 @@ struct ChatView: View {
         }
         .padding(10)
         .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 12).padding(.top, 8)
+        .padding(.top, 8)
+        .alignedToChatColumn()
     }
 
     @ViewBuilder
@@ -800,6 +800,7 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 12).padding(.top, 8)
             }
+            .alignedToChatColumn()
         }
     }
 
@@ -892,9 +893,7 @@ struct ChatView: View {
             .keyboardShortcut(.return, modifiers: .command)
         }
         .disabled(model.queuedTextInterrupt != nil)
-        .frame(maxWidth: 860)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24)
+        .alignedToChatColumn()
         .padding(.bottom, 12)
         .padding(.top, 4)
     }
@@ -1071,7 +1070,8 @@ private struct ToolApprovalBar: View {
         }
         .padding(10)
         .background(model.currentAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 12).padding(.top, 8)
+        .padding(.top, 8)
+        .alignedToChatColumn()
     }
 
     @ViewBuilder
@@ -1262,8 +1262,8 @@ private struct WorkLimitBar: View {
         }
         .padding(10)
         .background(model.currentAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 12)
         .padding(.top, 8)
+        .alignedToChatColumn()
     }
 }
 
@@ -1284,6 +1284,49 @@ private struct AutopilotStatusBar: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
+        .alignedToChatColumn()
+    }
+}
+
+private enum ChatLayout {
+    static let columnWidth: CGFloat = 860
+    static let userBubbleMaxWidth: CGFloat = 680
+}
+
+private struct CappedIntrinsicWidth: Layout {
+    let maxWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        let widthLimit = min(maxWidth, proposal.width ?? maxWidth)
+        let idealWidth = subview.sizeThatFits(.unspecified).width
+        let width = min(idealWidth, widthLimit)
+        let size = subview.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        return CGSize(width: width, height: size.height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let subview = subviews.first else { return }
+        let widthLimit = min(maxWidth, bounds.width)
+        let idealWidth = subview.sizeThatFits(.unspecified).width
+        let width = min(idealWidth, widthLimit)
+        subview.place(
+            at: bounds.origin,
+            proposal: ProposedViewSize(width: width, height: bounds.height)
+        )
+    }
+}
+
+private extension View {
+    func alignedToChatColumn(alignment: Alignment = .center) -> some View {
+        frame(maxWidth: ChatLayout.columnWidth, alignment: alignment)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 24)
     }
 }
 
@@ -1358,31 +1401,32 @@ private struct UserMessageRow: View {
     var body: some View {
         HStack {
             Spacer(minLength: 60)
-            VStack(alignment: .leading, spacing: 6) {
-                Label("You", systemImage: "person.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(model.currentAccent)
-                if !message.images.isEmpty { imageGrid }
-                if !message.attachments.isEmpty { attachmentChips }
-                Text(message.content)
-                    .font(.system(size: model.settings.fontSize))
-                    .textSelection(.enabled)
-                    .foregroundStyle(.primary)
-                actions
-            }
-            .frame(maxWidth: 860, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(model.currentAccent.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(model.currentAccent.opacity(0.16), lineWidth: 1)
-            }
-            .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(model.currentAccent)
-                    .frame(width: 3)
-                    .padding(.vertical, 12)
+            CappedIntrinsicWidth(maxWidth: ChatLayout.userBubbleMaxWidth) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("You", systemImage: "person.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(model.currentAccent)
+                    if !message.images.isEmpty { imageGrid }
+                    if !message.attachments.isEmpty { attachmentChips }
+                    Text(message.content)
+                        .font(.system(size: model.settings.fontSize))
+                        .textSelection(.enabled)
+                        .foregroundStyle(.primary)
+                    actions
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(model.currentAccent.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(model.currentAccent.opacity(0.16), lineWidth: 1)
+                }
+                .overlay(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(model.currentAccent)
+                        .frame(width: 3)
+                        .padding(.vertical, 12)
+                }
             }
         }
         .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
