@@ -548,8 +548,8 @@ private struct CapabilityPolicySettingsRow: View {
     let decision: PermissionDecision
     let source: String
     let hasOverride: Bool
-    let onChange: @MainActor @Sendable (PermissionDecision) -> Void
-    let onReset: @MainActor @Sendable () -> Void
+    let onChange: @MainActor (PermissionDecision) -> Void
+    let onReset: @MainActor () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
@@ -565,7 +565,7 @@ private struct CapabilityPolicySettingsRow: View {
             }
             Spacer(minLength: 6)
             Picker(capability.label, selection: Binding(
-                get: { decision }, set: onChange
+                get: { decision }, set: { onChange($0) }
             )) {
                 Text("Allow").tag(PermissionDecision.allow)
                 Text("Ask").tag(PermissionDecision.ask)
