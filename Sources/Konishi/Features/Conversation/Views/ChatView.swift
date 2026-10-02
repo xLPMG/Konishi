@@ -25,6 +25,14 @@ struct ChatView: View {
                     if let batch = model.pendingApproval { ToolApprovalBar(batch: batch) }
                     if let gate = model.pendingWorkGate { WorkLimitBar(gate: gate) }
                     if model.isAutopilotActive || model.isStoppingWork { AutopilotStatusBar() }
+                    if model.queuedTextInterrupt != nil {
+                        Label("Queued until the current tool finishes", systemImage: "hourglass")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: 860, alignment: .leading)
+                            .padding(.horizontal, 24)
+                            .padding(.vertical, 4)
+                    }
                     StatsBar()
                     attachmentStrip
                     inputBar
@@ -176,6 +184,9 @@ struct ChatView: View {
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    Color.clear
+                        .frame(height: 1)
+                        .id("chat-top")
                     if items.isEmpty { emptyState }
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                         switch item {
@@ -207,6 +218,7 @@ struct ChatView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 24)
             }
+                .id(model.selectedConversationID)
             .background(model.currentPalette.canvas)
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 40
@@ -219,7 +231,11 @@ struct ChatView: View {
             }
             .onChange(of: model.selectedConversationID) {
                 pinnedToBottom = true
-                if let last = items.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                if let last = datedChatItems.last {
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                } else {
+                    proxy.scrollTo("chat-top", anchor: .top)
+                }
             }
             .onChange(of: pendingChatJump) { _, jump in
                 guard let jump, let targetID = chatItemID(containing: jump.messageID) else { return }
@@ -598,8 +614,10 @@ struct ChatView: View {
             .layoutPriority(1)
             .disabled(!model.canSend)
             .opacity(model.canSend ? 1 : 0.45)
+            .help(model.canInterruptWithText ? "Interrupt reply and send message" : model.canQueueTextInterrupt ? "Queue message until the current tool finishes" : "Send message")
             .keyboardShortcut(.return, modifiers: .command)
         }
+        .disabled(model.queuedTextInterrupt != nil)
         .frame(maxWidth: 860)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)

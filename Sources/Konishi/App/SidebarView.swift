@@ -53,6 +53,7 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .disabled(!model.canCreateConversation)
             }
             .padding(.horizontal, 14)
             .padding(.top, 12)

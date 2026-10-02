@@ -6,10 +6,10 @@ struct ConversationInspectorView: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var tasksExpanded = false
-    @State private var permissionsExpanded = true
+    @State private var permissionsExpanded = false
     @State private var confirmingClearTasks = false
-    @State private var filesExpanded = true
-    @State private var previewExpanded = true
+    @State private var filesExpanded = false
+    @State private var previewExpanded = false
     @State private var traceExpanded = false
     @State private var entries: [FileStore.Entry] = []
     @State private var selection: FileStore.Entry?

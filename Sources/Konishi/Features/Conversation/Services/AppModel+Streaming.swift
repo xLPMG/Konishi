@@ -5,20 +5,41 @@ extension AppModel {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draftImages.isEmpty || !draftAttachments.isEmpty,
-            canBeginAgentTask,
-            let convoID = selectedConversationID, let idx = conversationIndex(convoID)
+            let convoID = selectedConversationID,
+            conversationIndex(convoID) != nil
         else { return }
 
-        errorMessage = nil
-        resetSpeech()
         let images = draftImages
         let attachments = draftAttachments
+
+        if canQueueTextInterrupt {
+            queuedTextInterrupt = QueuedTextInterrupt(
+                conversationID: convoID, content: text, images: images, attachments: attachments)
+            draft = ""
+            draftImages = []
+            draftAttachments = []
+            return
+        }
+
+        if canInterruptWithText { stop() }
+        guard canBeginAgentTask else { return }
+
         draft = ""
         draftImages = []
         draftAttachments = []
+        submitUserMessage(
+            text: text, images: images, attachments: attachments, conversationID: convoID)
+    }
+
+    func submitUserMessage(
+        text: String, images: [String], attachments: [Attachment], conversationID: UUID
+    ) {
+        guard let idx = conversationIndex(conversationID) else { return }
+        errorMessage = nil
+        resetSpeech()
         loopSignatures.removeAll()
         turnSources.removeAll()
-        beginAgentWork(conversationID: convoID)
+        beginAgentWork(conversationID: conversationID)
         conversations[idx].messages.append(
             ChatMessage(role: .user, content: text, images: images, attachments: attachments))
 
@@ -26,8 +47,8 @@ extension AppModel {
             conversations[idx].title = String(text.prefix(40))
         }
         touch(idx)
-        startTurn(conversationID: convoID)
-        maybeAutoTitle(conversationID: convoID)
+        startTurn(conversationID: conversationID)
+        maybeAutoTitle(conversationID: conversationID)
     }
 
     func regenerate(messageID: UUID) {
@@ -198,8 +219,8 @@ extension AppModel {
                                 out.reasoning, conversationID: conversationID,
                                 assistantID: assistantID)
                         }
-                        let repeatedReasoning = !out.reasoning.isEmpty
-                            && repeatedReasoningGuard.consume(out.reasoning) != nil
+                        let repeatedReasoning = out.reasoning.isEmpty
+                            ? nil : repeatedReasoningGuard.consume(out.reasoning)
                         if !out.visible.isEmpty {
                             deltaCount += 1
                             charCount += out.visible.count
@@ -212,9 +233,12 @@ extension AppModel {
                             interruption = reason
                             break streamLoop
                         }
-                        if repeatedReasoning || (!out.visible.isEmpty
-                            && repeatedLineGuard.consume(out.visible) != nil)
-                        {
+                        let repeatedAnswer = repeatedReasoning == nil && !out.visible.isEmpty
+                            ? repeatedLineGuard.consume(out.visible) : nil
+                        if let repeated = repeatedReasoning ?? repeatedAnswer {
+                            self.traceRepeatedOutput(
+                                repeated, channel: repeatedReasoning == nil ? "reply text" : "reasoning",
+                                conversationID: conversationID)
                             interruption = .repeatedOutput
                             break streamLoop
                         }
@@ -225,7 +249,10 @@ extension AppModel {
                             reasoning += r
                             self.appendReasoning(
                                 r, conversationID: conversationID, assistantID: assistantID)
-                            if repeatedReasoningGuard.consume(r) != nil {
+                            if let repeated = repeatedReasoningGuard.consume(r) {
+                                self.traceRepeatedOutput(
+                                    repeated, channel: "reasoning",
+                                    conversationID: conversationID)
                                 interruption = .repeatedOutput
                                 break streamLoop
                             }
@@ -262,7 +289,9 @@ extension AppModel {
                     reasoning += tail.reasoning
                     self.appendReasoning(
                         tail.reasoning, conversationID: conversationID, assistantID: assistantID)
-                    if repeatedReasoningGuard.consume(tail.reasoning) != nil {
+                    if let repeated = repeatedReasoningGuard.consume(tail.reasoning) {
+                        self.traceRepeatedOutput(
+                            repeated, channel: "reasoning", conversationID: conversationID)
                         interruption = .repeatedOutput
                     }
                 }
@@ -276,10 +305,14 @@ extension AppModel {
                         interruption = self.observeAgentOutput(tail.visible)
                     }
                 }
-                if interruption == nil, repeatedLineGuard.finish() != nil {
+                if interruption == nil, let repeated = repeatedLineGuard.finish() {
+                    self.traceRepeatedOutput(
+                        repeated, channel: "reply text", conversationID: conversationID)
                     interruption = .repeatedOutput
                 }
-                if interruption == nil, repeatedReasoningGuard.finish() != nil {
+                if interruption == nil, let repeated = repeatedReasoningGuard.finish() {
+                    self.traceRepeatedOutput(
+                        repeated, channel: "reasoning", conversationID: conversationID)
                     interruption = .repeatedOutput
                 }
                 if interruption == nil, finishReason == "length" {
@@ -390,6 +423,16 @@ extension AppModel {
             streamPresentation.matches(conversationID: conversationID, assistantID: assistantID)
         else { return }
         streamPresentation.reasoning += pending
+    }
+
+    private func traceRepeatedOutput(
+        _ repeated: String, channel: String, conversationID: UUID
+    ) {
+        traceStore.trace(
+            conversationID: conversationID, kind: .info,
+            text: "Repeated-output guard fired in \(channel); generation stopped.",
+            saveTraces: settings.saveTraces,
+            detail: String(repeated.prefix(1_000)))
     }
 
     private func finishStream(
@@ -555,6 +598,13 @@ extension AppModel {
     }
 
     func stop() {
+        if let queued = queuedTextInterrupt {
+            queuedTextInterrupt = nil
+            selectedConversationID = queued.conversationID
+            draft = queued.content
+            draftImages = queued.images
+            draftAttachments = queued.attachments
+        }
         let wasExecutingTools = toolExecutionTask != nil
         streamTask?.cancel()
         streamTask = nil

@@ -2,6 +2,7 @@ import Foundation
 
 extension AppModel {
     func newConversation(personaID: UUID? = nil) {
+        guard canCreateConversation else { return }
         let pid = personaID ?? currentPersonaIDForNewChat()
         let convo = Conversation(personaID: pid, isLanguage: mode == .language ? true : nil)
         searchText = ""

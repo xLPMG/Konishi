@@ -199,6 +199,22 @@ extension AppModel {
                     }
                 }
                 self.activity = "Received result."
+                if let queued = self.queuedTextInterrupt,
+                    queued.conversationID == batch.conversationID
+                {
+                    self.closePendingToolCalls(
+                        batch,
+                        message: "Not run: the user interrupted the tool batch with a queued message.",
+                        calls: Array(batch.calls.dropFirst(callIndex + 1)))
+                    self.queuedTextInterrupt = nil
+                    self.toolExecutionTask = nil
+                    self.stop()
+                    self.isStoppingWork = false
+                    self.submitUserMessage(
+                        text: queued.content, images: queued.images,
+                        attachments: queued.attachments, conversationID: queued.conversationID)
+                    return
+                }
                 if autopilot, evaluation?.verdict == .deny {
                     let capability = evaluation?.effects.first?.effect.capability.label ?? name
                     self.autopilotPermissionDenials += 1

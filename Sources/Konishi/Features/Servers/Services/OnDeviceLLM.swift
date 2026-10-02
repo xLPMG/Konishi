@@ -7,6 +7,11 @@ import Foundation
 /// tasks (summaries, reflection, diff review) so they run on the ANE instead of the GPU
 /// server. Everything degrades to nil when the model is unavailable, so callers fall back.
 enum OnDeviceLLM {
+    struct CompletionResult: Sendable {
+        let text: String?
+        let failure: String?
+    }
+
     #if canImport(FoundationModels)
     @Generable
     struct BackchannelDecision {
@@ -51,17 +56,25 @@ enum OnDeviceLLM {
 
     /// One-shot completion on the on-device model, or nil if unavailable / it fails.
     static func complete(prompt: String, temperature: Double? = nil) async -> String? {
+        await completeWithDiagnostics(prompt: prompt, temperature: temperature).text
+    }
+
+    static func completeWithDiagnostics(
+        prompt: String, temperature: Double? = nil
+    ) async -> CompletionResult {
         #if canImport(FoundationModels)
-        guard case .available = SystemLanguageModel.default.availability else { return nil }
+        guard case .available = SystemLanguageModel.default.availability else {
+            return CompletionResult(text: nil, failure: status)
+        }
         do {
             let session = LanguageModelSession()
             let response = try await session.respond(to: prompt, options: GenerationOptions(temperature: temperature))
-            return response.content
+            return CompletionResult(text: response.content, failure: nil)
         } catch {
-            return nil
+            return CompletionResult(text: nil, failure: error.localizedDescription)
         }
         #else
-        return nil
+        return CompletionResult(text: nil, failure: status)
         #endif
     }
 

@@ -60,6 +60,7 @@ final class AppModel {
     }
     var pendingApproval: PendingToolBatch?
     var pendingWorkGate: PendingWorkGate?
+    var queuedTextInterrupt: QueuedTextInterrupt?
     @ObservationIgnored
     var workSession: AgentWorkSession?
     var isAutopilotActive = false
@@ -126,6 +127,13 @@ final class AppModel {
         var batch: PendingToolBatch?
     }
 
+    struct QueuedTextInterrupt: Sendable {
+        let conversationID: UUID
+        let content: String
+        let images: [String]
+        let attachments: [Attachment]
+    }
+
     init() {
         Paths.ensure()
         self.settings = AppSettings()
@@ -154,6 +162,13 @@ final class AppModel {
     var selectedConversation: Conversation? {
         guard let id = selectedConversationID else { return nil }
         return conversations.first { $0.id == id }
+    }
+
+    var canCreateConversation: Bool {
+        guard let conversation = selectedConversation,
+            (conversation.isLanguage == true) == (mode == .language)
+        else { return true }
+        return !conversation.messages.isEmpty
     }
 
     var currentPersona: Persona { personaStore.persona(for: selectedConversation) }
@@ -324,9 +339,22 @@ final class AppModel {
             finishingToolOperation: isStoppingWork)
     }
 
+    var canInterruptWithText: Bool {
+        isStreaming && streamTask != nil && toolExecutionTask == nil
+            && pendingApproval == nil && pendingWorkGate == nil && !isStoppingWork
+            && streamingConversationID == selectedConversationID
+    }
+
+    var canQueueTextInterrupt: Bool {
+        isStreaming && toolExecutionTask != nil && queuedTextInterrupt == nil
+            && pendingApproval == nil && pendingWorkGate == nil && !isStoppingWork
+            && streamingConversationID == selectedConversationID
+    }
+
     var canSend: Bool {
         (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
-            || !draftAttachments.isEmpty) && canBeginAgentTask
+            || !draftAttachments.isEmpty)
+            && (canBeginAgentTask || canInterruptWithText || canQueueTextInterrupt)
     }
 
     // Streamed tokens are buffered and flushed on a timer so the UI re-renders (and re-parses

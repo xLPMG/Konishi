@@ -18,6 +18,7 @@ struct KonishiApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Chat") { model.newConversation() }
                     .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!model.canCreateConversation)
             }
             CommandGroup(after: .textEditing) {
                 Button(model.voice.isListening ? "Stop Dictation" : "Dictate") { model.toggleDictation() }
@@ -99,6 +100,7 @@ private struct MenuBarView: View {
 
             Divider()
             Button("New Chat") { model.newConversation(); openWindow(id: "main") }
+                .disabled(!model.canCreateConversation)
             Button("Open Konishi") { openWindow(id: "main") }
             Button("Start Servers") { model.startAllServers() }
             Button("Stop Servers") { model.stopAllServers() }
