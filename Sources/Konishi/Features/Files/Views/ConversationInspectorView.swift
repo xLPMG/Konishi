@@ -6,6 +6,7 @@ struct ConversationInspectorView: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var tasksExpanded = false
+    @State private var confirmingClearTasks = false
     @State private var filesExpanded = true
     @State private var previewExpanded = true
     @State private var traceExpanded = false
@@ -32,15 +33,29 @@ struct ConversationInspectorView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    DisclosureGroup(isExpanded: $tasksExpanded) {
-                        ConversationTaskBoard(showsHeader: false)
-                    } label: {
-                        HStack {
-                            Label("Tasks & Notes", systemImage: "checklist")
-                            Spacer()
-                            Text("\(tasks.filter { $0.status == .done }.count)/\(tasks.count)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        DisclosureGroup(isExpanded: $tasksExpanded) {
+                            ConversationTaskBoard(showsHeader: false)
+                        } label: {
+                            HStack {
+                                Label("Tasks & Notes", systemImage: "checklist")
+                                Spacer()
+                                Text("\(tasks.filter { $0.status == .done }.count)/\(tasks.count)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        if !tasks.isEmpty {
+                            Button(role: .destructive) {
+                                confirmingClearTasks = true
+                            } label: {
+                                Image(systemName: "trash")
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove all tasks")
                         }
                     }
 
@@ -85,6 +100,17 @@ struct ConversationInspectorView: View {
             }
         }
         .background(model.currentPalette.sidebar)
+        .confirmationDialog(
+            "Remove all tasks?", isPresented: $confirmingClearTasks,
+            titleVisibility: .visible
+        ) {
+            Button("Remove All Tasks", role: .destructive) {
+                model.deleteAllConversationTasks()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes every task and its notes from this conversation.")
+        }
         .onAppear(perform: reload)
         .onChange(of: conversationID) { _, id in
             selection = nil

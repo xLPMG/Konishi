@@ -127,6 +127,10 @@ struct ConversationTaskBoard: View {
                         if task.status == .inProgress {
                             Text("In progress").font(.caption2).foregroundStyle(model.currentAccent)
                         }
+                        if !task.subtasks.isEmpty {
+                            Text("\(task.subtasks.count) subtasks")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                     Spacer(minLength: 0)
                 }
@@ -149,7 +153,7 @@ struct ConversationTaskBoard: View {
                     .allowsHitTesting(false)
             }
         }
-        .frame(minHeight: 130)
+        .frame(minHeight: 320)
     }
 
     private var addTaskRow: some View {
@@ -224,6 +228,7 @@ private struct ConversationTaskEditor: View {
     let task: ConversationTask
     @Binding var title: String
     @Binding var notes: String
+    @State private var newSubtaskTitle = ""
     let canWork: Bool
     let onSave: () -> Void
     let onDelete: () -> Void
@@ -235,6 +240,7 @@ private struct ConversationTaskEditor: View {
         VStack(alignment: .leading, spacing: 10) {
             TextField("Task", text: $title)
                 .textFieldStyle(.roundedBorder)
+            subtasksEditor
             Text("User notes")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
@@ -253,7 +259,7 @@ private struct ConversationTaskEditor: View {
                             .allowsHitTesting(false)
                     }
                 }
-                .frame(minHeight: 90, maxHeight: 180)
+                .frame(minHeight: 120, maxHeight: 220)
             HStack {
                 Button(role: .destructive) {
                     onDelete()
@@ -278,5 +284,55 @@ private struct ConversationTaskEditor: View {
             }
         }
         .padding(12)
+    }
+
+    private var subtasksEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Subtasks")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(task.subtasks) { subtask in
+                HStack(spacing: 7) {
+                    Button {
+                        model.updateConversationSubtask(
+                            subtask.id, in: task.id,
+                            status: subtask.status == .done ? .pending : .done)
+                    } label: {
+                        Image(systemName: subtask.status == .done ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(subtask.status == .done ? .green : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    Text(subtask.title)
+                        .font(.callout)
+                        .strikethrough(subtask.status == .done)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button(role: .destructive) {
+                        model.deleteConversationSubtask(subtask.id, from: task.id)
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Delete subtask")
+                }
+                .padding(.leading, 8)
+            }
+            HStack(spacing: 7) {
+                TextField("Add a subtask", text: $newSubtaskTitle)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addSubtask)
+                Button(action: addSubtask) {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.bordered)
+                .disabled(newSubtaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || task.subtasks.count >= AppModel.maximumConversationSubtasks)
+                .help("Add subtask")
+            }
+        }
+    }
+
+    private func addSubtask() {
+        guard model.addConversationSubtask(to: task.id, title: newSubtaskTitle) != nil else { return }
+        newSubtaskTitle = ""
     }
 }

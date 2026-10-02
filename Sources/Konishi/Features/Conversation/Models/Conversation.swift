@@ -11,11 +11,41 @@ struct ConversationTask: Identifiable, Codable, Equatable, Sendable {
     var title: String
     var notes: String
     var status: Status
+    var subtasks: [ConversationSubtask]
 
-    init(id: UUID = UUID(), title: String, notes: String = "", status: Status = .pending) {
+    init(
+        id: UUID = UUID(), title: String, notes: String = "", status: Status = .pending,
+        subtasks: [ConversationSubtask] = []
+    ) {
         self.id = id
         self.title = title
         self.notes = notes
+        self.status = status
+        self.subtasks = subtasks
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, notes, status, subtasks
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        notes = try container.decode(String.self, forKey: .notes)
+        status = try container.decode(Status.self, forKey: .status)
+        subtasks = try container.decodeIfPresent([ConversationSubtask].self, forKey: .subtasks) ?? []
+    }
+}
+
+struct ConversationSubtask: Identifiable, Codable, Equatable, Sendable {
+    var id = UUID()
+    var title: String
+    var status: ConversationTask.Status
+
+    init(id: UUID = UUID(), title: String, status: ConversationTask.Status = .pending) {
+        self.id = id
+        self.title = title
         self.status = status
     }
 }
