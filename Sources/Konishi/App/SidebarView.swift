@@ -29,7 +29,8 @@ struct SidebarView: View {
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(model.currentAccent)
                         .frame(width: 36, height: 36)
-                        .background(model.currentAccent.opacity(0.13), in: RoundedRectangle(cornerRadius: 11))
+                        .background(model.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(model.currentPalette.border, lineWidth: 1))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Konishi").font(.headline)
                         Text(isLanguage ? "LEARNING DESK" : "CHAT STUDIO")
@@ -38,11 +39,12 @@ struct SidebarView: View {
                     }
                     Spacer(minLength: 0)
                     Text("\(model.filteredConversations.count)")
-                        .font(.caption.monospacedDigit().weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(model.currentPalette.signal)
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(KonishiPalette.surface, in: Capsule())
+                        .padding(.vertical, 6)
+                        .background(model.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 7))
+                        .overlay(RoundedRectangle(cornerRadius: 7).stroke(model.currentPalette.border, lineWidth: 1))
                 }
 
                 Button { model.newConversation() } label: {
@@ -55,15 +57,22 @@ struct SidebarView: View {
             .padding(.horizontal, 14)
             .padding(.top, 12)
             .padding(.bottom, 10)
-            .background(KonishiPalette.surface)
+            .background(model.currentPalette.sidebar)
+            .overlay(alignment: .bottom) {
+                model.currentPalette.border.frame(height: 1)
+            }
         }
-        .background(KonishiPalette.surface.ignoresSafeArea())
+        .background(model.currentPalette.sidebar.ignoresSafeArea())
     }
 
     @ViewBuilder
     private func row(_ convo: Conversation) -> some View {
         let persona = model.personaStore.persona(for: convo)
+        let isSelected = model.selectedConversationID == convo.id
         HStack(spacing: 8) {
+            Capsule()
+                .fill(isSelected ? model.currentAccent : .clear)
+                .frame(width: 2, height: 28)
             Image(systemName: persona.iconSymbol)
                 .foregroundStyle(persona.accentColorHex.map { Color(hex: $0) } ?? .accentColor)
             if renaming == convo.id {
@@ -79,6 +88,11 @@ struct SidebarView: View {
             }
             Spacer(minLength: 0)
         }
+        .padding(.leading, 3)
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isSelected ? model.currentPalette.surfaceRaised : Color.clear)
+        )
         .contextMenu {
             Button("Rename") { startRename(convo) }
             Button("Export Markdown…") { export(convo) }

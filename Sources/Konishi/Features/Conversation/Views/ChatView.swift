@@ -39,9 +39,9 @@ struct ChatView: View {
                     .environment(model)
                     .frame(minWidth: 270, idealWidth: 330, maxWidth: 420)
                     .frame(maxHeight: .infinity)
-                    .background(KonishiPalette.surface.ignoresSafeArea())
+                    .background(model.currentPalette.surface.ignoresSafeArea())
                     .overlay(alignment: .leading) {
-                        KonishiPalette.border
+                        model.currentPalette.border
                             .frame(width: 1)
                             .ignoresSafeArea(edges: .vertical)
                             .allowsHitTesting(false)
@@ -246,7 +246,7 @@ struct ChatView: View {
                 .padding(.horizontal, 18)
                 .padding(.vertical, 24)
             }
-            .background(KonishiPalette.canvas)
+            .background(model.currentPalette.canvas)
             .onScrollGeometryChange(for: Bool.self) { geo in
                 geo.contentOffset.y + geo.containerSize.height >= geo.contentSize.height - 40
             } action: { _, atBottom in
@@ -301,12 +301,12 @@ struct ChatView: View {
 
     private func dateBreak(_ day: Date) -> some View {
         HStack(spacing: 12) {
-            Rectangle().fill(KonishiPalette.border).frame(height: 1)
+            Rectangle().fill(model.currentPalette.border).frame(height: 1)
             Text(Self.dateLabel(day))
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.tertiary)
                 .fixedSize()
-            Rectangle().fill(KonishiPalette.border).frame(height: 1)
+            Rectangle().fill(model.currentPalette.border).frame(height: 1)
         }
         .padding(.horizontal, 72)
         .accessibilityElement(children: .combine)
@@ -603,8 +603,13 @@ struct ChatView: View {
             .padding(.horizontal, 13)
             .padding(.vertical, 5)
             .frame(minHeight: 42)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().stroke(KonishiPalette.border.opacity(0.55), lineWidth: 1))
+            .background(model.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(inputFocused ? model.currentAccent.opacity(0.62) : model.currentPalette.border, lineWidth: inputFocused ? 1.25 : 1)
+            }
+            .shadow(color: model.currentAccent.opacity(inputFocused ? 0.09 : 0.025), radius: inputFocused ? 12 : 6, y: 3)
+            .animation(.easeOut(duration: 0.16), value: inputFocused)
 
             Button { model.toggleDictation() } label: {
                 Image(systemName: model.voice.isListening ? "mic.fill" : "mic")
@@ -614,8 +619,8 @@ struct ChatView: View {
                     .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
-            .background(.ultraThinMaterial, in: Circle())
-            .overlay(Circle().stroke(KonishiPalette.border.opacity(0.55), lineWidth: 1))
+            .background(model.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.currentPalette.border, lineWidth: 1))
             .help("Dictate")
 
             Button { model.send() } label: {
@@ -623,7 +628,7 @@ struct ChatView: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 42, height: 42)
-                    .background(model.currentAccent, in: Circle())
+                    .background(model.currentAccent, in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
             .disabled(!model.canSend)
@@ -930,7 +935,6 @@ enum ChatItem: Identifiable {
 private struct UserMessageRow: View {
     @Environment(AppModel.self) private var model
     let message: ChatMessage
-    @State private var hovering = false
     @State private var zoom: IdentifiableImage?
 
     var body: some View {
@@ -946,12 +950,16 @@ private struct UserMessageRow: View {
                     .font(.system(size: model.settings.fontSize))
                     .textSelection(.enabled)
                     .foregroundStyle(.primary)
-                if hovering { actions }
+                actions
             }
             .frame(maxWidth: 860, alignment: .leading)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(model.currentAccent.opacity(0.11), in: RoundedRectangle(cornerRadius: 15))
+            .background(model.currentAccent.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(model.currentAccent.opacity(0.16), lineWidth: 1)
+            }
             .overlay(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(model.currentAccent)
@@ -959,7 +967,6 @@ private struct UserMessageRow: View {
                     .padding(.vertical, 12)
             }
         }
-        .onHover { hovering = $0 }
         .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
         .contextMenu {
             Button("Copy Message", systemImage: "doc.on.doc") { copyMessage() }
@@ -1030,7 +1037,6 @@ private struct AssistantTurnRow: View {
     let turn: AssistantTurn
     let isActive: Bool
     let onStreamUpdate: () -> Void
-    @State private var hovering = false
     @State private var zoom: IdentifiableImage?
 
     private var visibleSteps: [AssistantStep] {
@@ -1048,8 +1054,9 @@ private struct AssistantTurnRow: View {
             Image(systemName: model.currentPersona.iconSymbol)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(model.currentAccent)
-                .frame(width: 32, height: 32)
-                .background(model.currentAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
+                .frame(width: 30, height: 30)
+                .background(model.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(model.currentPalette.border, lineWidth: 1))
             VStack(alignment: .leading, spacing: 8) {
                 Text(model.currentAssistantName)
                     .font(.caption.weight(.semibold))
@@ -1108,12 +1115,11 @@ private struct AssistantTurnRow: View {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if !turn.sources.isEmpty { sourcesView }
-                if hovering { actions }
+                actions
             }
             .frame(maxWidth: 960, alignment: .leading)
             Spacer(minLength: 20)
         }
-        .onHover { hovering = $0 }
         .sheet(item: $zoom) { ZoomImageView(image: $0.image) }
         .contextMenu {
             Button("Copy Message", systemImage: "doc.on.doc") { copyTurn() }
@@ -1315,7 +1321,7 @@ private struct ReasoningDisclosureView: View {
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             HStack(alignment: .top, spacing: 8) {
-                KonishiPalette.border
+                model.currentPalette.border
                     .frame(width: 1)
                 Text(reasoning)
                     .font(.system(size: max(11, model.settings.fontSize - 2)))

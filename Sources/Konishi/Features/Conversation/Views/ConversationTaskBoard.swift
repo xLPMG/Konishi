@@ -40,9 +40,9 @@ struct ConversationTaskBoard: View {
             Divider()
             footer
         }
-        .background(KonishiPalette.surface)
+        .background(model.currentPalette.surface)
         .overlay(alignment: .leading) {
-            KonishiPalette.border
+            model.currentPalette.border
                 .frame(width: 1)
                 .ignoresSafeArea(edges: .vertical)
                 .allowsHitTesting(false)
@@ -215,6 +215,7 @@ struct ConversationTaskBoard: View {
 }
 
 private struct ConversationTaskEditor: View {
+    @Environment(AppModel.self) private var model
     let task: ConversationTask
     @Binding var title: String
     @Binding var notes: String
@@ -236,7 +237,7 @@ private struct ConversationTaskEditor: View {
                 .font(.callout)
                 .scrollContentBackground(.hidden)
                 .padding(5)
-                .background(KonishiPalette.surface, in: RoundedRectangle(cornerRadius: 6))
+                .background(model.currentPalette.surface, in: RoundedRectangle(cornerRadius: 6))
                 .overlay(alignment: .topLeading) {
                     if notes.isEmpty {
                         Text("Context, constraints, or completion criteria…")

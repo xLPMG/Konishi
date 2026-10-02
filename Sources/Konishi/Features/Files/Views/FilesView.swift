@@ -32,6 +32,8 @@ struct FilesView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(model.currentPalette.sidebar)
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
             .safeAreaInset(edge: .bottom) { bottomBar }
         } detail: {
@@ -41,6 +43,7 @@ struct FilesView: View {
                 ContentUnavailableView("Select a file", systemImage: "doc")
             }
         }
+        .background(model.currentPalette.canvas.ignoresSafeArea())
         .navigationTitle("Files")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }

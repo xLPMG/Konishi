@@ -108,6 +108,7 @@ private struct MenuBarView: View {
         }
         .padding(12)
         .frame(width: 260)
+        .background(model.currentPalette.surface)
     }
 
     private var statusColor: Color {

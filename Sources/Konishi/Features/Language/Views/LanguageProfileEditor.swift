@@ -62,6 +62,7 @@ struct LanguageProfileEditor: View {
                 }
             }
             .formStyle(.grouped)
+            .themedFormBackground(model.currentPalette.canvas)
             .navigationTitle(isNew ? "New Language" : "Edit Language")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

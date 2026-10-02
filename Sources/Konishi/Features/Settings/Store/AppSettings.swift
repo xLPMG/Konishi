@@ -71,6 +71,9 @@ final class AppSettings {
     var accentColorHex: String {
         didSet { defaults.set(accentColorHex, forKey: Keys.accentColorHex) }
     }
+    var theme: AppTheme {
+        didSet { defaults.set(theme.rawValue, forKey: Keys.theme) }
+    }
     /// Stored in Keychain, not UserDefaults.
     var apiToken: String {
         didSet { Keychain.set(apiToken, for: Keys.apiToken) }
@@ -321,6 +324,7 @@ final class AppSettings {
         self.injectDateContext = defaults.object(forKey: Keys.injectDateContext) as? Bool ?? true
         self.fontSize = defaults.object(forKey: Keys.fontSize) as? Double ?? 14
         self.accentColorHex = defaults.string(forKey: Keys.accentColorHex) ?? "#6C8CFF"
+        self.theme = AppTheme.restoring(defaults.string(forKey: Keys.theme)) ?? .signal
         self.apiToken = Keychain.get(Keys.apiToken)
         self.stopServersOnQuit = defaults.object(forKey: Keys.stopServersOnQuit) as? Bool ?? true
         self.stopSequences = defaults.string(forKey: Keys.stopSequences) ?? ""
@@ -512,6 +516,7 @@ final class AppSettings {
         static let injectDateContext = "konishi.injectDateContext"
         static let fontSize = "konishi.fontSize"
         static let accentColorHex = "konishi.accentColorHex"
+        static let theme = "konishi.theme"
         static let apiToken = "konishi.apiToken"
         static let stopServersOnQuit = "konishi.stopServersOnQuit"
         static let stopSequences = "konishi.stopSequences"

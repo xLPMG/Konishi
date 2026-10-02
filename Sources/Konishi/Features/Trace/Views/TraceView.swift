@@ -49,6 +49,7 @@ struct TraceView: View {
             }
         }
         .frame(minWidth: 560, minHeight: 460)
+        .background(model.currentPalette.canvas.ignoresSafeArea())
         .onAppear {
             if let id = model.selectedConversationID { model.traceStore.ensureTraceLoaded(conversationID: id) }
         }

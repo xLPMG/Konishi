@@ -4,6 +4,7 @@ import AppKit
 import Speech
 
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
     @State private var selection: SettingsSection? = .endpoints
 
     var body: some View {
@@ -14,10 +15,11 @@ struct SettingsView: View {
                 Section("Personalization") { sectionRows(group: "Personalization") }
             }
             .listStyle(.sidebar)
-            .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+            .scrollContentBackground(.hidden)
+            .background(model.currentPalette.sidebar.ignoresSafeArea())
             .overlay(alignment: .trailing) {
                 Rectangle()
-                    .fill(Color(nsColor: .separatorColor))
+                    .fill(model.currentPalette.border)
                     .frame(width: 1)
                     .ignoresSafeArea(edges: .vertical)
             }
@@ -25,11 +27,12 @@ struct SettingsView: View {
         } detail: {
             selectedContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .windowBackgroundColor))
+                .background(model.currentPalette.canvas)
         }
         .navigationTitle("Settings - \(selectedSection.title)")
         .navigationSplitViewStyle(.balanced)
-        .toolbarBackground(Color(nsColor: .windowBackgroundColor), for: .windowToolbar)
+        .background(model.currentPalette.canvas.ignoresSafeArea())
+        .toolbarBackground(model.currentPalette.surface, for: .windowToolbar)
         .toolbarBackground(.visible, for: .windowToolbar)
         .frame(
             minWidth: 860, idealWidth: 980, maxWidth: .infinity,
@@ -146,6 +149,7 @@ private struct ServerSettings: View {
             }
         }
         .formStyle(.grouped)
+        .themedFormBackground(model.currentPalette.canvas)
     }
 }
 
@@ -215,6 +219,7 @@ private struct GenerationSettings: View {
             }
         }
         .formStyle(.grouped)
+        .themedFormBackground(model.currentPalette.canvas)
     }
 
     private func slider(_ label: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double) -> some View {
@@ -292,6 +297,7 @@ private struct MemorySettings: View {
             }
         }
         .formStyle(.grouped)
+        .themedFormBackground(model.currentPalette.canvas)
     }
 }
 
@@ -318,6 +324,7 @@ private struct VaultSettings: View {
             }
         }
         .formStyle(.grouped)
+        .themedFormBackground(model.currentPalette.canvas)
     }
 
     private func chooseFolder(_ settings: AppSettings) {
@@ -405,6 +412,7 @@ private struct ToolsSettings: View {
             }
         }
         .formStyle(.grouped)
+        .themedFormBackground(model.currentPalette.canvas)
         .onAppear { model.calendarStore.refreshAuthorizationStatus() }
     }
 }
@@ -563,6 +571,7 @@ private struct VoiceSettings: View {
             }
         }
         .formStyle(.grouped)
+        .themedFormBackground(model.currentPalette.canvas)
     }
 
     private var speechLocales: [Locale] {
@@ -594,7 +603,7 @@ private struct PersonaSettings: View {
                         Image(systemName: "plus")
                             .font(.system(size: 14, weight: .semibold))
                             .frame(width: 30, height: 30)
-                            .background(KonishiPalette.surface, in: RoundedRectangle(cornerRadius: 6))
+                            .background(model.currentPalette.surface, in: RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
                     .help("Add persona")
@@ -612,7 +621,7 @@ private struct PersonaSettings: View {
                 .scrollContentBackground(.hidden)
 
                 Rectangle()
-                    .fill(KonishiPalette.border)
+                    .fill(model.currentPalette.border)
                     .frame(height: 1)
 
                 HStack {
@@ -631,10 +640,10 @@ private struct PersonaSettings: View {
                 .padding(.vertical, 10)
             }
             .frame(width: 210)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(model.currentPalette.sidebar)
 
             Rectangle()
-                .fill(KonishiPalette.border)
+                .fill(model.currentPalette.border)
                 .frame(width: 1)
 
             Group {
@@ -648,9 +657,9 @@ private struct PersonaSettings: View {
             }
             .padding(.top, 16)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(model.currentPalette.canvas)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(model.currentPalette.canvas)
         .onAppear { if selection == nil { selection = model.personaStore.personas.first?.id } }
     }
 
@@ -672,6 +681,16 @@ private struct AppearanceSettings: View {
     var body: some View {
         @Bindable var settings = model.settings
         Form {
+            Section("Theme") {
+                Picker("Palette", selection: $settings.theme) {
+                    ForEach(AppTheme.allCases) { theme in
+                        Text(theme.title).tag(theme)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text(settings.theme.description)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Text") {
                 VStack(alignment: .leading) {
                     LabeledContent("Font size", value: "\(Int(settings.fontSize)) pt")
@@ -688,6 +707,7 @@ private struct AppearanceSettings: View {
             }
         }
         .formStyle(.grouped)
+        .themedFormBackground(model.currentPalette.canvas)
     }
 }
 

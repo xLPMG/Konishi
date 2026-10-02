@@ -128,7 +128,7 @@ struct ConversationView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            model.currentPalette.canvas.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 Spacer(minLength: 24)

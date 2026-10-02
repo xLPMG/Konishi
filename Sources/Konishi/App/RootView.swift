@@ -26,7 +26,7 @@ struct RootView: View {
                 )
             }
         }
-        .background(KonishiPalette.canvas)
+        .background(model.currentPalette.canvas)
         .sheet(isPresented: $showFiles) {
             FilesView()
                 .environment(model)

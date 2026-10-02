@@ -16,6 +16,7 @@ struct RuntimeSettings: View {
             logSection
         }
         .formStyle(.grouped)
+        .themedFormBackground(model.currentPalette.canvas)
         .onAppear {
             if model.discoveredModels.isEmpty { model.scanLocalModels() }
             model.scanLocalEndpoints()

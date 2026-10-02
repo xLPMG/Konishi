@@ -54,8 +54,7 @@ struct PersonaEditorView: View {
             }
         }
         .formStyle(.columns)
-        .scrollContentBackground(.hidden)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .themedFormBackground(model.currentPalette.canvas)
         .onChange(of: draft) { model.personaStore.updatePersona(draft) }
     }
 }

@@ -153,6 +153,8 @@ final class AppModel {
 
     var currentAssistantName: String { personaStore.assistantName(for: currentPersona) }
 
+    var currentPalette: ThemePalette { settings.theme.palette }
+
     var currentAccent: Color {
         if let hex = currentPersona.accentColorHex { return Color(hex: hex) }
         return Color(hex: settings.accentColorHex)

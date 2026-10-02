@@ -42,7 +42,9 @@ struct MemoryView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
+            .background(model.currentPalette.canvas)
         }
+        .background(model.currentPalette.canvas.ignoresSafeArea())
         .frame(minWidth: 640, minHeight: 560)
         .sheet(item: $rawFile) { file in rawEditor(file) }
     }
@@ -139,6 +141,9 @@ struct MemoryView: View {
                 .tag(Selection.other)
             }
         }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(model.currentPalette.sidebar)
     }
 
     // MARK: - Category detail

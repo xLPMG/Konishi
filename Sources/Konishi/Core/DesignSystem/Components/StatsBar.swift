@@ -128,6 +128,7 @@ struct StatsBar: View {
 }
 
 private struct StatBubble<Content: View>: View {
+    @Environment(AppModel.self) private var model
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -136,7 +137,7 @@ private struct StatBubble<Content: View>: View {
             .padding(.horizontal, 9)
             .padding(.vertical, 6)
             .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().stroke(KonishiPalette.border.opacity(0.5), lineWidth: 1))
+            .overlay(Capsule().stroke(model.currentPalette.border.opacity(0.5), lineWidth: 1))
     }
 }
 
