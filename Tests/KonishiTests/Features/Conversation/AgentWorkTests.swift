@@ -109,6 +109,38 @@ struct AgentWorkTests {
         #expect(guardrail.consume("A long repeated line split") == nil)
         #expect(guardrail.consume(" across deltas\n") == "A long repeated line split across deltas")
     }
+
+    @Test("repeated multi-line reasoning blocks are caught across blank lines")
+    func repeatedBlocksAcrossBlankLines() {
+        var guardrail = RepeatedLineGuard()
+        let block = [
+            "The same first reasoning line repeats.",
+            "The same second reasoning line repeats.",
+            "The same third reasoning line repeats.",
+        ]
+
+        for repetition in 0..<3 {
+            for (lineIndex, line) in block.enumerated() {
+                let result = guardrail.consume(line + "\n")
+                if repetition == 2 && lineIndex == block.count - 1 {
+                    #expect(result != nil)
+                } else {
+                    #expect(result == nil)
+                }
+            }
+            if repetition < 2 {
+                #expect(guardrail.consume("\n") == nil)
+            }
+        }
+    }
+
+    @Test("different lines do not trigger the repeated-block guard")
+    func distinctLinesDoNotTriggerRepeatGuard() {
+        var guardrail = RepeatedLineGuard()
+        for index in 0..<12 {
+            #expect(guardrail.consume("A distinct reasoning line number \(index).\n") == nil)
+        }
+    }
 }
 
 @Suite("Agent work settings")

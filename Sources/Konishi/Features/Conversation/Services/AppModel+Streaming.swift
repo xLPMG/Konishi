@@ -167,6 +167,7 @@ extension AppModel {
             var didTraceFirstServerEvent = false
             var stripper = ThinkStripper()  // strip inline chain-of-thought some models emit as content
             var repeatedLineGuard = RepeatedLineGuard()
+            var repeatedReasoningGuard = RepeatedLineGuard()
             do {
                 streamLoop: for try await event in ChatService.stream(
                     config: config, messages: wire, tools: tools, toolChoice: nil)
@@ -197,6 +198,8 @@ extension AppModel {
                                 out.reasoning, conversationID: conversationID,
                                 assistantID: assistantID)
                         }
+                        let repeatedReasoning = !out.reasoning.isEmpty
+                            && repeatedReasoningGuard.consume(out.reasoning) != nil
                         if !out.visible.isEmpty {
                             deltaCount += 1
                             charCount += out.visible.count
@@ -209,8 +212,8 @@ extension AppModel {
                             interruption = reason
                             break streamLoop
                         }
-                        if !out.visible.isEmpty,
-                            repeatedLineGuard.consume(out.visible) != nil
+                        if repeatedReasoning || (!out.visible.isEmpty
+                            && repeatedLineGuard.consume(out.visible) != nil)
                         {
                             interruption = .repeatedOutput
                             break streamLoop
@@ -222,6 +225,10 @@ extension AppModel {
                             reasoning += r
                             self.appendReasoning(
                                 r, conversationID: conversationID, assistantID: assistantID)
+                            if repeatedReasoningGuard.consume(r) != nil {
+                                interruption = .repeatedOutput
+                                break streamLoop
+                            }
                             if let reason = self.observeAgentOutput(r) {
                                 interruption = reason
                                 break streamLoop
@@ -251,7 +258,14 @@ extension AppModel {
                     }
                 }
                 let tail = stripper.finish()
-                if !tail.reasoning.isEmpty { reasoning += tail.reasoning }
+                if !tail.reasoning.isEmpty {
+                    reasoning += tail.reasoning
+                    self.appendReasoning(
+                        tail.reasoning, conversationID: conversationID, assistantID: assistantID)
+                    if repeatedReasoningGuard.consume(tail.reasoning) != nil {
+                        interruption = .repeatedOutput
+                    }
+                }
                 if !tail.visible.isEmpty {
                     deltaCount += 1
                     charCount += tail.visible.count
@@ -263,6 +277,9 @@ extension AppModel {
                     }
                 }
                 if interruption == nil, repeatedLineGuard.finish() != nil {
+                    interruption = .repeatedOutput
+                }
+                if interruption == nil, repeatedReasoningGuard.finish() != nil {
                     interruption = .repeatedOutput
                 }
                 if interruption == nil, finishReason == "length" {
@@ -434,7 +451,7 @@ extension AppModel {
             if interruption == .repeatedOutput {
                 if recordAgentLoopRecovery() {
                     appendWorkNotice(
-                        "The previous generation was stopped after it repeated the same line five times. Change approach and continue without repeating it.",
+                        "The previous generation was stopped after repeating text. Change approach and continue without repeating it.",
                         conversationID: conversationID)
                     if let batch { routeToolBatch(batch) } else { startTurn(conversationID: conversationID) }
                 } else if workSession?.autopilot == true {

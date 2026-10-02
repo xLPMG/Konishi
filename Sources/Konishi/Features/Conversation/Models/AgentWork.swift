@@ -134,10 +134,12 @@ struct AgentWorkSession: Equatable, Sendable {
 
 struct RepeatedLineGuard {
     static let repetitionLimit = 5
+    private static let repeatedBlockLimit = 3
+    private static let maxBlockLength = 8
+    private static let maxTrackedLines = maxBlockLength * repeatedBlockLimit
 
     private var pending = ""
-    private var previousLine = ""
-    private var repetitions = 0
+    private var recentLines: [String] = []
 
     mutating func consume(_ text: String) -> String? {
         pending += text
@@ -157,17 +159,30 @@ struct RepeatedLineGuard {
 
     private mutating func record(_ line: String) -> String? {
         let normalized = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.count >= 12 else {
-            previousLine = ""
-            repetitions = 0
-            return nil
+        guard normalized.count >= 12 else { return nil }
+
+        recentLines.append(normalized)
+        if recentLines.count > Self.maxTrackedLines {
+            recentLines.removeFirst(recentLines.count - Self.maxTrackedLines)
         }
-        if normalized == previousLine {
-            repetitions += 1
-        } else {
-            previousLine = normalized
-            repetitions = 1
+
+        if recentLines.count >= Self.repetitionLimit,
+            Set(recentLines.suffix(Self.repetitionLimit)).count == 1
+        {
+            return normalized
         }
-        return repetitions >= Self.repetitionLimit ? normalized : nil
+
+        let maxBlockLength = min(Self.maxBlockLength, recentLines.count / Self.repeatedBlockLimit)
+        guard maxBlockLength >= 2 else { return nil }
+        for blockLength in 2...maxBlockLength {
+            let repeated = Array(recentLines.suffix(blockLength * Self.repeatedBlockLimit))
+            let block = Array(repeated.prefix(blockLength))
+            let isRepeated = (1..<Self.repeatedBlockLimit).allSatisfy { repetition in
+                let start = repetition * blockLength
+                return Array(repeated[start..<(start + blockLength)]) == block
+            }
+            if isRepeated { return block.joined(separator: "\n") }
+        }
+        return nil
     }
 }
