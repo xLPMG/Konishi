@@ -14,6 +14,13 @@ struct SettingsView: View {
                 Section("Personalization") { sectionRows(group: "Personalization") }
             }
             .listStyle(.sidebar)
+            .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+            .overlay(alignment: .trailing) {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor))
+                    .frame(width: 1)
+                    .ignoresSafeArea(edges: .vertical)
+            }
             .navigationSplitViewColumnWidth(min: 170, ideal: 195, max: 230)
         } detail: {
             selectedContent
