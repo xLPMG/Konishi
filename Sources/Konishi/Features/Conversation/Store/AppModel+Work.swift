@@ -2,6 +2,9 @@ import Foundation
 
 extension AppModel {
     func beginAgentWork(conversationID: UUID) {
+        autopilotPermissionDenials = 0
+        autopilotBlockedCapabilities = []
+        autopilotRunConversationID = autopilotArmed ? conversationID : nil
         workSession = AgentWorkSession(
             conversationID: conversationID,
             autopilot: autopilotArmed,
@@ -70,6 +73,15 @@ extension AppModel {
             "Autopilot stopped because it reached a safety limit (\(reason.title)). Do not continue autonomously; wait for the user's next message.",
             conversationID: session.conversationID)
         errorMessage = "Autopilot stopped: \(reason.title)"
+        finishAgentWork()
+    }
+
+    func stopAutopilotForPermissionDenials(capability: String) {
+        guard let session = workSession else { return }
+        appendWorkNotice(
+            "Autopilot stopped after \(autopilotPermissionDenials) denied calls. The latest blocked capability was \(capability). Do not resume autonomously; wait for the user's next message.",
+            conversationID: session.conversationID)
+        errorMessage = "Autopilot stopped after repeated permission denials (\(capability))."
         finishAgentWork()
     }
 

@@ -6,6 +6,7 @@ struct ConversationInspectorView: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var tasksExpanded = false
+    @State private var permissionsExpanded = true
     @State private var confirmingClearTasks = false
     @State private var filesExpanded = true
     @State private var previewExpanded = true
@@ -58,6 +59,8 @@ struct ConversationInspectorView: View {
                             .help("Remove all tasks")
                         }
                     }
+
+                    permissionsSection
 
                     DisclosureGroup(isExpanded: $filesExpanded) {
                         filesSection
@@ -120,6 +123,149 @@ struct ConversationInspectorView: View {
         }
         .onChange(of: model.currentTrace.last?.id) { _, _ in
             if model.currentTrace.last?.kind == .result { reload() }
+        }
+    }
+
+    @ViewBuilder
+    private var permissionsSection: some View {
+        if let id = conversationID {
+            let context = model.toolPermissionContext(conversationID: id, surface: .interactive)
+            DisclosureGroup(isExpanded: $permissionsExpanded) {
+                VStack(alignment: .leading, spacing: 12) {
+                    capabilitySection(context: context, conversationID: id)
+                    rememberedLocationsSection
+                    blockedRunSection
+                }
+                .padding(.top, 6)
+            } label: {
+                Label("Permissions", systemImage: "lock.shield")
+            }
+        }
+    }
+
+    private var capabilityGroups: [(String, [Capability])] {
+        let grouped = Dictionary(grouping: Capability.allCases, by: \.groupLabel)
+        let order = [
+            "Workspace", "External", "Memory", "Conversation history", "Vault",
+            "Personal data", "Language deck", "Web", "Code", "Interaction",
+        ]
+        return order.compactMap { name in grouped[name].map { (name, $0) } }
+    }
+
+    private func capabilitySection(
+        context: ToolPermissionContext, conversationID: UUID
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(capabilityGroups.enumerated()), id: \.offset) { item in
+                let group = item.element
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(group.0)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(group.1, id: \.self) { capability in
+                        let result = effectiveEvaluation(for: capability, context: context)
+                        let override = model.selectedConversation?.permissionRules?.first {
+                            $0.capability == capability && $0.scope == .any
+                        }?.decision
+                        CapabilityPermissionRow(
+                            capability: capability,
+                            decision: result.verdict,
+                            source: result.source.label(for: context.mode),
+                            conversationOverride: override,
+                            onChange: { decision in
+                                model.setConversationPermissionOverride(
+                                    capability, decision: decision, conversationID: conversationID)
+                            },
+                            onReset: {
+                                model.setConversationPermissionOverride(
+                                    capability, decision: nil, conversationID: conversationID)
+                            })
+                    }
+                }
+            }
+        }
+    }
+
+    private func effectiveEvaluation(
+        for capability: Capability, context: ToolPermissionContext
+    ) -> ToolPermissionEvaluation {
+        let path: String?
+        switch capability {
+        case .workspaceRead, .workspaceWrite:
+            path = context.workspace.appendingPathComponent(
+                "__permission_inspector__/sample.txt").path
+        case .externalRead, .externalWrite:
+            path = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/__permission_inspector__/sample.txt").path
+        default:
+            path = nil
+        }
+        return ToolPermissions.evaluate([PermissionEffect(capability, path: path)], context: context)
+    }
+
+    private var rememberedPathRules: [(PermissionRule, Bool)] {
+        let conversationRules = (model.selectedConversation?.permissionRules ?? []).filter {
+            if case .pathPrefix = $0.scope { true } else { false }
+        }
+        let modeRules = model.settings.permissionPolicy(for: model.mode).rules.filter {
+            if case .pathPrefix = $0.scope { true } else { false }
+        }
+        return conversationRules.map { ($0, true) } + modeRules.map { ($0, false) }
+    }
+
+    private var rememberedLocationsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Remembered locations").font(.caption.weight(.semibold))
+            if rememberedPathRules.isEmpty {
+                Text("None")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(rememberedPathRules.indices, id: \.self) { index in
+                    let (rule, inConversation) = rememberedPathRules[index]
+                    if case let .pathPrefix(path) = rule.scope {
+                        HStack(spacing: 6) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(inConversation ? "This conversation" : "\(model.mode.label) mode") · \(rule.capability.label)")
+                                    .font(.caption2.weight(.medium))
+                                Text("\(rule.decision.rawValue.capitalized) · \(path)")
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                    .textSelection(.enabled)
+                            }
+                            Spacer(minLength: 4)
+                            Button(role: .destructive) {
+                                model.removePermissionRule(
+                                    rule.id, inConversation: inConversation, mode: model.mode)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove remembered location")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var blockedRunSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Blocked this run").font(.caption.weight(.semibold))
+            if model.autopilotRunConversationID != conversationID
+                || model.autopilotBlockedCapabilities.isEmpty
+            {
+                Text("None")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(model.autopilotBlockedCapabilities.enumerated()), id: \.offset) { _, capability in
+                    Label(capability, systemImage: "hand.raised")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+            }
         }
     }
 
@@ -352,5 +498,49 @@ struct ConversationInspectorView: View {
         case .compress: .brown
         case .memory: .pink
         }
+    }
+}
+
+private struct CapabilityPermissionRow: View {
+    let capability: Capability
+    let decision: PermissionDecision
+    let source: String
+    let conversationOverride: PermissionDecision?
+    let onChange: @MainActor @Sendable (PermissionDecision) -> Void
+    let onReset: @MainActor @Sendable () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(capability.label)
+                    .font(.caption)
+                    .lineLimit(1)
+                Text("\(decision.rawValue.capitalized) · \(source)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            Picker(capability.label, selection: Binding(
+                get: { conversationOverride ?? decision },
+                set: onChange
+            )) {
+                Text("Allow").tag(PermissionDecision.allow)
+                Text("Ask").tag(PermissionDecision.ask)
+                Text("Deny").tag(PermissionDecision.deny)
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .disabled(capability == .userInput)
+
+            Button(action: onReset) {
+                Image(systemName: "arrow.counterclockwise")
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .help("Reset this conversation override")
+            .disabled(conversationOverride == nil || capability == .userInput)
+        }
+        .padding(.vertical, 3)
     }
 }

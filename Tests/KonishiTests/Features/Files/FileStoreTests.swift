@@ -18,7 +18,32 @@ final class FileStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: workspace) }
 
         XCTAssertThrowsError(
-            try FileStore().resolveWorkspacePath("../outside.txt", in: workspace))
+            try PathScope.resolve("../outside.txt", in: workspace))
+    }
+
+    func testWriteSupportsAbsoluteExternalPaths() throws {
+        let workspace = try makeWorkspace()
+        let external = try makeWorkspace()
+        defer {
+            try? FileManager.default.removeItem(at: workspace)
+            try? FileManager.default.removeItem(at: external)
+        }
+        let destination = external.appendingPathComponent("notes/output.md")
+
+        let written = try FileStore().write(
+            path: destination.path, content: "external", in: workspace)
+
+        XCTAssertEqual(written.path, destination.path)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "external")
+    }
+
+    func testWriteRejectsAPathDifferentFromTheEvaluatedPath() throws {
+        let workspace = try makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        XCTAssertThrowsError(try FileStore().write(
+            path: "report.md", content: "no", in: workspace,
+            expectedResolvedPath: "/another/location/report.md"))
     }
 
     func testResolveRejectsSymbolicLinkEscape() throws {
@@ -32,7 +57,7 @@ final class FileStoreTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
 
         XCTAssertThrowsError(
-            try FileStore().resolveWorkspacePath("outside/file.txt", in: workspace))
+            try PathScope.resolve("outside/file.txt", in: workspace))
     }
 
     private func makeWorkspace() throws -> URL {

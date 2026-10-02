@@ -31,10 +31,10 @@ extension AppModel {
               let index = conversationIndex(conversationID),
               let recovered = Self.recoverableToolCalls(in: conversations[index].messages)
         else { return }
-        pendingApproval = PendingToolBatch(
+        routeToolBatch(PendingToolBatch(
             conversationID: conversationID,
             calls: recovered.calls,
-            continueAfter: recovered.continueAfter)
+            continueAfter: recovered.continueAfter))
     }
 
     /// Load a conversation's messages into RAM if absent, and cap the working set.

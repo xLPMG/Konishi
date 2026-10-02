@@ -1,12 +1,84 @@
 import Foundation
 
 extension AppModel {
-    func toolCallIsAutoApproved(_ call: ToolCall, mode: AppMode) -> Bool {
-        guard let name = call.function.name else { return false }
-        guard Tools.spec(name)?.requiresApproval != true else { return false }
-        if settings.autoApproveTools(for: mode).contains(name) { return true }
-        guard name == "run_shell", let args: ToolArguments.Shell = Self.decodeToolArgs(call) else { return false }
-        return settings.shellCommandIsAutoApproved(args.command, for: mode)
+    func setConversationPermissionOverride(
+        _ capability: Capability, decision: PermissionDecision?, conversationID: UUID
+    ) {
+        guard let index = conversationIndex(conversationID) else { return }
+        var rules = conversations[index].permissionRules ?? []
+        rules.removeAll { $0.capability == capability && $0.scope == .any }
+        if let decision {
+            rules.append(PermissionRule(capability: capability, decision: decision))
+        }
+        conversations[index].permissionRules = rules.isEmpty ? nil : rules
+        touch(index)
+    }
+
+    func allowCapabilityForConversation(_ capability: Capability, conversationID: UUID) {
+        setConversationPermissionOverride(capability, decision: .allow, conversationID: conversationID)
+    }
+
+    func removePermissionRule(_ id: UUID, inConversation: Bool, mode: AppMode) {
+        if inConversation {
+            guard let index = selectedConversationID.flatMap(conversationIndex) else { return }
+            let oldRules = conversations[index].permissionRules ?? []
+            let rules = oldRules.filter { $0.id != id }
+            conversations[index].permissionRules = rules.isEmpty ? nil : rules
+            touch(index)
+        } else {
+            var policy = settings.permissionPolicy(for: mode)
+            policy.rules.removeAll { $0.id == id }
+            settings.setPermissionPolicy(policy, for: mode)
+        }
+    }
+
+    func canRememberPendingTools() -> Bool {
+        guard let batch = pendingApproval else { return false }
+        let context = toolPermissionContext(
+            conversationID: batch.conversationID, surface: .interactive,
+            mode: batch.permissionMode)
+        let effects = batch.calls.flatMap { call in
+            batch.permissionEvaluations[call.id]?.effects
+                .filter { $0.decision == .ask }.map(\.effect) ?? []
+        }
+        return ToolPermissions.allowRules(
+            for: effects, workspace: context.workspace, scopeChoice: .containingFolder) != nil
+    }
+
+    func rememberPendingTools(inConversation: Bool, anywhere: Bool) {
+        guard let batch = pendingApproval, canRememberPendingTools() else { return }
+        let permissionMode = batch.permissionMode ?? mode
+        let context = toolPermissionContext(
+            conversationID: batch.conversationID, surface: .interactive, mode: permissionMode)
+        let effects = batch.calls.flatMap { call in
+            batch.permissionEvaluations[call.id]?.effects
+                .filter { $0.decision == .ask }.map(\.effect) ?? []
+        }
+        guard let additions = ToolPermissions.allowRules(
+            for: effects, workspace: context.workspace,
+            scopeChoice: anywhere ? .anywhere : .containingFolder)
+        else { return }
+
+        if inConversation {
+            guard let index = conversationIndex(batch.conversationID) else { return }
+            var rules = conversations[index].permissionRules ?? []
+            for rule in additions {
+                rules.removeAll { $0.capability == rule.capability && $0.scope == rule.scope }
+                rules.append(rule)
+            }
+            conversations[index].permissionRules = rules
+            touch(index)
+        } else {
+            var policy = settings.permissionPolicy(for: permissionMode)
+            for rule in additions {
+                policy.rules.removeAll { $0.capability == rule.capability && $0.scope == rule.scope }
+                policy.rules.append(rule)
+            }
+            settings.setPermissionPolicy(policy, for: permissionMode)
+        }
+
+        pendingApproval = nil
+        executeAndContinue(batch: batch, approved: true)
     }
 
     func approveTools() {
@@ -22,31 +94,53 @@ extension AppModel {
     }
 
     func routeToolBatch(_ batch: PendingToolBatch) {
+        let surface: PermissionSurface = workSession?.autopilot == true ? .unattended : .interactive
+        let context = toolPermissionContext(conversationID: batch.conversationID, surface: surface)
+        let visibleNames = Set(ToolPermissions.visibleTools(context: context).map(\.name))
+        var evaluatedBatch = batch
+        evaluatedBatch.permissionMode = mode
+        evaluatedBatch.permissionEvaluations = Dictionary(uniqueKeysWithValues: batch.calls.map { call in
+            let name = call.function.name ?? ""
+            let evaluation: ToolPermissionEvaluation
+            if Tools.spec(name) != nil, !visibleNames.contains(name) {
+                evaluation = ToolPermissionEvaluation(
+                    effects: [], verdict: .deny, source: .default,
+                    explanation: "Tool `\(name)` is disabled or unavailable in this conversation."
+                )
+            } else {
+                let arguments = (try? JSONDecoder().decode(
+                    [String: JSONValue].self, from: Data(call.function.arguments.utf8))) ?? [:]
+                evaluation = ToolPermissions.evaluate(
+                    toolName: name, arguments: arguments, context: context)
+            }
+            let effectText = evaluation.effects.isEmpty ? "none" : evaluation.effects.map {
+                let location = $0.effect.path.map { " · \($0)" } ?? ""
+                return "\($0.effect.capability.rawValue)\(location)=\($0.decision.rawValue)"
+            }.joined(separator: ", ")
+            traceStore.trace(
+                conversationID: batch.conversationID, kind: .tool,
+                text: "\(name)(\(call.function.arguments)) | effects: \(effectText) | verdict: \(evaluation.verdict.rawValue) | source: \(evaluation.source.label(for: mode))",
+                saveTraces: settings.saveTraces)
+            return (call.id, evaluation)
+        })
+
         if let session = workSession,
-            let reason = session.pauseBeforeToolCalls(batch.calls.count)
+            let reason = session.pauseBeforeToolCalls(evaluatedBatch.calls.count)
         {
-            pauseAgentWork(reason: reason, batch: batch)
+            pauseAgentWork(reason: reason, batch: evaluatedBatch)
             return
         }
-        if workSession?.autopilot == true {
-            executeAndContinue(batch: batch, approved: true, autopilot: true)
-            return
-        }
-        let names = batch.calls.compactMap { $0.function.name }
-        if !names.isEmpty && batch.calls.allSatisfy({ toolCallIsAutoApproved($0, mode: mode) }) {
-            activity = "Calling \(names.joined(separator: ", "))…"
-            executeAndContinue(batch: batch, approved: true)
-        } else {
+        if evaluatedBatch.permissionEvaluations.values.contains(where: { $0.verdict == .ask }) {
             activity = nil
             isStreaming = false
             streamingConversationID = nil
-            pendingApproval = batch
+            pendingApproval = evaluatedBatch
+        } else {
+            executeAndContinue(batch: evaluatedBatch, approved: true)
         }
     }
 
-    func executeAndContinue(
-        batch: PendingToolBatch, approved: Bool, autopilot: Bool = false
-    ) {
+    func executeAndContinue(batch: PendingToolBatch, approved: Bool) {
         isStreaming = true
         streamingConversationID = batch.conversationID   // protect across the tool loop
         toolExecutionTask?.cancel()
@@ -54,6 +148,7 @@ extension AppModel {
             guard let self else { return }
             var forceContinuation = false
             var stopForToolLoop = false
+            let autopilot = self.workSession?.autopilot == true
             for (callIndex, call) in batch.calls.enumerated() {
                 guard !Task.isCancelled else {
                     self.closePendingToolCalls(
@@ -67,22 +162,27 @@ extension AppModel {
                 let repeats = self.loopSignatures.reversed().prefix(while: { $0 == sig }).count
                 let toolStart = Date()
                 let result: String
-                if !approved {
-                    result = "User denied execution of \(name)."
-                } else if autopilot && !self.toolCallIsAutoApproved(call, mode: self.mode) {
-                    result = "Unavailable in Autopilot: `\(name)` is not auto-approved. Continue with available tools or tell the user what approval is needed."
-                    forceContinuation = true
-                } else if repeats >= 2 {
-                    // Third identical call in a row — break the loop instead of running it again.
+                let evaluation = batch.permissionEvaluations[call.id]
+                if repeats >= 2 {
                     result = "You have called `\(name)` with identical arguments \(repeats + 1) times in a row without making progress. Stop repeating it: try different arguments, a different tool, or give the user your answer based on what you already have."
                     forceContinuation = true
                     stopForToolLoop = AgentToolLoopPolicy.shouldStopAutopilotBatch(
                         repeats: repeats, autopilot: autopilot)
+                } else if let evaluation, evaluation.verdict == .deny {
+                    result = self.permissionDenialMessage(evaluation, toolName: name)
+                    forceContinuation = true
+                } else if let evaluation, evaluation.verdict == .ask, !approved {
+                    result = "The user denied permission for `\(name)`. Do not retry this call."
+                    forceContinuation = true
+                } else if evaluation == nil {
+                    result = "Denied: no permission evaluation was stored for `\(name)`. Do not retry this call."
+                    forceContinuation = true
                 } else if Self.readOnlyTools.contains(name), self.loopSignatures.contains(sig) {
                     result = "[identical `\(name)` call already ran this turn; the result is unchanged — reuse the earlier output instead of calling it again]"
                     forceContinuation = true
                 } else {
-                    result = await self.executeTool(call, conversationID: batch.conversationID)
+                    result = await self.executeTool(
+                        call, conversationID: batch.conversationID, permissionEvaluation: evaluation)
                 }
                 self.loopSignatures.append(sig)
                 self.recordAgentToolCalls(1)
@@ -99,6 +199,20 @@ extension AppModel {
                     }
                 }
                 self.activity = "Received result."
+                if autopilot, evaluation?.verdict == .deny {
+                    let capability = evaluation?.effects.first?.effect.capability.label ?? name
+                    self.autopilotPermissionDenials += 1
+                    self.autopilotBlockedCapabilities.append(capability)
+                    if AgentToolLoopPolicy.shouldStopForPermissionDenials(
+                        count: self.autopilotPermissionDenials, autopilot: true)
+                    {
+                        self.closePendingToolCalls(
+                            batch, message: "Not run: Autopilot stopped after repeated permission denials.",
+                            calls: AgentToolLoopPolicy.remainingCalls(after: callIndex, in: batch.calls))
+                        self.stopAutopilotForPermissionDenials(capability: capability)
+                        return
+                    }
+                }
                 if stopForToolLoop {
                     self.closePendingToolCalls(
                         batch,
@@ -182,17 +296,42 @@ extension AppModel {
         touch(i)
     }
 
-    /// A tool is runnable when tool calling is on and the tool is enabled.
-    private func toolEnabled(_ name: String) -> Bool {
-        guard Tools.spec(name) != nil else { return false }
-        // Learn mode needs its tools even when the global master switch is off.
-        if mode == .language { return settings.enabledTools(for: .language).contains(name) }
-        guard settings.toolsEnabled else { return false }
-        return settings.enabledTools(for: mode).contains(name)
+    func toolPermissionContext(
+        conversationID: UUID, surface: PermissionSurface, mode permissionMode: AppMode? = nil
+    ) -> ToolPermissionContext {
+        let permissionMode = permissionMode ?? mode
+        let conversation = conversationIndex(conversationID).map { conversations[$0] }
+        let persona = personaStore.persona(for: conversation)
+        let shellAllowlist = Set(settings.shellAllowlist(for: permissionMode)
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty })
+        return ToolPermissionContext(
+            mode: permissionMode,
+            workspace: Paths.conversationFiles(conversationID),
+            toolsEnabled: settings.toolsEnabled(for: permissionMode),
+            enabledTools: settings.enabledTools(for: permissionMode),
+            vaultAccessEnabled: persona.vaultAccessEnabled,
+            shellAllowlist: shellAllowlist,
+            surface: surface,
+            modePolicy: settings.permissionPolicy(for: permissionMode),
+            conversationRules: conversation?.permissionRules ?? [])
     }
 
-    private func executeTool(_ call: ToolCall, conversationID: UUID) async -> String {
-        let persona = personaStore.persona(for: selectedConversation)
+    private func permissionDenialMessage(
+        _ evaluation: ToolPermissionEvaluation, toolName: String
+    ) -> String {
+        if let explanation = evaluation.explanation { return explanation }
+        let capabilities = evaluation.effects.map { $0.effect.capability.label }
+        let affected = capabilities.isEmpty ? "the requested action" : capabilities.joined(separator: ", ")
+        return "Denied: `\(toolName)` requires \(affected), which is not allowed. Do not retry this call."
+    }
+
+    private func executeTool(
+        _ call: ToolCall, conversationID: UUID, permissionEvaluation: ToolPermissionEvaluation?
+    ) async -> String {
+        let conversation = conversationIndex(conversationID).map { conversations[$0] }
+        let persona = personaStore.persona(for: conversation)
         switch call.function.name {
         case "memory_list":
             let scopes = [MemoryStore.globalScope, persona.memoryScope]
@@ -228,79 +367,68 @@ extension AppModel {
             }
             return "Appended to \(scope)/\(args.name)."
         case "conversation_search":
-            guard toolEnabled("conversation_search"),
-                let args: ToolArguments.ConversationSearch = Self.decodeToolArgs(call),
+            guard let args: ToolArguments.ConversationSearch = Self.decodeToolArgs(call),
                 !args.query.isEmpty
-            else { return "Error: conversation_search is disabled or missing query" }
+            else { return "Error: conversation_search requires a query" }
             return await conversationSearchResult(
                 query: args.query, limit: args.limit, current: conversationID)
         case "conversation_list":
-            guard toolEnabled("conversation_list") else { return "Error: tool disabled" }
             let args: ToolArguments.ConversationList? = Self.decodeToolArgs(call)
             return conversationListResult(days: args?.days, limit: args?.limit, current: conversationID)
         case "conversation_read":
-            guard toolEnabled("conversation_read"),
-                let args: ToolArguments.ConversationRead = Self.decodeToolArgs(call)
-            else { return "Error: conversation_read is disabled or missing id" }
+            guard let args: ToolArguments.ConversationRead = Self.decodeToolArgs(call)
+            else { return "Error: conversation_read requires an id" }
             return conversationReadResult(id: args.id)
         case "file_read":
-            guard toolEnabled("file_read"), let args: ToolArguments.FileRead = Self.decodeToolArgs(call) else {
-                return "Error: file_read is disabled or missing path"
+            guard let args: ToolArguments.FileRead = Self.decodeToolArgs(call) else {
+                return "Error: file_read requires a path"
             }
-            let resolved = (args.path as NSString).expandingTildeInPath
-            let url: URL
-            if (resolved as NSString).isAbsolutePath {
-                url = URL(fileURLWithPath: resolved)
-            } else {
-                do {
-                    url = try fileStore.resolveWorkspacePath(
-                        resolved, in: Paths.conversationFiles(conversationID))
-                } catch {
-                    return "Error: \(error.localizedDescription)"
-                }
+            do {
+                let content = try fileStore.read(
+                    path: args.path, in: Paths.conversationFiles(conversationID),
+                    expectedResolvedPath: permissionEvaluation?.effects.first?.effect.path)
+                return Self.readSlice(content, offset: args.offset, limit: args.limit)
+            } catch {
+                return "Error: \(error.localizedDescription)"
             }
-            guard let s = try? String(contentsOf: url, encoding: .utf8) else {
-                return "Error: could not read \(args.path)"
-            }
-            return Self.readSlice(s, offset: args.offset, limit: args.limit)
         case "file_write":
-            guard toolEnabled("file_write"),
-                  let args: ToolArguments.FileWrite = Self.decodeToolArgs(call) else {
-                return "Error: file_write is disabled or arguments are invalid"
+                        guard let args: ToolArguments.FileWrite = Self.decodeToolArgs(call) else {
+                                return "Error: file_write requires a path and content"
             }
             do {
                 let url = try fileStore.write(
                     path: args.path, content: args.content,
-                    in: Paths.conversationFiles(conversationID))
-                return "Saved workspace file: \(url.path)"
+                    in: Paths.conversationFiles(conversationID),
+                    expectedResolvedPath: permissionEvaluation?.effects.first?.effect.path)
+                return "Saved file: \(url.path)"
             } catch {
                 return "Error: \(error.localizedDescription)"
             }
         case "web_fetch":
-            guard toolEnabled("web_fetch"), let args: ToolArguments.URLValue = Self.decodeToolArgs(call),
+                        guard let args: ToolArguments.URLValue = Self.decodeToolArgs(call),
                   let url = URL(string: args.url) else {
-                return "Error: web_fetch is disabled or bad URL"
+                                return "Error: web_fetch requires a valid URL"
             }
             addTurnSource(title: url.host ?? args.url, url: args.url)
             return await WebResearch.fetch(url)
         case "web_search":
-            guard toolEnabled("web_search"), let args: ToolArguments.Query = Self.decodeToolArgs(call), !args.query.isEmpty else {
-                return "Error: web_search is disabled or missing query"
+            guard let args: ToolArguments.Query = Self.decodeToolArgs(call), !args.query.isEmpty else {
+                return "Error: web_search requires a query"
             }
             let result = await WebResearch.search(args.query)
             for source in result.sources { addTurnSource(title: source.title, url: source.url) }
             return result.text
         case "web_research":
-            guard toolEnabled("web_research"), let args: ToolArguments.Research = Self.decodeToolArgs(call),
+                        guard let args: ToolArguments.Research = Self.decodeToolArgs(call),
                   !args.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return "Error: web_research is disabled or missing query"
+                                return "Error: web_research requires a query"
             }
             let result = await WebResearch.research(args.query, maxSources: args.maxSources ?? 3)
             for source in result.sources { addTurnSource(title: source.title, url: source.url) }
             return result.text
         case "calculate":
-            guard toolEnabled("calculate"), let args: ToolArguments.Calculation = Self.decodeToolArgs(call) else {
-                return "Error: calculate is disabled or missing expression"
+            guard let args: ToolArguments.Calculation = Self.decodeToolArgs(call) else {
+                return "Error: calculate requires an expression"
             }
             do {
                 return "\(args.expression) = \(Calculator.format(try Calculator.evaluate(args.expression)))"
@@ -308,18 +436,16 @@ extension AppModel {
                 return "Error: \(error.localizedDescription)"
             }
         case "calendar_events":
-            guard toolEnabled("calendar_events"),
-                let args: ToolArguments.CalendarEvents = Self.decodeToolArgs(call)
-            else { return "Error: calendar_events is disabled or arguments are invalid" }
+            guard let args: ToolArguments.CalendarEvents = Self.decodeToolArgs(call)
+            else { return "Error: calendar_events arguments are invalid" }
             do {
                 return try calendarStore.listEvents(days: args.days, calendarName: args.calendar)
             } catch {
                 return "Error: \(error.localizedDescription)"
             }
         case "calendar_create_event":
-            guard toolEnabled("calendar_create_event"),
-                let args: ToolArguments.CalendarCreateEvent = Self.decodeToolArgs(call)
-            else { return "Error: calendar_create_event is disabled or arguments are invalid" }
+            guard let args: ToolArguments.CalendarCreateEvent = Self.decodeToolArgs(call)
+            else { return "Error: calendar_create_event arguments are invalid" }
             do {
                 return try calendarStore.createEvent(
                     title: args.title, startDate: args.startDate, endDate: args.endDate,
@@ -328,9 +454,8 @@ extension AppModel {
                 return "Error: \(error.localizedDescription)"
             }
         case "calendar_update_event":
-            guard toolEnabled("calendar_update_event"),
-                let args: ToolArguments.CalendarUpdateEvent = Self.decodeToolArgs(call)
-            else { return "Error: calendar_update_event is disabled or arguments are invalid" }
+            guard let args: ToolArguments.CalendarUpdateEvent = Self.decodeToolArgs(call)
+            else { return "Error: calendar_update_event arguments are invalid" }
             do {
                 return try calendarStore.updateEvent(
                     identifier: args.eventID, title: args.title, startDate: args.startDate,
@@ -339,7 +464,6 @@ extension AppModel {
                 return "Error: \(error.localizedDescription)"
             }
         case "reminders_list":
-            guard toolEnabled("reminders_list") else { return "Error: reminders_list is disabled" }
             let args: ToolArguments.RemindersList? = Self.decodeToolArgs(call)
             do {
                 return try await calendarStore.listReminders(
@@ -349,9 +473,8 @@ extension AppModel {
                 return "Error: \(error.localizedDescription)"
             }
         case "reminder_create":
-            guard toolEnabled("reminder_create"),
-                let args: ToolArguments.ReminderCreate = Self.decodeToolArgs(call)
-            else { return "Error: reminder_create is disabled or arguments are invalid" }
+            guard let args: ToolArguments.ReminderCreate = Self.decodeToolArgs(call)
+            else { return "Error: reminder_create arguments are invalid" }
             do {
                 return try calendarStore.createReminder(
                     title: args.title, dueDate: args.dueDate, notes: args.notes, priority: args.priority)
@@ -359,9 +482,8 @@ extension AppModel {
                 return "Error: \(error.localizedDescription)"
             }
         case "reminder_update":
-            guard toolEnabled("reminder_update"),
-                let args: ToolArguments.ReminderUpdate = Self.decodeToolArgs(call)
-            else { return "Error: reminder_update is disabled or arguments are invalid" }
+            guard let args: ToolArguments.ReminderUpdate = Self.decodeToolArgs(call)
+            else { return "Error: reminder_update arguments are invalid" }
             do {
                 return try calendarStore.updateReminder(
                     identifier: args.reminderID, title: args.title, dueDate: args.dueDate,
@@ -371,9 +493,6 @@ extension AppModel {
                 return "Error: \(error.localizedDescription)"
             }
         case "python_exec":
-            guard toolEnabled("python_exec") else {
-                return "Error: python_exec is disabled (enable it in Settings › Tools)"
-            }
             guard let args: ToolArguments.Python = Self.decodeToolArgs(call),
                   !args.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return "Error: missing code"
@@ -383,9 +502,6 @@ extension AppModel {
             let body = out.isEmpty ? "(no output — remember to print() results)" : String(out.prefix(12_000))
             return "exit \(status)\n\(body)"
         case "run_shell":
-            guard toolEnabled("run_shell") else {
-                return "Error: run_shell is disabled (enable it in Settings › Tools)"
-            }
             guard let args: ToolArguments.Shell = Self.decodeToolArgs(call),
                   !args.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 return "Error: missing command"
@@ -405,7 +521,6 @@ extension AppModel {
             )
             return "exit \(status)\n\(output.isEmpty ? "(no output)" : output)"
         case "add_vocab", "add_grammar":
-            guard toolEnabled(call.function.name ?? "") else { return "Error: tool disabled" }
             guard let profile = activeLanguageProfile else { return "Error: no active language profile" }
             let isGrammar = call.function.name == "add_grammar"
             let kind: LearnKind = isGrammar ? .grammar : .vocab
@@ -446,25 +561,21 @@ extension AppModel {
             addDeckCard(item)
             return "Added \(item.kind.rawValue): \(term)\(translation.isEmpty ? "" : " — \(translation)")"
         case "search_deck":
-            guard toolEnabled("search_deck") else { return "Error: tool disabled" }
             guard let profile = activeLanguageProfile else { return "Error: no active language profile" }
             guard let args: ToolArguments.Query = Self.decodeToolArgs(call) else { return "Error: missing query" }
             let results = languageStore.search(profileID: profile.id, query: args.query)
             if results.isEmpty { return "No matching cards." }
             return results.map { "\($0.id.uuidString) | \($0.term) — \($0.translation) [box \($0.box)]" }.joined(separator: "\n")
         case "get_due_items":
-            guard toolEnabled("get_due_items") else { return "Error: tool disabled" }
             guard let profile = activeLanguageProfile else { return "Error: no active language profile" }
             let args: ToolArguments.DueItems? = Self.decodeToolArgs(call)
             let due = languageStore.dueItems(profileID: profile.id, limit: args?.limit ?? 10)
             if due.isEmpty { return "Nothing is due for review." }
             return due.map { "\($0.id.uuidString) | \($0.kind.rawValue): \($0.term) — \($0.translation)" }.joined(separator: "\n")
         case "record_review":
-            guard toolEnabled("record_review") else { return "Error: tool disabled" }
             guard let args: ToolArguments.Review = Self.decodeToolArgs(call) else { return "Error: missing/invalid id or correct" }
             return recordDeckReview(itemID: args.id, correct: args.correct)
         case "ask_multiple_choice":
-            guard toolEnabled("ask_multiple_choice") else { return "Error: tool disabled" }
             guard let args: ToolArguments.MultipleChoice = Self.decodeToolArgs(call) else { return "Error: invalid questions" }
             let questions = Self.parseMCQuestions(args.questions)
             guard !questions.isEmpty else { return "Error: no valid questions provided" }
@@ -474,7 +585,7 @@ extension AppModel {
                 self.pendingInteraction = PendingInteraction(conversationID: conversationID, questions: questions)
             }
         case "vault_search":
-            guard toolEnabled("vault_search"), persona.vaultAccessEnabled else {
+            guard persona.vaultAccessEnabled else {
                 return "Error: research vault access is off for this persona"
             }
             guard VaultStore.vaultURL(settings.vaultPath) != nil else {
@@ -491,7 +602,7 @@ extension AppModel {
             traceRetrievalFallback(result, source: "Vault search", conversationID: conversationID)
             return result.text.isEmpty ? "No matching notes." : result.text
         case "vault_read":
-            guard toolEnabled("vault_read"), persona.vaultAccessEnabled else {
+            guard persona.vaultAccessEnabled else {
                 return "Error: research vault access is off for this persona"
             }
             guard VaultStore.vaultURL(settings.vaultPath) != nil else {
@@ -505,7 +616,7 @@ extension AppModel {
             }
             return text.count > 16_000 ? String(text.prefix(16_000)) + "\n… (truncated)" : text
         case "vault_list":
-            guard toolEnabled("vault_list"), persona.vaultAccessEnabled else {
+            guard persona.vaultAccessEnabled else {
                 return "Error: research vault access is off for this persona"
             }
             guard VaultStore.vaultURL(settings.vaultPath) != nil else {
@@ -518,7 +629,7 @@ extension AppModel {
             return capped.joined(separator: "\n") + (notes.count > 300 ? "\n… \(notes.count - 300) more" : "")
         case "vault_write", "vault_append":
             let isAppend = call.function.name == "vault_append"
-            guard toolEnabled(call.function.name ?? ""), persona.vaultAccessEnabled else {
+            guard persona.vaultAccessEnabled else {
                 return "Error: research vault access is off for this persona"
             }
             guard VaultStore.vaultURL(settings.vaultPath) != nil else {

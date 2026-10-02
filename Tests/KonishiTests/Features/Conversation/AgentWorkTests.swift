@@ -38,6 +38,15 @@ struct AgentWorkTests {
         #expect(AgentToolLoopPolicy.remainingCalls(after: 0, in: calls).map(\.id) == ["tool-1", "tool-2"])
     }
 
+    @Test("Autopilot stops after the permission-denial ceiling")
+    func permissionDenialsStopAutopilot() {
+        #expect(!AgentToolLoopPolicy.shouldStopForPermissionDenials(count: 4, autopilot: true))
+        #expect(AgentToolLoopPolicy.shouldStopForPermissionDenials(
+            count: AgentToolLoopPolicy.permissionDenialCeiling, autopilot: true))
+        #expect(!AgentToolLoopPolicy.shouldStopForPermissionDenials(
+            count: AgentToolLoopPolicy.permissionDenialCeiling, autopilot: false))
+    }
+
     @Test("soft limits pause at their thresholds and Continue extends them")
     func softLimitsExtend() {
         var session = AgentWorkSession(

@@ -30,7 +30,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
 }
 
 /// A single tool the assistant can call. `Tools.all` is the single source of truth for
-/// which tools exist, how they're grouped, and their default enable / auto-approve state.
+/// which tools exist, how they're grouped, and their default visibility.
 struct ToolSpec: Identifiable, Sendable {
     let name: String
     /// Short human label shown in the settings UI.
@@ -39,26 +39,18 @@ struct ToolSpec: Identifiable, Sendable {
     let description: String
     let parameters: JSONValue
     let group: ToolGroup
-    /// Writes to disk or executes commands — flagged in the UI, off auto-approve by default.
-    let mutating: Bool
     let defaultEnabled: Bool
-    let defaultAutoApprove: Bool
-    let requiresApproval: Bool
 
     init(
         name: String, summary: String, description: String, parameters: JSONValue,
-        group: ToolGroup, mutating: Bool, defaultEnabled: Bool, defaultAutoApprove: Bool,
-        requiresApproval: Bool = false
+        group: ToolGroup, defaultEnabled: Bool
     ) {
         self.name = name
         self.summary = summary
         self.description = description
         self.parameters = parameters
         self.group = group
-        self.mutating = mutating
         self.defaultEnabled = defaultEnabled
-        self.defaultAutoApprove = defaultAutoApprove
-        self.requiresApproval = requiresApproval
     }
 
     var id: String { name }
@@ -73,8 +65,8 @@ enum Tools {
             summary: "List saved memory notes",
             description: "List memory note filenames (global + persona scope).",
             parameters: .schema(properties: [:], required: []),
-            group: .memory, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .memory,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "memory_read",
@@ -87,8 +79,8 @@ enum Tools {
                 ],
                 required: ["name"]
             ),
-            group: .memory, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .memory,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "memory_write",
@@ -102,8 +94,8 @@ enum Tools {
                 ],
                 required: ["name", "content"]
             ),
-            group: .memory, mutating: true,
-            defaultEnabled: true, defaultAutoApprove: false
+            group: .memory,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "memory_append",
@@ -117,8 +109,8 @@ enum Tools {
                 ],
                 required: ["name", "content"]
             ),
-            group: .memory, mutating: true,
-            defaultEnabled: true, defaultAutoApprove: false
+            group: .memory,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "conversation_search",
@@ -131,8 +123,8 @@ enum Tools {
                 ],
                 required: ["query"]
             ),
-            group: .memory, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .memory,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "conversation_list",
@@ -145,8 +137,8 @@ enum Tools {
                 ],
                 required: []
             ),
-            group: .memory, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .memory,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "conversation_read",
@@ -156,8 +148,8 @@ enum Tools {
                 properties: ["id": .property("string", "conversation id")],
                 required: ["id"]
             ),
-            group: .memory, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .memory,
+            defaultEnabled: true
         ),
 
         // MARK: Files
@@ -173,22 +165,22 @@ enum Tools {
                 ],
                 required: ["path"]
             ),
-            group: .files, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: false
+            group: .files,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "file_write",
-            summary: "Save a text file in this conversation",
-            description: "Create or overwrite a UTF-8 text file in the current conversation workspace. Use a workspace-relative path; parent folders are created, and the file appears in the Files inspector. Every write requires user approval. Use python_exec for computed or binary output; do not use shell commands for ordinary text files.",
+            summary: "Save a text file",
+            description: "Create or overwrite a UTF-8 text file. Relative paths use the current conversation workspace; absolute or ~ paths write to that location and require permission. Parent folders are created. Use python_exec for computed or binary output; do not use shell commands for ordinary text files.",
             parameters: .schema(
                 properties: [
-                    "path": .property("string", "workspace-relative filename, e.g. example_text.txt or results/table.csv"),
+                    "path": .property("string", "workspace-relative, absolute, or ~-relative filename"),
                     "content": .property("string", "complete file contents")
                 ],
                 required: ["path", "content"]
             ),
-            group: .files, mutating: true,
-            defaultEnabled: true, defaultAutoApprove: false, requiresApproval: true
+            group: .files,
+            defaultEnabled: true
         ),
 
         // MARK: Web
@@ -200,8 +192,8 @@ enum Tools {
                 properties: ["query": .property("string", "the search query")],
                 required: ["query"]
             ),
-            group: .web, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: true
+            group: .web,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "web_fetch",
@@ -211,8 +203,8 @@ enum Tools {
                 properties: ["url": .property("string", "the URL to fetch")],
                 required: ["url"]
             ),
-            group: .web, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: true
+            group: .web,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "web_research",
@@ -225,8 +217,8 @@ enum Tools {
                 ],
                 required: ["query"]
             ),
-            group: .web, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: true
+            group: .web,
+            defaultEnabled: false
         ),
 
         // MARK: Compute
@@ -238,8 +230,8 @@ enum Tools {
                 properties: ["expression": .property("string", "the expression to evaluate")],
                 required: ["expression"]
             ),
-            group: .compute, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .compute,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "python_exec",
@@ -256,8 +248,8 @@ enum Tools {
                 properties: ["code": .property("string", "Python source code to execute")],
                 required: ["code"]
             ),
-            group: .compute, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false
+            group: .compute,
+            defaultEnabled: false
         ),
 
         // MARK: System
@@ -273,8 +265,8 @@ enum Tools {
                 ],
                 required: ["command"]
             ),
-            group: .system, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false
+            group: .system,
+            defaultEnabled: false
         )
     ]
 
@@ -292,13 +284,13 @@ enum Tools {
                 ],
                 required: []
             ),
-            group: .calendar, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: true
+            group: .calendar,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "calendar_create_event",
             summary: "Create a calendar event",
-            description: "Create an event in the default calendar or a named calendar. Dates must be ISO 8601 with timezone offset, e.g. 2026-10-01T14:00:00-07:00. For relative times, call calendar_events first; ask the user if the time is ambiguous. This action always requires user approval.",
+            description: "Create an event in the default calendar or a named calendar. Dates must be ISO 8601 with timezone offset, e.g. 2026-10-01T14:00:00-07:00. For relative times, call calendar_events first; ask the user if the time is ambiguous.",
             parameters: .schema(
                 properties: [
                     "title": .property("string", "event title"),
@@ -310,13 +302,13 @@ enum Tools {
                 ],
                 required: ["title", "start_date", "end_date"]
             ),
-            group: .calendar, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false, requiresApproval: true
+            group: .calendar,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "calendar_update_event",
             summary: "Update a calendar event",
-            description: "Update an event by its event ID from calendar_events. Supply only fields to change. Dates must be ISO 8601 with timezone offset. Empty location or notes clears that field. This action always requires user approval.",
+            description: "Update an event by its event ID from calendar_events. Supply only fields to change. Dates must be ISO 8601 with timezone offset. Empty location or notes clears that field.",
             parameters: .schema(
                 properties: [
                     "event_id": .property("string", "event ID returned by calendar_events"),
@@ -328,8 +320,8 @@ enum Tools {
                 ],
                 required: ["event_id"]
             ),
-            group: .calendar, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false, requiresApproval: true
+            group: .calendar,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "reminders_list",
@@ -344,13 +336,13 @@ enum Tools {
                 ],
                 required: []
             ),
-            group: .calendar, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: true
+            group: .calendar,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "reminder_create",
             summary: "Create a reminder",
-            description: "Create a reminder in the default Reminders list. due_date may be YYYY-MM-DD or ISO 8601 with timezone offset. Priority is 0 (none) through 9 (lowest), where 1 is highest. This action always requires user approval.",
+            description: "Create a reminder in the default Reminders list. due_date may be YYYY-MM-DD or ISO 8601 with timezone offset. Priority is 0 (none) through 9 (lowest), where 1 is highest.",
             parameters: .schema(
                 properties: [
                     "title": .property("string", "reminder title"),
@@ -360,13 +352,13 @@ enum Tools {
                 ],
                 required: ["title"]
             ),
-            group: .calendar, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false, requiresApproval: true
+            group: .calendar,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "reminder_update",
             summary: "Update a reminder",
-            description: "Update a reminder by its ID from reminders_list. Supply only fields to change. Set clear_due_date true to remove a due date. This action always requires user approval.",
+            description: "Update a reminder by its ID from reminders_list. Supply only fields to change. Set clear_due_date true to remove a due date.",
             parameters: .schema(
                 properties: [
                     "reminder_id": .property("string", "reminder ID returned by reminders_list"),
@@ -379,8 +371,8 @@ enum Tools {
                 ],
                 required: ["reminder_id"]
             ),
-            group: .calendar, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false, requiresApproval: true
+            group: .calendar,
+            defaultEnabled: false
         )
     ]
 
@@ -404,8 +396,8 @@ enum Tools {
                 ],
                 required: ["term", "translation"]
             ),
-            group: .language, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false
+            group: .language,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "add_grammar",
@@ -421,8 +413,8 @@ enum Tools {
                 ],
                 required: ["point", "explanation"]
             ),
-            group: .language, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false
+            group: .language,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "search_deck",
@@ -432,8 +424,8 @@ enum Tools {
                 properties: ["query": .property("string", "term or meaning to look up")],
                 required: ["query"]
             ),
-            group: .language, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: false
+            group: .language,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "get_due_items",
@@ -443,8 +435,8 @@ enum Tools {
                 properties: ["limit": .property("integer", "max cards (default 10)")],
                 required: []
             ),
-            group: .language, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: false
+            group: .language,
+            defaultEnabled: false
         ),
         ToolSpec(
             name: "record_review",
@@ -457,8 +449,8 @@ enum Tools {
                 ],
                 required: ["id", "correct"]
             ),
-            group: .language, mutating: true,
-            defaultEnabled: false, defaultAutoApprove: false
+            group: .language,
+            defaultEnabled: false
         )
     ]
 
@@ -488,8 +480,8 @@ enum Tools {
                 ],
                 required: ["questions"]
             ),
-            group: .interactive, mutating: false,
-            defaultEnabled: false, defaultAutoApprove: true
+            group: .interactive,
+            defaultEnabled: false
         )
     ]
 
@@ -509,8 +501,8 @@ enum Tools {
                 ],
                 required: ["query"]
             ),
-            group: .vault, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .vault,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "vault_read",
@@ -522,8 +514,8 @@ enum Tools {
                 ],
                 required: ["note"]
             ),
-            group: .vault, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .vault,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "vault_list",
@@ -535,8 +527,8 @@ enum Tools {
                 ],
                 required: []
             ),
-            group: .vault, mutating: false,
-            defaultEnabled: true, defaultAutoApprove: true
+            group: .vault,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "vault_write",
@@ -549,8 +541,8 @@ enum Tools {
                 ],
                 required: ["note", "content"]
             ),
-            group: .vault, mutating: true,
-            defaultEnabled: true, defaultAutoApprove: false
+            group: .vault,
+            defaultEnabled: true
         ),
         ToolSpec(
             name: "vault_append",
@@ -563,8 +555,8 @@ enum Tools {
                 ],
                 required: ["note", "content"]
             ),
-            group: .vault, mutating: true,
-            defaultEnabled: true, defaultAutoApprove: false
+            group: .vault,
+            defaultEnabled: true
         )
     ]
 
@@ -581,7 +573,6 @@ enum Tools {
     )
 
     static let defaultEnabled: Set<String> = Set((baseSpecs + vaultSpecs + calendarSpecs).filter(\.defaultEnabled).map(\.name))
-    static let defaultAutoApprove: Set<String> = Set(all.filter(\.defaultAutoApprove).map(\.name))
 
     /// Every deck tool plus the interactive picker — the sensible default toolset for Learn mode.
     static let languageToolNames: Set<String> =
@@ -592,13 +583,6 @@ enum Tools {
         switch mode {
         case .language: return languageToolNames
         default: return defaultEnabled
-        }
-    }
-
-    static func modeAutoApproveDefaults(_ mode: AppMode) -> Set<String> {
-        switch mode {
-        case .language: return languageToolNames
-        default: return defaultAutoApprove
         }
     }
 

@@ -737,13 +737,42 @@ private struct ToolApprovalBar: View {
     @Environment(AppModel.self) private var model
     let batch: AppModel.PendingToolBatch
 
+    private var askedCalls: [ToolCall] {
+        batch.calls.filter { batch.permissionEvaluations[$0.id]?.verdict == .ask }
+    }
+
+    private var permissionMode: AppMode { batch.permissionMode ?? model.mode }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("The model wants to run \(batch.calls.count) tool call(s)", systemImage: "wrench.and.screwdriver.fill")
+            Label("Permission needed for \(askedCalls.count) tool call(s)", systemImage: "wrench.and.screwdriver.fill")
                 .font(.callout.weight(.semibold))
             approvalCalls
+            Text("Other permitted calls will still run; denied calls will not.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
-                Button("Approve") { model.approveTools() }.buttonStyle(.borderedProminent)
+                Button("Approve Once") { model.approveTools() }.buttonStyle(.borderedProminent)
+                if model.canRememberPendingTools() {
+                    Menu {
+                        Button("In this conversation · this folder") {
+                            model.rememberPendingTools(inConversation: true, anywhere: false)
+                        }
+                        Button("In this conversation · anywhere") {
+                            model.rememberPendingTools(inConversation: true, anywhere: true)
+                        }
+                        Divider()
+                        Button("Always (\(permissionMode.label) mode) · this folder") {
+                            model.rememberPendingTools(inConversation: false, anywhere: false)
+                        }
+                        Button("Always (\(permissionMode.label) mode) · anywhere") {
+                            model.rememberPendingTools(inConversation: false, anywhere: true)
+                        }
+                    } label: {
+                        Label("Remember", systemImage: "bookmark")
+                    }
+                    .help("Create the capability rules previewed on each requested effect.")
+                }
                 Button("Deny") { model.denyTools() }
                 Spacer()
             }
@@ -755,7 +784,7 @@ private struct ToolApprovalBar: View {
 
     @ViewBuilder
     private var approvalCalls: some View {
-        if batch.calls.count > 2 {
+        if askedCalls.count > 2 {
             ScrollView {
                 callRows
             }
@@ -767,8 +796,12 @@ private struct ToolApprovalBar: View {
 
     private var callRows: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(batch.calls) { call in
-                ToolApprovalItem(call: call)
+            ForEach(askedCalls) { call in
+                if let evaluation = batch.permissionEvaluations[call.id] {
+                    ToolApprovalItem(
+                        call: call, evaluation: evaluation,
+                        workspace: Paths.conversationFiles(batch.conversationID), mode: permissionMode)
+                }
             }
         }
     }
@@ -776,9 +809,15 @@ private struct ToolApprovalBar: View {
 
 private struct ToolApprovalItem: View {
     let call: ToolCall
+    let evaluation: ToolPermissionEvaluation
+    let workspace: URL
+    let mode: AppMode
     @State private var argumentsExpanded = false
 
     private var name: String { call.function.name ?? "tool" }
+    private var askedEffects: [EffectEvaluation] {
+        evaluation.effects.filter { $0.decision == .ask }
+    }
 
     private var summary: String {
         guard let data = call.function.arguments.data(using: .utf8),
@@ -799,6 +838,15 @@ private struct ToolApprovalItem: View {
                 .lineLimit(2)
                 .textSelection(.enabled)
 
+            ForEach(askedEffects.indices, id: \.self) { index in
+                effectRow(askedEffects[index])
+            }
+            if askedEffects.isEmpty, let explanation = evaluation.explanation {
+                Text(explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if !call.function.arguments.isEmpty, call.function.arguments != "{}" {
                 DisclosureGroup("Full arguments", isExpanded: $argumentsExpanded) {
                     ScrollView {
@@ -816,6 +864,89 @@ private struct ToolApprovalItem: View {
         }
         .padding(6)
         .background(.black.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private func effectRow(_ value: EffectEvaluation) -> some View {
+        let capability = value.effect.capability
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 5) {
+                Label(effectLabel(value.effect), systemImage: riskSymbol(capability.risk))
+                    .font(.caption)
+                    .foregroundStyle(riskColor(capability.risk))
+                    .textSelection(.enabled)
+                Spacer(minLength: 4)
+                Text(capability.risk.rawValue.uppercased())
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(riskColor(capability.risk))
+            }
+            if let path = value.effect.path,
+               let reason = ProtectedLocations.reason(for: path, workspace: workspace)
+            {
+                Label("\(reason) Approve Once is the only saved-choice option.", systemImage: "lock.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Conversation rule: \(capability.rawValue) · \(ruleScope(value.effect))")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Text("\(mode.label) mode rule: \(capability.rawValue) · \(ruleScope(value.effect))")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.leading, 4)
+    }
+
+    private func effectLabel(_ effect: PermissionEffect) -> String {
+        guard let path = effect.path else { return effect.capability.label }
+        let location = displayedPath(path)
+        return switch effect.capability {
+        case .workspaceRead: "Read workspace · \(location)"
+        case .workspaceWrite: "Write workspace · \(location)"
+        case .externalRead: "Read file · outside workspace · \(location)"
+        case .externalWrite: "Write file · outside workspace · \(location)"
+        default: "\(effect.capability.label) · \(location)"
+        }
+    }
+
+    private func displayedPath(_ path: String) -> String {
+        let workspacePath = PathScope.canonicalPath(workspace.path)
+        let canonicalPath = PathScope.canonicalPath(path)
+        if PathScope.path(canonicalPath, isWithin: workspacePath) {
+            let relative = String(canonicalPath.dropFirst(workspacePath.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return relative.isEmpty ? "." : relative
+        }
+        let homePath = PathScope.canonicalPath(FileManager.default.homeDirectoryForCurrentUser.path)
+        if PathScope.path(canonicalPath, isWithin: homePath) {
+            return "~" + canonicalPath.dropFirst(homePath.count)
+        }
+        return canonicalPath
+    }
+
+    private func ruleScope(_ effect: PermissionEffect) -> String {
+        guard let path = effect.path else { return "any" }
+        let parent = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        return "pathPrefix(\(parent))"
+    }
+
+    private func riskSymbol(_ risk: Capability.Risk) -> String {
+        switch risk {
+        case .low: "checkmark.circle"
+        case .medium: "exclamationmark.circle"
+        case .high: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func riskColor(_ risk: Capability.Risk) -> Color {
+        switch risk {
+        case .low: .secondary
+        case .medium: .orange
+        case .high: .red
+        }
     }
 }
 
@@ -848,16 +979,16 @@ private struct AutopilotStatusBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        HStack(spacing: 8) {
-            Label(
-                model.isStoppingWork ? "Stopping after current tool…" : "Autopilot active",
-                systemImage: model.isStoppingWork ? "hourglass" : "sparkles")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(model.currentAccent)
-            Text(model.isStoppingWork ? "The current tool operation must finish first." : "Only auto-approved tools are available.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Label(
+                    model.isStoppingWork ? "Stopping after current tool…" : "Autopilot active",
+                    systemImage: model.isStoppingWork ? "hourglass" : "sparkles")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(model.currentAccent)
+                Spacer()
+            }
+            AutopilotPermissionSummary(compact: true)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)

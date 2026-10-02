@@ -461,7 +461,7 @@ extension AppModel {
         for call in calls where call.function.name == "end_conversation" {
             traceStore.trace(
                 conversationID: convoID, kind: .tool,
-                text: "end_conversation() — hanging up after this reply",
+                text: "end_conversation() | effects: none | verdict: allow | source: default",
                 saveTraces: settings.saveTraces)
             endConversationRequested = true
         }

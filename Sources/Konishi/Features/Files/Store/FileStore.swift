@@ -2,22 +2,6 @@ import Foundation
 
 /// Lists and manages files the agent creates in each conversation's workspace.
 struct FileStore {
-    enum WorkspacePathError: LocalizedError {
-        case empty
-        case absolute
-        case outsideWorkspace
-        case symbolicLink
-
-        var errorDescription: String? {
-            switch self {
-            case .empty: "A workspace-relative path is required."
-            case .absolute: "Use a workspace-relative path, not an absolute path."
-            case .outsideWorkspace: "The path escapes this conversation's workspace."
-            case .symbolicLink: "Workspace file operations do not follow symbolic links."
-            }
-        }
-    }
-
     struct Entry: Identifiable, Hashable {
         var id: String { url.path }
         let name: String
@@ -31,40 +15,30 @@ struct FileStore {
         }
     }
 
-    func resolveWorkspacePath(_ path: String, in workspace: URL) throws -> URL {
-        let path = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty, !path.contains("\0") else { throw WorkspacePathError.empty }
-        guard !(path as NSString).isAbsolutePath, !path.hasPrefix("~") else {
-            throw WorkspacePathError.absolute
+    func resolvePath(_ path: String, in workspace: URL, expectedResolvedPath: String? = nil) throws -> URL {
+        let resolved = try PathScope.resolve(path, in: workspace).url
+        if let expectedResolvedPath, !PathScope.pathsEqual(resolved.path, expectedResolvedPath) {
+            throw PathScope.PathError.pathChanged
         }
+        return resolved
+    }
 
-        let root = workspace.standardizedFileURL.resolvingSymlinksInPath()
-        let destination = root.appendingPathComponent(path).standardizedFileURL
-        guard destination.path.hasPrefix(root.path + "/") else {
-            throw WorkspacePathError.outsideWorkspace
-        }
-
-        var componentURL = root
-        for component in path.split(separator: "/") {
-            componentURL.appendPathComponent(String(component))
-            guard FileManager.default.fileExists(atPath: componentURL.path) else { continue }
-            let resolved = componentURL.resolvingSymlinksInPath().standardizedFileURL
-            guard resolved.path.hasPrefix(root.path + "/") else {
-                throw WorkspacePathError.outsideWorkspace
-            }
-            let values = try? componentURL.resourceValues(forKeys: [.isSymbolicLinkKey])
-            if values?.isSymbolicLink == true { throw WorkspacePathError.symbolicLink }
-        }
-        return destination
+    func read(path: String, in workspace: URL, expectedResolvedPath: String? = nil) throws -> String {
+        let initial = try resolvePath(path, in: workspace, expectedResolvedPath: expectedResolvedPath)
+        let verified = try resolvePath(path, in: workspace, expectedResolvedPath: initial.path)
+        return try String(contentsOf: verified, encoding: .utf8)
     }
 
     @discardableResult
-    func write(path: String, content: String, in workspace: URL) throws -> URL {
-        let destination = try resolveWorkspacePath(path, in: workspace)
+    func write(
+        path: String, content: String, in workspace: URL, expectedResolvedPath: String? = nil
+    ) throws -> URL {
+        let initial = try resolvePath(path, in: workspace, expectedResolvedPath: expectedResolvedPath)
         try FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try content.write(to: destination, atomically: true, encoding: .utf8)
-        return destination
+            at: initial.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let verified = try resolvePath(path, in: workspace, expectedResolvedPath: initial.path)
+        try content.write(to: verified, atomically: true, encoding: .utf8)
+        return verified
     }
 
     /// Files in a conversation's working directory, newest first.

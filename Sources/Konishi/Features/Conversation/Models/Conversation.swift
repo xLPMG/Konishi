@@ -112,6 +112,7 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var tasks: [ConversationTask]?
     /// User-selected message excerpts kept in context across turns and compression.
     var contextPins: [ContextPin]?
+    var permissionRules: [PermissionRule]?
 
     init(
         id: UUID = UUID(),
@@ -129,7 +130,8 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         digestCount: Int? = nil,
         digestUpdatedAt: Date? = nil,
         tasks: [ConversationTask]? = nil,
-        contextPins: [ContextPin]? = nil
+        contextPins: [ContextPin]? = nil,
+        permissionRules: [PermissionRule]? = nil
     ) {
         self.id = id
         self.title = title
@@ -147,6 +149,7 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.digestUpdatedAt = digestUpdatedAt
         self.tasks = tasks
         self.contextPins = contextPins
+        self.permissionRules = permissionRules
     }
 
     var lastStats: MessageStats? {
@@ -175,6 +178,7 @@ struct ConversationMeta: Decodable {
     var digestRolledUpAt: Date?
     var tasks: [ConversationTask]?
     var contextPins: [ContextPin]?
+    var permissionRules: [PermissionRule]?
 
     /// A body-less `Conversation` (empty `messages`) carrying just the metadata.
     func asConversation() -> Conversation {
@@ -184,7 +188,8 @@ struct ConversationMeta: Decodable {
             summary: summary, summarizedCount: summarizedCount, memorizedCount: memorizedCount,
             isLanguage: isLanguage, lastTitledMessageCount: lastTitledMessageCount,
             digest: digest, digestCount: digestCount, digestUpdatedAt: digestUpdatedAt,
-            tasks: tasks, contextPins: contextPins
+            tasks: tasks, contextPins: contextPins,
+            permissionRules: permissionRules
         )
         convo.digestRolledUpAt = digestRolledUpAt
         return convo

@@ -63,6 +63,9 @@ final class AppModel {
     @ObservationIgnored
     var workSession: AgentWorkSession?
     var isAutopilotActive = false
+    var autopilotPermissionDenials = 0
+    var autopilotBlockedCapabilities: [String] = []
+    var autopilotRunConversationID: UUID?
     var pendingToolStopNotice: UUID?
     var isStoppingWork = false
     var autopilotArmed = false
@@ -109,6 +112,8 @@ final class AppModel {
         let id = UUID()
         let conversationID: UUID
         let calls: [ToolCall]
+        var permissionEvaluations: [String: ToolPermissionEvaluation] = [:]
+        var permissionMode: AppMode?
         /// Whether the model needs another turn to act on a tool's output.
         var continueAfter: Bool = true
         var continuationNote: String?
@@ -207,8 +212,11 @@ final class AppModel {
 
     /// Tools currently advertised to the model (0 when tool calling is off).
     var activeToolNames: [String] {
-        if mode == .language { return Tools.names(enabled: settings.enabledTools(for: .language)) }
-        return settings.toolsEnabled ? Tools.names(enabled: settings.enabledTools(for: mode)) : []
+        guard mode != .conversational, let conversationID = selectedConversationID else { return [] }
+        let surface: PermissionSurface = workSession?.autopilot == true ? .unattended : .interactive
+        return ToolPermissions.visibleTools(
+            context: toolPermissionContext(conversationID: conversationID, surface: surface)
+        ).map(\.name)
     }
 
     /// Heuristic model shortlists for the embedding / audio pickers (fall back to all).

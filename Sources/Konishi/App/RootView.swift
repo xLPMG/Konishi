@@ -10,6 +10,7 @@ struct RootView: View {
     @State private var inspectorWidth: CGFloat = Self.minInspectorWidth
     @State private var inspectorDragStart: CGFloat?
     @State private var showConversation = false
+    @State private var showAutopilotPreflight = false
 
     var body: some View {
         @Bindable var model = model
@@ -109,6 +110,7 @@ struct RootView: View {
                 if model.mode != .language {
                     Button {
                         model.autopilotArmed.toggle()
+                        showAutopilotPreflight = true
                     } label: {
                         Label(
                             model.autopilotArmed ? "Autopilot: On" : "Autopilot: Off",
@@ -119,7 +121,11 @@ struct RootView: View {
                     .opacity(model.autopilotArmed ? 1 : 0.55)
                     .disabled(model.isStreaming || model.workSession != nil || model.pendingApproval != nil
                         || model.pendingWorkGate != nil)
-                    .help("Use auto-approved tools for the next task. Other tools are reported unavailable; Autopilot stops at its safety ceiling.")
+                    .help("Arm Autopilot for the next task and preview its permissions.")
+                    .popover(isPresented: $showAutopilotPreflight, arrowEdge: .bottom) {
+                        AutopilotPermissionSummary()
+                            .frame(width: 360)
+                    }
                 }
 
                 Button { showInspector.toggle() } label: {

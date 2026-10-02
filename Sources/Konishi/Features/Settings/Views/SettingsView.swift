@@ -340,9 +340,10 @@ private struct VaultSettings: View {
 private struct ToolsSettings: View {
     @Environment(AppModel.self) private var model
     @State private var toolMode: AppMode = .chat
+    @State private var pendingHighRiskCapability: Capability?
+    @State private var confirmingHighRisk = false
 
     var body: some View {
-        @Bindable var settings = model.settings
         Form {
             Section("Apple Calendar & Reminders") {
                 LabeledContent("Calendar", value: model.calendarStore.calendarAccess.label)
@@ -361,12 +362,15 @@ private struct ToolsSettings: View {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
-                Text("Access is requested separately for each app. Event and reminder details are sent to the configured chat model when a tool runs. Create and update actions always ask for approval.")
+                Text("Access is requested separately for each app. Event and reminder details are sent to the configured chat model when a tool runs. Personal-data writes default to Ask and follow the selected mode policy.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                Toggle("Enable tool calling", isOn: $settings.toolsEnabled)
-                Text("Master switch. Configure which tools each mode may use below.")
+                Toggle("Enable tool calling", isOn: Binding(
+                    get: { model.settings.toolsEnabled(for: toolMode) },
+                    set: { model.settings.setToolsEnabled($0, for: toolMode) }
+                ))
+                Text("Master switch for \(toolMode.label). Learn mode starts enabled on new installs.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
@@ -375,87 +379,273 @@ private struct ToolsSettings: View {
                 }
                 .pickerStyle(.segmented)
             } footer: {
-                Text("Tool availability and auto-approval are set separately for each mode.")
+                Text("Set capability policy, then choose which tools this mode can see.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(capabilityGroups.indices, id: \.self) { index in
+                let group = capabilityGroups[index]
+                Section(group.0) {
+                    ForEach(group.1, id: \.self) { capability in
+                        let evaluation = permissionEvaluation(for: capability)
+                        let override = model.settings.permissionPolicy(for: toolMode).rules.first {
+                            $0.capability == capability && $0.scope == .any
+                        }
+                        CapabilityPolicySettingsRow(
+                            capability: capability,
+                            decision: evaluation.verdict,
+                            source: evaluation.source.label(for: toolMode),
+                            hasOverride: override != nil,
+                            onChange: { decision in requestDecision(decision, for: capability) },
+                            onReset: { setDecision(capability.defaultDecision(for: toolMode), for: capability) })
+                    }
+                }
             }
             ForEach(ToolGroup.allCases) { group in
                 let specs = Tools.all.filter { $0.group == group }
                 if !specs.isEmpty {
                     Section {
                         ForEach(specs) { spec in
-                            ToolRow(spec: spec, mode: toolMode, settings: settings)
+                            ToolSettingsRow(spec: spec, mode: toolMode, settings: model.settings)
                         }
-                    } header: {
-                        HStack(spacing: 0) {
-                            Text(group.label)
-                            Spacer(minLength: 12)
-                            Text("On").frame(width: toolColumnWidth)
-                            Text("Auto").frame(width: toolColumnWidth)
+                    } header: { Text(group.label) }
+                    .disabled(!model.settings.toolsEnabled(for: toolMode))
+                    if group == .system { shellAllowlistSection }
+                }
+            }
+            Section("Remembered locations") {
+                let rules = model.settings.permissionPolicy(for: toolMode).rules.filter {
+                    if case .pathPrefix = $0.scope { true } else { false }
+                }
+                if rules.isEmpty {
+                    Text("None")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(rules) { rule in
+                        if case let .pathPrefix(path) = rule.scope {
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(rule.capability.label).font(.caption)
+                                    Text("\(rule.decision.rawValue.capitalized) · \(path)")
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                        .textSelection(.enabled)
+                                }
+                                Spacer(minLength: 4)
+                                Button(role: .destructive) {
+                                    removeRule(rule.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Remove remembered location")
+                            }
                         }
                     }
-                    .disabled(!settings.toolsEnabled)
                 }
             }
             Section {
-                TextEditor(text: Binding(
-                    get: { settings.shellAutoApproveCommands(for: toolMode) },
-                    set: { settings.setShellAutoApproveCommands($0, for: toolMode) }
-                ))
-                .font(.body.monospaced())
-                .frame(height: 72)
-                .disabled(!settings.toolsEnabled || !settings.enabledTools(for: toolMode).contains("run_shell"))
-            } header: {
-                Text("Shell auto-approval")
-            } footer: {
-                Text("One executable per line, for example ls or find. Simple invocations bypass approval even when run_shell Auto is off. Pipes, chaining, redirects, substitutions, and mutating find actions still require approval.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Button("Reset to Defaults", role: .destructive) {
+                    model.settings.resetToolSettings(for: toolMode)
+                }
             }
         }
         .formStyle(.grouped)
         .themedFormBackground(model.currentPalette.canvas)
         .onAppear { model.calendarStore.refreshAuthorizationStatus() }
+        .confirmationDialog(
+            "Allow \(pendingHighRiskCapability?.label ?? "this capability") anywhere?",
+            isPresented: $confirmingHighRisk, titleVisibility: .visible
+        ) {
+            Button("Allow Anywhere") {
+                if let capability = pendingHighRiskCapability {
+                    setDecision(.allow, for: capability)
+                }
+                pendingHighRiskCapability = nil
+            }
+            Button("Cancel", role: .cancel) { pendingHighRiskCapability = nil }
+        } message: {
+            Text("This high-risk capability will be allowed at any location or scope. Protected locations still require one-time approval.")
+        }
+    }
+
+    private var capabilityGroups: [(String, [Capability])] {
+        let grouped = Dictionary(grouping: Capability.allCases, by: \.groupLabel)
+        let order = [
+            "Workspace", "External", "Memory", "Conversation history", "Vault",
+            "Personal data", "Language deck", "Web", "Code", "Interaction",
+        ]
+        return order.compactMap { name in grouped[name].map { (name, $0) } }
+    }
+
+    private var shellAllowlistSection: some View {
+        Section("Shell allowlist") {
+            TextEditor(text: Binding(
+                get: { model.settings.shellAllowlist(for: toolMode) },
+                set: { model.settings.setShellAllowlist($0, for: toolMode) }
+            ))
+            .font(.body.monospaced())
+            .frame(height: 72)
+            .disabled(!model.settings.toolsEnabled(for: toolMode)
+                || !model.settings.enabledTools(for: toolMode).contains("run_shell"))
+            Text("One executable per line. Simple, listed invocations use the allowlisted-command capability; composed or unlisted commands require code execution permission.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func permissionEvaluation(for capability: Capability) -> ToolPermissionEvaluation {
+        let workspace = Paths.filesRoot.appendingPathComponent("__settings_preview__", isDirectory: true)
+        let path: String?
+        switch capability {
+        case .workspaceRead, .workspaceWrite:
+            path = workspace.appendingPathComponent("sample.txt").path
+        case .externalRead, .externalWrite:
+            path = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/sample.txt").path
+        default:
+            path = nil
+        }
+        let allowlist = Set(model.settings.shellAllowlist(for: toolMode)
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty })
+        let context = ToolPermissionContext(
+            mode: toolMode, workspace: workspace, enabledTools: Set(Tools.all.map(\.name)),
+            vaultAccessEnabled: true, shellAllowlist: allowlist,
+            modePolicy: model.settings.permissionPolicy(for: toolMode))
+        return ToolPermissions.evaluate([PermissionEffect(capability, path: path)], context: context)
+    }
+
+    private func requestDecision(_ decision: PermissionDecision, for capability: Capability) {
+        if decision == .allow, capability.risk == .high {
+            pendingHighRiskCapability = capability
+            confirmingHighRisk = true
+        } else {
+            setDecision(decision, for: capability)
+        }
+    }
+
+    private func setDecision(_ decision: PermissionDecision, for capability: Capability) {
+        var policy = model.settings.permissionPolicy(for: toolMode)
+        policy.rules.removeAll { $0.capability == capability && $0.scope == .any }
+        if decision != capability.defaultDecision(for: toolMode) {
+            policy.rules.append(PermissionRule(capability: capability, decision: decision))
+        }
+        model.settings.setPermissionPolicy(policy, for: toolMode)
+    }
+
+    private func removeRule(_ id: UUID) {
+        var policy = model.settings.permissionPolicy(for: toolMode)
+        policy.rules.removeAll { $0.id == id }
+        model.settings.setPermissionPolicy(policy, for: toolMode)
     }
 }
 
-private let toolColumnWidth: CGFloat = 52
+private struct CapabilityPolicySettingsRow: View {
+    let capability: Capability
+    let decision: PermissionDecision
+    let source: String
+    let hasOverride: Bool
+    let onChange: @MainActor @Sendable (PermissionDecision) -> Void
+    let onReset: @MainActor @Sendable () -> Void
 
-private struct ToolRow: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: riskSymbol)
+                .foregroundStyle(riskColor)
+                .help("\(capability.risk.rawValue.capitalized) risk")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(capability.label).font(.caption)
+                Text("\(decision.rawValue.capitalized) · \(source)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 6)
+            Picker(capability.label, selection: Binding(
+                get: { decision }, set: onChange
+            )) {
+                Text("Allow").tag(PermissionDecision.allow)
+                Text("Ask").tag(PermissionDecision.ask)
+                Text("Deny").tag(PermissionDecision.deny)
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .disabled(capability == .userInput)
+            Button(action: onReset) {
+                Image(systemName: "arrow.counterclockwise")
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .help("Reset mode override")
+            .disabled(!hasOverride || capability == .userInput)
+        }
+        .padding(.vertical, 3)
+    }
+
+    private var riskSymbol: String {
+        switch capability.risk {
+        case .low: "checkmark.circle"
+        case .medium: "exclamationmark.circle"
+        case .high: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var riskColor: Color {
+        switch capability.risk {
+        case .low: .secondary
+        case .medium: .orange
+        case .high: .red
+        }
+    }
+}
+
+private struct ToolSettingsRow: View {
     let spec: ToolSpec
     let mode: AppMode
     @Bindable var settings: AppSettings
 
     private var enabled: Bool { settings.enabledTools(for: mode).contains(spec.name) }
+    private var capabilities: [Capability] { ToolPermissions.possibleCapabilities(for: spec.name) }
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .center, spacing: 10) {
+            Toggle("Tool enabled", isOn: Binding(
+                get: { enabled }, set: { settings.setToolEnabled(spec.name, $0, for: mode) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .help(enabled ? "Hide this tool from the model" : "Show this tool to the model")
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(spec.name).font(.body.monospaced())
-                    if spec.mutating {
-                        Image(systemName: "pencil.circle.fill")
-                            .font(.caption2).foregroundStyle(.orange)
-                            .help("Writes or executes — review before auto-approving.")
-                    }
-                }
+                Text(spec.name).font(.body.monospaced())
                 Text(spec.summary).font(.caption).foregroundStyle(.secondary)
             }
-            Spacer(minLength: 12)
-            Toggle("Enabled", isOn: Binding(
-                get: { enabled },
-                set: { settings.setToolEnabled(spec.name, $0, for: mode) }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .frame(width: toolColumnWidth)
-            Toggle("Auto-approve", isOn: Binding(
-                get: { settings.autoApproveTools(for: mode).contains(spec.name) },
-                set: { settings.setAutoApprove(spec.name, $0, for: mode) }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .frame(width: toolColumnWidth)
-            .disabled(!enabled || spec.requiresApproval)
-            .help(spec.requiresApproval ? "This action always requires approval." : "Run without asking for approval.")
+            Spacer(minLength: 4)
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    if capabilities.isEmpty {
+                        Text("No policy capability").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    ForEach(capabilities, id: \.self) { capability in
+                        Label(capability.label, systemImage: capabilitySymbol(capability))
+                            .font(.caption2)
+                            .foregroundStyle(capability.risk == .high ? .red : .secondary)
+                            .help("\(capability.label) · \(capability.risk.rawValue) risk")
+                    }
+                }
+            }
+            .frame(maxWidth: 210, alignment: .trailing)
+        }
+    }
+
+    private func capabilitySymbol(_ capability: Capability) -> String {
+        switch capability.kind {
+        case .read: "eye"
+        case .write: "pencil"
+        case .execute: "terminal"
+        case .interact: "hand.tap"
         }
     }
 }

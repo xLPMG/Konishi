@@ -159,70 +159,54 @@ final class AppSettings {
     var vaultTopK: Int {
         didSet { defaults.set(vaultTopK, forKey: Keys.vaultTopK) }
     }
-    /// Master switch for tool calling. Individual tools are toggled via `enabledTools`.
-    var toolsEnabled: Bool {
-        didSet { defaults.set(toolsEnabled, forKey: Keys.toolsEnabled) }
-    }
+    /// Per-mode tool master switch.
+    var toolsEnabledByMode: [String: Bool] = [:]
     /// Per-mode enabled tools (keyed by AppMode.rawValue). Absent entry = that mode's defaults.
     var enabledToolsByMode: [String: Set<String>] = [:]
-    /// Per-mode auto-approved tools (keyed by AppMode.rawValue). Absent entry = that mode's defaults.
-    var autoApproveByMode: [String: Set<String>] = [:]
-    /// Per-mode executable names that may bypass run_shell's general approval requirement.
-    var shellAutoApproveCommandsByMode: [String: String] = [:]
+    /// Per-mode capability policy (keyed by AppMode.rawValue).
+    var permissionPolicyByMode: [String: PermissionPolicy] = [:]
+    /// Per-mode executable allowlists used to classify simple shell calls.
+    var shellAllowlistByMode: [String: String] = [:]
 
     /// Tools enabled for a mode; falls back to that mode's defaults until customised.
     func enabledTools(for mode: AppMode) -> Set<String> {
         enabledToolsByMode[mode.rawValue] ?? Tools.modeEnabledDefaults(mode)
     }
-    func autoApproveTools(for mode: AppMode) -> Set<String> {
-        autoApproveByMode[mode.rawValue] ?? Tools.modeAutoApproveDefaults(mode)
+    func toolsEnabled(for mode: AppMode) -> Bool {
+        toolsEnabledByMode[mode.rawValue] ?? true
+    }
+    func setToolsEnabled(_ enabled: Bool, for mode: AppMode) {
+        toolsEnabledByMode[mode.rawValue] = enabled
+        defaults.set(enabled, forKey: Keys.toolsEnabledKey(mode))
+    }
+    func permissionPolicy(for mode: AppMode) -> PermissionPolicy {
+        permissionPolicyByMode[mode.rawValue] ?? PermissionPolicy()
+    }
+    func setPermissionPolicy(_ policy: PermissionPolicy, for mode: AppMode) {
+        permissionPolicyByMode[mode.rawValue] = policy
+        guard let data = try? JSONEncoder().encode(policy) else { return }
+        defaults.set(data, forKey: Keys.permissionPolicyKey(mode))
+    }
+    func resetToolSettings(for mode: AppMode) {
+        setToolsEnabled(true, for: mode)
+        let enabled = Tools.modeEnabledDefaults(mode)
+        enabledToolsByMode[mode.rawValue] = enabled
+        defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(mode))
+        setPermissionPolicy(PermissionPolicy(), for: mode)
+        setShellAllowlist("", for: mode)
     }
     func setToolEnabled(_ name: String, _ on: Bool, for mode: AppMode) {
         var set = enabledTools(for: mode)
         if on { set.insert(name) } else { set.remove(name) }
         enabledToolsByMode[mode.rawValue] = set
         defaults.set(Array(set), forKey: Keys.enabledToolsKey(mode))
-        if !on { setAutoApprove(name, false, for: mode) }   // disabling drops auto-approve too
     }
-    func setAutoApprove(_ name: String, _ on: Bool, for mode: AppMode) {
-        var set = autoApproveTools(for: mode)
-        if on { set.insert(name) } else { set.remove(name) }
-        autoApproveByMode[mode.rawValue] = set
-        defaults.set(Array(set), forKey: Keys.autoApproveKey(mode))
+    func shellAllowlist(for mode: AppMode) -> String {
+        shellAllowlistByMode[mode.rawValue] ?? ""
     }
-    func shellAutoApproveCommands(for mode: AppMode) -> String {
-        shellAutoApproveCommandsByMode[mode.rawValue] ?? ""
-    }
-    func setShellAutoApproveCommands(_ commands: String, for mode: AppMode) {
-        shellAutoApproveCommandsByMode[mode.rawValue] = commands
-        defaults.set(commands, forKey: Keys.shellAutoApproveCommandsKey(mode))
-    }
-
-    /// Only simple invocations can bypass approval. Shell composition and substitutions must
-    /// still be reviewed, even when the executable itself is listed.
-    func shellCommandIsAutoApproved(_ command: String, for mode: AppMode) -> Bool {
-        let allowed = Set(shellAutoApproveCommands(for: mode)
-            .split(whereSeparator: \Character.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty })
-        guard !allowed.isEmpty else { return false }
-
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        let unsafeSyntax = CharacterSet(charactersIn: "\n\r;&|<>`$()")
-        guard !trimmed.isEmpty, trimmed.rangeOfCharacter(from: unsafeSyntax) == nil,
-              let first = trimmed.split(whereSeparator: \Character.isWhitespace).first else { return false }
-        let executable = String(first)
-        let validName = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._/+"))
-        guard executable.unicodeScalars.allSatisfy(validName.contains) else { return false }
-        let name = URL(fileURLWithPath: executable).lastPathComponent
-        guard allowed.contains(executable) || allowed.contains(name) else { return false }
-
-        if name == "find" {
-            let mutatingActions = ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]
-            let arguments = trimmed.split(whereSeparator: \Character.isWhitespace).dropFirst().map(String.init)
-            guard !arguments.contains(where: { mutatingActions.contains($0.lowercased()) }) else { return false }
-        }
-        return true
+    func setShellAllowlist(_ commands: String, for mode: AppMode) {
+        shellAllowlistByMode[mode.rawValue] = commands
+        defaults.set(commands, forKey: Keys.shellAllowlistKey(mode))
     }
     /// Send attached/generated images to the model. Needs a vision-capable server (mlx-vlm or
     /// LM Studio with a vision model); mlx_lm.server is text-only and rejects image content.
@@ -298,6 +282,8 @@ final class AppSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let savedSettingsVersion = defaults.integer(forKey: Keys.settingsVersion)
+        let isLegacyToolSettings = savedSettingsVersion < 7
         self.baseURL = defaults.string(forKey: Keys.baseURL) ?? "http://127.0.0.1:1234"
         self.model = defaults.string(forKey: Keys.model) ?? "gemma-4-26b-a4b-it-qat-mlx-4bit"
         self.temperature = defaults.object(forKey: Keys.temperature) as? Double ?? 0.7
@@ -346,7 +332,14 @@ final class AppSettings {
         self.ragTopK = defaults.object(forKey: Keys.ragTopK) as? Int ?? 6
         self.vaultPath = defaults.string(forKey: Keys.vaultPath) ?? ""
         self.vaultTopK = defaults.object(forKey: Keys.vaultTopK) as? Int ?? 6
-        self.toolsEnabled = defaults.object(forKey: Keys.toolsEnabled) as? Bool ?? false
+        let legacyToolsEnabled: Bool
+        if savedSettingsVersion == 0 {
+            legacyToolsEnabled = defaults.object(forKey: Keys.toolsEnabled) as? Bool ?? true
+        } else if isLegacyToolSettings {
+            legacyToolsEnabled = defaults.object(forKey: Keys.toolsEnabled) as? Bool ?? false
+        } else {
+            legacyToolsEnabled = true
+        }
         var enabledByMode: [String: Set<String>] = [:]
         var autoByMode: [String: Set<String>] = [:]
         // Legacy flat sets applied to chat AND voice before tools went per-mode; migrate into both.
@@ -354,13 +347,17 @@ final class AppSettings {
         for m in AppMode.allCases {
             if let arr = defaults.stringArray(forKey: Keys.enabledToolsKey(m)) {
                 enabledByMode[m.rawValue] = Set(arr)
-            } else if legacyModes.contains(m), let old = defaults.stringArray(forKey: Keys.enabledTools) {
+            } else if isLegacyToolSettings, legacyModes.contains(m),
+                      let old = defaults.stringArray(forKey: Keys.enabledTools) {
                 enabledByMode[m.rawValue] = Set(old)   // migrate legacy flat set
             }
-            if let arr = defaults.stringArray(forKey: Keys.autoApproveKey(m)) {
-                autoByMode[m.rawValue] = Set(arr)
-            } else if legacyModes.contains(m), let old = defaults.stringArray(forKey: Keys.autoApproveTools) {
-                autoByMode[m.rawValue] = Set(old)
+            if isLegacyToolSettings {
+                if let arr = defaults.stringArray(forKey: Keys.autoApproveKey(m)) {
+                    autoByMode[m.rawValue] = Set(arr)
+                } else if legacyModes.contains(m),
+                          let old = defaults.stringArray(forKey: Keys.autoApproveTools) {
+                    autoByMode[m.rawValue] = Set(old)
+                }
             }
         }
         if defaults.integer(forKey: Keys.settingsVersion) < 3 {
@@ -370,7 +367,8 @@ final class AppSettings {
                 enabledByMode[mode.rawValue] = enabled
                 defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(mode))
 
-                var approved = autoByMode[mode.rawValue] ?? Tools.modeAutoApproveDefaults(mode)
+                var approved = autoByMode[mode.rawValue]
+                    ?? PermissionPolicyMigration.legacyAutoApprovedDefaults(for: mode)
                 approved.insert("calculate")
                 autoByMode[mode.rawValue] = approved
                 defaults.set(Array(approved), forKey: Keys.autoApproveKey(mode))
@@ -384,7 +382,8 @@ final class AppSettings {
             enabledByMode[AppMode.chat.rawValue] = enabled
             defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(.chat))
 
-            var approved = autoByMode[AppMode.chat.rawValue] ?? Tools.modeAutoApproveDefaults(.chat)
+            var approved = autoByMode[AppMode.chat.rawValue]
+                ?? PermissionPolicyMigration.legacyAutoApprovedDefaults(for: .chat)
             approved.formUnion(["vault_search", "vault_read", "vault_list"])
             autoByMode[AppMode.chat.rawValue] = approved
             defaults.set(Array(approved), forKey: Keys.autoApproveKey(.chat))
@@ -400,7 +399,8 @@ final class AppSettings {
                 enabledByMode[mode.rawValue] = enabled
                 defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(mode))
 
-                var approved = autoByMode[mode.rawValue] ?? Tools.modeAutoApproveDefaults(mode)
+                var approved = autoByMode[mode.rawValue]
+                    ?? PermissionPolicyMigration.legacyAutoApprovedDefaults(for: mode)
                 approved.formUnion(recall)
                 autoByMode[mode.rawValue] = approved
                 defaults.set(Array(approved), forKey: Keys.autoApproveKey(mode))
@@ -415,10 +415,32 @@ final class AppSettings {
             defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(.chat))
             defaults.set(6, forKey: Keys.settingsVersion)
         }
+        var modeMasterSwitches: [String: Bool] = [:]
+        var permissionPolicies: [String: PermissionPolicy] = [:]
+        for mode in AppMode.allCases {
+            let masterKey = Keys.toolsEnabledKey(mode)
+            let enabled = defaults.object(forKey: masterKey) as? Bool
+                ?? (mode == .language || legacyToolsEnabled)
+            modeMasterSwitches[mode.rawValue] = enabled
+            defaults.set(enabled, forKey: masterKey)
+
+            let policyKey = Keys.permissionPolicyKey(mode)
+            let savedPolicy = defaults.data(forKey: policyKey)
+                .flatMap { try? JSONDecoder().decode(PermissionPolicy.self, from: $0) }
+            let policy = savedPolicy ?? PermissionPolicyMigration.migrate(
+                mode: mode,
+                legacyAutoApprovedTools: isLegacyToolSettings ? autoByMode[mode.rawValue] : nil)
+            permissionPolicies[mode.rawValue] = policy
+            if savedPolicy == nil, let data = try? JSONEncoder().encode(policy) {
+                defaults.set(data, forKey: policyKey)
+            }
+        }
+        defaults.set(7, forKey: Keys.settingsVersion)
+        self.toolsEnabledByMode = modeMasterSwitches
+        self.permissionPolicyByMode = permissionPolicies
         self.enabledToolsByMode = enabledByMode
-        self.autoApproveByMode = autoByMode
-        self.shellAutoApproveCommandsByMode = Dictionary(uniqueKeysWithValues: AppMode.allCases.compactMap { mode in
-            defaults.string(forKey: Keys.shellAutoApproveCommandsKey(mode)).map { (mode.rawValue, $0) }
+        self.shellAllowlistByMode = Dictionary(uniqueKeysWithValues: AppMode.allCases.compactMap { mode in
+            defaults.string(forKey: Keys.shellAllowlistKey(mode)).map { (mode.rawValue, $0) }
         })
         self.sendImagesToModel = defaults.object(forKey: Keys.sendImagesToModel) as? Bool ?? false
         self.useOnDeviceModel = defaults.object(forKey: Keys.useOnDeviceModel) as? Bool ?? true
@@ -547,11 +569,13 @@ final class AppSettings {
         static let vaultPath = "konishi.vaultPath"
         static let vaultTopK = "konishi.vaultTopK"
         static let toolsEnabled = "konishi.toolsEnabled"
+        static func toolsEnabledKey(_ mode: AppMode) -> String { "konishi.toolsEnabled." + mode.rawValue }
         static let enabledTools = "konishi.enabledTools"
         static let autoApproveTools = "konishi.autoApproveTools"
         static func enabledToolsKey(_ mode: AppMode) -> String { "konishi.enabledTools." + mode.rawValue }
         static func autoApproveKey(_ mode: AppMode) -> String { "konishi.autoApprove." + mode.rawValue }
-        static func shellAutoApproveCommandsKey(_ mode: AppMode) -> String { "konishi.shellAutoApproveCommands." + mode.rawValue }
+        static func permissionPolicyKey(_ mode: AppMode) -> String { "konishi.permissionPolicy." + mode.rawValue }
+        static func shellAllowlistKey(_ mode: AppMode) -> String { "konishi.shellAutoApproveCommands." + mode.rawValue }
         static let sendImagesToModel = "konishi.sendImagesToModel"
         static let useOnDeviceModel = "konishi.useOnDeviceModel"
         static let settingsVersion = "konishi.settingsVersion"

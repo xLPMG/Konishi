@@ -20,8 +20,14 @@ enum AgentTaskEntry {
 }
 
 enum AgentToolLoopPolicy {
+    static let permissionDenialCeiling = 5
+
     static func shouldStopAutopilotBatch(repeats: Int, autopilot: Bool) -> Bool {
         autopilot && repeats >= 3
+    }
+
+    static func shouldStopForPermissionDenials(count: Int, autopilot: Bool) -> Bool {
+        autopilot && count >= permissionDenialCeiling
     }
 
     static func remainingCalls(after index: Int, in calls: [ToolCall]) -> [ToolCall] {

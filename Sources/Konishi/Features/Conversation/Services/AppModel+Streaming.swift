@@ -98,15 +98,16 @@ extension AppModel {
         let pinnedContext = ContextPin.promptText(for: conversations[idx].contextPins ?? [])
         var config = settings.requestConfig(modelOverride: persona.model)
         config.enableThinking = settings.reasoningEnabled
-        let tools: [ToolDef]?
-        if mode == .language {
-            tools = Tools.definitions(enabled: settings.enabledTools(for: .language))
-        } else if settings.toolsEnabled {
-            var enabled = settings.enabledTools(for: mode)
-            if !persona.vaultAccessEnabled { enabled.subtract(Tools.vaultToolNames) }
-            tools = Tools.definitions(enabled: enabled)
-        } else {
-            tools = nil
+        let toolSurface: PermissionSurface = workSession?.autopilot == true ? .unattended : .interactive
+        let permissionContext = toolPermissionContext(
+            conversationID: conversationID, surface: toolSurface)
+        let visibleTools = ToolPermissions.visibleTools(
+            context: permissionContext
+        )
+        let unattendedGuidance = toolSurface == .unattended
+            ? ToolPermissions.unattendedGuidance(context: permissionContext) : ""
+        let tools: [ToolDef]? = visibleTools.isEmpty ? nil : visibleTools.map {
+            .function(name: $0.name, description: $0.description, parameters: $0.parameters)
         }
 
         isStreaming = true
@@ -116,12 +117,14 @@ extension AppModel {
 
         streamTask = Task { [weak self] in
             guard let self else { return }
-            let systemText =
+            let baseSystemText =
                 self.mode == .language
                 ? languageSystemPrompt(persona: persona)
                 : personaStore.stableSystemPrompt(
                     persona: persona, injectDateContext: settings.injectDateContext, mode: mode,
                     vaultConfigured: !settings.vaultPath.isEmpty)
+            let systemText = unattendedGuidance.isEmpty
+                ? baseSystemText : baseSystemText + "\n\n" + unattendedGuidance
             async let memTask = self.memoryContext(
                 conversationID: conversationID, persona: persona, history: history)
             async let docTask = self.documentContext(
@@ -238,12 +241,6 @@ extension AppModel {
                             saveTraces: settings.saveTraces)
                     case .toolCalls(let calls):
                         toolCalls = calls
-                        for c in calls {
-                            traceStore.trace(
-                                conversationID: conversationID, kind: .tool,
-                                text: "\(c.function.name ?? "tool")(\(c.function.arguments))",
-                                saveTraces: settings.saveTraces)
-                        }
                     case .finish(let reason):
                         finishReason = reason
                         traceStore.trace(
@@ -611,7 +608,7 @@ extension AppModel {
                 # Conversation workspace
                 Your writable workspace for this conversation is: \(workspacePath)
                 Use workspace-relative paths by default. file_read and file_write resolve relative paths here; python_exec and run_shell also start here. Files saved here appear in the Files inspector. Use another location only when the user explicitly requests one. Use file_write for ordinary text files; python_exec expects Python code, never shell syntax.
-                For explicitly requested external access, file_read accepts absolute or ~ paths; run_shell can use an absolute path or working_directory subject to its normal enablement and approval settings. file_write always stays inside this workspace.
+                For explicitly requested external access, file_read and file_write accept absolute or ~ paths and require permission; run_shell can use an absolute path or working_directory subject to its normal enablement and permission settings.
                 """))
         }
         let summaryText = summary.trimmingCharacters(in: .whitespacesAndNewlines)
