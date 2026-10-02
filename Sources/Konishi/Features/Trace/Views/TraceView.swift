@@ -127,6 +127,17 @@ struct TraceView: View {
                     .foregroundStyle(Self.color(entry.kind))
                 Text(entry.date, format: .dateTime.hour().minute().second())
                     .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    let text = [Self.line(entry), entry.detail].compactMap { $0 }.joined(separator: "\n")
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .help("Copy event")
             }
             Text(entry.text)
                 .font(.system(size: 11, design: .monospaced))
