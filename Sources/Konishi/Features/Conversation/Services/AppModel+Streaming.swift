@@ -129,6 +129,13 @@ extension AppModel {
             async let vaultTask = self.vaultContext(
                 conversationID: conversationID, persona: persona, history: history)
             let (memoryText, documentText, vaultText) = await (memTask, docTask, vaultTask)
+            let contextReady = Date()
+            traceStore.trace(
+                conversationID: conversationID, kind: .info,
+                text: String(
+                    format: "Context preparation completed after %.0f ms",
+                    contextReady.timeIntervalSince(start) * 1000),
+                saveTraces: settings.saveTraces)
             let wire = self.buildWire(
                 systemText: systemText, summary: summary, memoryText: memoryText,
                 documentText: documentText, vaultText: vaultText,
@@ -152,23 +159,29 @@ extension AppModel {
             var toolCalls: [ToolCall]?
             var caughtError = false
             var interruption: AgentWorkPauseReason?
+            let requestStart = Date()
+            var didTraceFirstServerEvent = false
             var stripper = ThinkStripper()  // strip inline chain-of-thought some models emit as content
             var repeatedLineGuard = RepeatedLineGuard()
             do {
                 streamLoop: for try await event in ChatService.stream(
                     config: config, messages: wire, tools: tools, toolChoice: nil)
                 {
+                    if !didTraceFirstServerEvent {
+                        let eventAt = Date()
+                        didTraceFirstServerEvent = true
+                        traceStore.trace(
+                            conversationID: conversationID, kind: .info,
+                            text: String(
+                                format: "First server event after %.0f ms",
+                                eventAt.timeIntervalSince(requestStart) * 1000),
+                            saveTraces: settings.saveTraces)
+                    }
                     switch event {
                     case .delta(let d):
                         if firstGenerationAt == nil { firstGenerationAt = Date() }
                         if firstTokenAt == nil {
                             firstTokenAt = Date()
-                            traceStore.trace(
-                                conversationID: conversationID, kind: .token,
-                                text: String(
-                                    format: "First token after %.0f ms",
-                                    Date().timeIntervalSince(start) * 1000),
-                                saveTraces: settings.saveTraces)
                         }
                         let out = stripper.consume(d)
                         if !out.reasoning.isEmpty || !out.visible.isEmpty {

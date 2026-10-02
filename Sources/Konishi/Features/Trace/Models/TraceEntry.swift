@@ -2,7 +2,7 @@ import Foundation
 
 /// One entry in a conversation's live request/response trace.
 struct TraceEntry: Identifiable, Sendable, Codable {
-    enum Kind: String, Sendable, Codable {
+    enum Kind: String, CaseIterable, Sendable, Codable {
         case request, token, reasoning, usage, tool, result, finish, error, info, compress, memory
     }
 

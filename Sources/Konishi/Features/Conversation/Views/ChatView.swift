@@ -1257,7 +1257,8 @@ private struct LiveAssistantStepView: View {
                 ReasoningDisclosureView(reasoning: reasoning, title: "Reasoning")
             }
             if !content.isEmpty {
-                MarkdownView(text: content, baseSize: baseSize, sources: sources)
+                Text(content)
+                    .font(.system(size: baseSize))
                     .textSelection(.enabled)
             }
         }

@@ -5,15 +5,23 @@ struct TraceView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var pinned = true
     @State private var expanded: Set<UUID> = []
+    @State private var filterText = ""
+    @State private var selectedKinds = Set(TraceEntry.Kind.allCases.filter { $0 != .token })
+
+    private static let filterableKinds = TraceEntry.Kind.allCases.filter { $0 != .token }
 
     var body: some View {
+        let visibleTrace = model.currentTrace.filter { $0.kind != .token }
+        let totalTraceCount = model.currentTrace.count
+        let entries = filteredTrace(from: visibleTrace)
         VStack(spacing: 0) {
             HStack {
                 Text("Trace").font(.headline)
                 Spacer()
-                Text("\(model.currentTrace.count) events").font(.caption).foregroundStyle(.secondary)
+                Text("\(entries.count) of \(visibleTrace.count) events")
+                    .font(.caption).foregroundStyle(.secondary)
                 Button {
-                    let text = model.currentTrace.map(Self.line).joined(separator: "\n")
+                    let text = entries.map(Self.line).joined(separator: "\n")
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(text, forType: .string)
                 } label: { Label("Copy", systemImage: "doc.on.doc") }
@@ -24,14 +32,48 @@ struct TraceView: View {
             }
             .padding(10)
             Divider()
+            HStack(spacing: 10) {
+                TextField("Filter events", text: $filterText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 300)
+                Menu {
+                    Button("Select All Types") { selectedKinds = Set(Self.filterableKinds) }
+                    Button("Clear Type Selection") { selectedKinds.removeAll() }
+                    Divider()
+                    ForEach(Self.filterableKinds, id: \.self) { kind in
+                        Toggle(kind.rawValue.capitalized, isOn: Binding(
+                            get: { selectedKinds.contains(kind) },
+                            set: { isSelected in
+                                if isSelected {
+                                    selectedKinds.insert(kind)
+                                } else {
+                                    selectedKinds.remove(kind)
+                                }
+                            }
+                        ))
+                    }
+                } label: {
+                    Label(typeFilterLabel, systemImage: "line.3.horizontal.decrease.circle")
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            Divider()
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 6) {
-                        ForEach(model.currentTrace) { entry in
+                        ForEach(entries) { entry in
                             row(entry).id(entry.id)
                         }
-                        if model.currentTrace.isEmpty {
+                        if totalTraceCount == 0 {
                             Text("No events yet. Send a message to see the request/response trace.")
+                                .foregroundStyle(.secondary).padding()
+                        } else if visibleTrace.isEmpty {
+                            Text("No events to display.")
+                                .foregroundStyle(.secondary).padding()
+                        } else if entries.isEmpty {
+                            Text("No events match these filters.")
                                 .foregroundStyle(.secondary).padding()
                         }
                     }
@@ -42,8 +84,8 @@ struct TraceView: View {
                 } action: { _, atBottom in
                     pinned = atBottom
                 }
-                .onChange(of: model.currentTrace.count) {
-                    guard pinned, let last = model.currentTrace.last else { return }
+                .onChange(of: entries.last?.id) {
+                    guard pinned, let last = entries.last else { return }
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
@@ -55,6 +97,23 @@ struct TraceView: View {
         }
         .onChange(of: model.selectedConversationID) { _, id in
             if let id { model.traceStore.ensureTraceLoaded(conversationID: id) }
+        }
+    }
+
+    private var typeFilterLabel: String {
+        if selectedKinds.count == Self.filterableKinds.count { return "All Types" }
+        if selectedKinds.isEmpty { return "No Types" }
+        return "Types (\(selectedKinds.count))"
+    }
+
+    private func filteredTrace(from trace: [TraceEntry]) -> [TraceEntry] {
+        let query = filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trace.filter { entry in
+            guard selectedKinds.contains(entry.kind) else { return false }
+            guard !query.isEmpty else { return true }
+            return entry.kind.rawValue.localizedCaseInsensitiveContains(query)
+                || entry.text.localizedCaseInsensitiveContains(query)
+                || (entry.detail?.localizedCaseInsensitiveContains(query) ?? false)
         }
     }
 
