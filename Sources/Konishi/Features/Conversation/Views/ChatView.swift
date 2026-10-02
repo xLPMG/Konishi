@@ -580,6 +580,8 @@ struct ChatView: View {
                     .frame(width: 42, height: 42)
             }
             .buttonStyle(.plain)
+            .fixedSize()
+            .layoutPriority(1)
             .background(model.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.currentPalette.border, lineWidth: 1))
             .help("Dictate")
@@ -592,6 +594,8 @@ struct ChatView: View {
                     .background(model.currentAccent, in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
+            .fixedSize()
+            .layoutPriority(1)
             .disabled(!model.canSend)
             .opacity(model.canSend ? 1 : 0.45)
             .keyboardShortcut(.return, modifiers: .command)

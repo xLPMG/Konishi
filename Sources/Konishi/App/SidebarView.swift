@@ -89,12 +89,18 @@ struct SidebarView: View {
                     Text(convo.title)
                         .font(.body.weight(model.selectedConversationID == convo.id ? .semibold : .regular))
                         .lineLimit(1)
-                    Text(persona.name).font(.caption2).foregroundStyle(.secondary)
+                        .truncationMode(.tail)
+                    Text(persona.name)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer(minLength: 0)
         }
-        .padding(.leading, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, 8)
         .listRowBackground(
             RoundedRectangle(cornerRadius: 7)
                 .fill(isSelected ? model.currentPalette.surfaceRaised : Color.clear)

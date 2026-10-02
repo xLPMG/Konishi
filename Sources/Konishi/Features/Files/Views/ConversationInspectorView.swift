@@ -33,20 +33,20 @@ struct ConversationInspectorView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 6) {
-                        DisclosureGroup(isExpanded: $tasksExpanded) {
-                            ConversationTaskBoard(showsHeader: false)
-                        } label: {
-                            HStack {
-                                Label("Tasks & Notes", systemImage: "checklist")
-                                Spacer()
-                                Text("\(tasks.filter { $0.status == .done }.count)/\(tasks.count)")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
+                    DisclosureGroup(isExpanded: $tasksExpanded) {
+                        ConversationTaskBoard(showsHeader: false)
+                    } label: {
+                        HStack {
+                            Label("Tasks & Notes", systemImage: "checklist")
+                            Spacer()
+                            Text("\(tasks.filter { $0.status == .done }.count)/\(tasks.count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
+                        .padding(.trailing, tasks.isEmpty ? 0 : 30)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(alignment: .topTrailing) {
                         if !tasks.isEmpty {
                             Button(role: .destructive) {
                                 confirmingClearTasks = true
@@ -99,7 +99,8 @@ struct ConversationInspectorView: View {
                 .padding(12)
             }
         }
-        .background(model.currentPalette.sidebar)
+        .clipped()
+        .background(model.currentPalette.sidebar.ignoresSafeArea(edges: .top))
         .confirmationDialog(
             "Remove all tasks?", isPresented: $confirmingClearTasks,
             titleVisibility: .visible
