@@ -126,6 +126,7 @@ struct DeckView: View {
             CardDetail(
                 item: item,
                 onSaveAcceptedAnswers: { values in workspace.saveAcceptedAnswers(for: id, values: values) },
+                onSaveAcceptedTranslations: { values in workspace.saveAcceptedTranslations(for: id, values: values) },
                 onDelete: { workspace.deleteDeckItem(id); selection = nil })
                 .id(item.id)
         } else {
@@ -170,15 +171,23 @@ struct DeckView: View {
 private struct CardDetail: View {
     let item: LearnItem
     let onSaveAcceptedAnswers: ([String]) -> Bool
+    let onSaveAcceptedTranslations: ([String]) -> Bool
     let onDelete: () -> Void
     @State private var acceptedAnswersText: String
     @State private var acceptedAnswersStatus: String?
+    @State private var acceptedTranslationsText: String
+    @State private var acceptedTranslationsStatus: String?
 
-    init(item: LearnItem, onSaveAcceptedAnswers: @escaping ([String]) -> Bool, onDelete: @escaping () -> Void) {
+    init(
+        item: LearnItem, onSaveAcceptedAnswers: @escaping ([String]) -> Bool,
+        onSaveAcceptedTranslations: @escaping ([String]) -> Bool, onDelete: @escaping () -> Void
+    ) {
         self.item = item
         self.onSaveAcceptedAnswers = onSaveAcceptedAnswers
+        self.onSaveAcceptedTranslations = onSaveAcceptedTranslations
         self.onDelete = onDelete
         _acceptedAnswersText = State(initialValue: item.acceptedAnswers.joined(separator: "\n"))
+        _acceptedTranslationsText = State(initialValue: item.acceptedTranslations.joined(separator: "\n"))
     }
 
     var body: some View {
@@ -217,7 +226,7 @@ private struct CardDetail: View {
                 if item.kind == .vocab {
                     Divider()
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Accepted target-language answers").font(.headline)
+                        Text("Accepted target-language forms").font(.headline)
                         TextField("Alternate forms, one per line", text: $acceptedAnswersText, axis: .vertical)
                             .textFieldStyle(.roundedBorder)
                             .lineLimit(2...5)
@@ -233,6 +242,27 @@ private struct CardDetail: View {
                                 acceptedAnswersStatus = onSaveAcceptedAnswers(values)
                                     ? "Saved"
                                     : "Could not save answers"
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Accepted translation answers").font(.headline)
+                        TextField("Alternative translations, one per line", text: $acceptedTranslationsText, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(2...5)
+                        HStack {
+                            if let acceptedTranslationsStatus {
+                                Text(acceptedTranslationsStatus).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Save translations") {
+                                let values = acceptedTranslationsText
+                                    .split(whereSeparator: \.isNewline)
+                                    .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                                acceptedTranslationsStatus = onSaveAcceptedTranslations(values)
+                                    ? "Saved"
+                                    : "Could not save translations"
                             }
                             .buttonStyle(.bordered)
                         }

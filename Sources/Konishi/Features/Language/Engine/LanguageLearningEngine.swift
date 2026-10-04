@@ -304,7 +304,14 @@ enum LanguageLearningEngine {
     }
 
     private static func acceptedAnswers(for item: LearnItem, primary: String) -> [String] {
-        let approvedAlternatives = primary == item.term ? item.acceptedAnswers : []
+        let approvedAlternatives: [String]
+        if primary == item.term {
+            approvedAlternatives = item.acceptedAnswers
+        } else if primary == item.translation {
+            approvedAlternatives = item.acceptedTranslations
+        } else {
+            approvedAlternatives = []
+        }
         return ([primary] + approvedAlternatives)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }

@@ -160,7 +160,8 @@ struct LanguageWorkspaceModelTests {
         store.upsertProfile(profile)
         let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
         let proposal = VocabularyProposal(
-            targetTerm: "学校", translation: "school", reading: "がっこう",
+            targetTerm: "学校", translation: "school", acceptedTranslations: ["school building", "academy"],
+            reading: "がっこう",
             partOfSpeech: "noun", example: "学校へ行きます", tags: ["places"])
         workspace.studyProposals = [proposal]
 
@@ -168,7 +169,9 @@ struct LanguageWorkspaceModelTests {
         #expect(!workspace.isDuplicateProposal(proposal))
         #expect(workspace.saveProposal(proposal))
         #expect(workspace.studyProposals.isEmpty)
-        #expect(store.findByTerm(profileID: profile.id, kind: .vocab, term: "学校")?.translation == "school")
+        let savedItem = try #require(store.findByTerm(profileID: profile.id, kind: .vocab, term: "学校"))
+        #expect(savedItem.translation == "school")
+        #expect(savedItem.acceptedTranslations == ["school building", "academy"])
         #expect(workspace.isDuplicateProposal(proposal))
         #expect(!workspace.saveProposal(proposal))
         #expect(store.items(profileID: profile.id).count == 1)
@@ -193,6 +196,31 @@ struct LanguageWorkspaceModelTests {
         workspace.sessionLength = 1
         workspace.startPractice()
         workspace.submitAnswer(.text("ねこ"))
+
+        #expect(workspace.answerRecorded)
+        #expect(store.item(id: card.id)?.timesCorrect == 1)
+    }
+
+    @Test("accepted translation alternatives persist and grade translation recall")
+    @MainActor
+    func acceptedTranslationRoundTrip() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        let card = makeCard(profileID: profile.id, term: "움직이다", translation: "to move")
+        store.upsertProfile(profile)
+        store.upsert(card)
+        let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
+
+        #expect(workspace.saveAcceptedTranslations(
+            for: card.id, values: ["to be moving", " TO MOVE ", "to shift"]))
+        #expect(store.item(id: card.id)?.acceptedTranslations == ["to be moving", "to shift"])
+
+        workspace.selectedActivity = .typedRecall
+        workspace.questionDirection = .targetToBase
+        workspace.sessionLength = 1
+        workspace.startPractice()
+        workspace.submitAnswer(.text("to be moving"))
 
         #expect(workspace.answerRecorded)
         #expect(store.item(id: card.id)?.timesCorrect == 1)

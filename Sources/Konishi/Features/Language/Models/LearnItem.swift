@@ -47,6 +47,8 @@ struct LearnItem: Identifiable, Equatable, Sendable {
     var tags: [String]
     /// Additional answers explicitly approved by the learner for typed recall.
     var acceptedAnswers: [String]
+    /// Additional explanation-language translations approved for typed recall.
+    var acceptedTranslations: [String]
 
     // Leitner scheduling
     var box: Int                // 1…5
@@ -83,6 +85,7 @@ struct LearnItem: Identifiable, Equatable, Sendable {
         examples: [String] = [],
         tags: [String] = [],
         acceptedAnswers: [String] = [],
+        acceptedTranslations: [String] = [],
         box: Int = 1,
         dueDate: Date? = nil,
         timesSeen: Int = 0,
@@ -104,6 +107,7 @@ struct LearnItem: Identifiable, Equatable, Sendable {
         self.examples = examples
         self.tags = tags
         self.acceptedAnswers = acceptedAnswers
+        self.acceptedTranslations = acceptedTranslations
         self.box = min(max(box, 1), Self.boxCount)
         // A brand-new card hasn't been studied yet, so it's due immediately (today); the box
         // interval only kicks in after the first review.

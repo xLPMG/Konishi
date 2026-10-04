@@ -108,6 +108,12 @@ final class LanguageStore {
                     try execute("PRAGMA user_version = 3;")
                 }
             }
+            if version < 4 {
+                try transaction {
+                    try addColumn("acceptedTranslations", definition: "TEXT NOT NULL DEFAULT '[]'", table: "items")
+                    try execute("PRAGMA user_version = 4;")
+                }
+            }
         } catch {
             initializationError = error.localizedDescription
             NSLog("LanguageStore: migration failed: \(error.localizedDescription)")
@@ -246,8 +252,8 @@ final class LanguageStore {
     @discardableResult
     func upsert(_ item: LearnItem) -> Bool {
         let sql = """
-        INSERT INTO items (id, profileID, kind, term, reading, translation, partOfSpeech, register, notes, examples, tags, box, dueDate, timesSeen, timesCorrect, timesWrong, createdAt, lastReviewedAt, sourceConversationID, acceptedAnswers)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO items (id, profileID, kind, term, reading, translation, partOfSpeech, register, notes, examples, tags, box, dueDate, timesSeen, timesCorrect, timesWrong, createdAt, lastReviewedAt, sourceConversationID, acceptedAnswers, acceptedTranslations)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             kind=excluded.kind, term=excluded.term, reading=excluded.reading, translation=excluded.translation,
             partOfSpeech=excluded.partOfSpeech, register=excluded.register, notes=excluded.notes,
@@ -255,7 +261,7 @@ final class LanguageStore {
             box=excluded.box, dueDate=excluded.dueDate, timesSeen=excluded.timesSeen,
             timesCorrect=excluded.timesCorrect, timesWrong=excluded.timesWrong,
             lastReviewedAt=excluded.lastReviewedAt, sourceConversationID=excluded.sourceConversationID,
-            acceptedAnswers=excluded.acceptedAnswers;
+            acceptedAnswers=excluded.acceptedAnswers, acceptedTranslations=excluded.acceptedTranslations;
         """
         var saved = false
         prepared(sql) { stmt in
@@ -279,6 +285,7 @@ final class LanguageStore {
             if let r = item.lastReviewedAt { sqlite3_bind_double(stmt, 18, r.timeIntervalSince1970) } else { sqlite3_bind_null(stmt, 18) }
             if let c = item.sourceConversationID { bind(stmt, 19, c.uuidString) } else { sqlite3_bind_null(stmt, 19) }
             bind(stmt, 20, Self.encodeArray(item.acceptedAnswers))
+            bind(stmt, 21, Self.encodeArray(item.acceptedTranslations))
             saved = sqlite3_step(stmt) == SQLITE_DONE
         }
         return saved
@@ -654,7 +661,7 @@ final class LanguageStore {
     // MARK: - Row mapping
 
     private static let itemSelect = """
-    SELECT id, profileID, kind, term, reading, translation, partOfSpeech, register, notes, examples, tags, box, dueDate, timesSeen, timesCorrect, timesWrong, createdAt, lastReviewedAt, sourceConversationID, acceptedAnswers FROM items
+    SELECT id, profileID, kind, term, reading, translation, partOfSpeech, register, notes, examples, tags, box, dueDate, timesSeen, timesCorrect, timesWrong, createdAt, lastReviewedAt, sourceConversationID, acceptedAnswers, acceptedTranslations FROM items
     """
 
     private static func readItem(_ stmt: OpaquePointer?) -> LearnItem {
@@ -671,6 +678,7 @@ final class LanguageStore {
             examples: decodeArray(text(stmt, 9)),
             tags: decodeArray(text(stmt, 10)),
             acceptedAnswers: decodeArray(text(stmt, 19)),
+            acceptedTranslations: decodeArray(text(stmt, 20)),
             box: Int(sqlite3_column_int(stmt, 11)),
             dueDate: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 12)),
             timesSeen: Int(sqlite3_column_int(stmt, 13)),

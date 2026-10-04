@@ -154,6 +154,24 @@ final class LanguageWorkspaceModel {
         return true
     }
 
+    @discardableResult
+    func saveAcceptedTranslations(for itemID: UUID, values: [String]) -> Bool {
+        guard let profileID = activeProfile?.id,
+              var item = store.item(id: itemID),
+              item.profileID == profileID, item.kind == .vocab
+        else { return false }
+        var seen: Set<String> = [LanguageLearningEngine.normalizeAnswer(item.translation)]
+        item.acceptedTranslations = values.compactMap { value in
+            let answer = value.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
+            let key = LanguageLearningEngine.normalizeAnswer(answer)
+            guard !key.isEmpty, seen.insert(key).inserted else { return nil }
+            return answer
+        }
+        guard store.upsert(item) else { return false }
+        notifyDeckChanged()
+        return true
+    }
+
     func startPractice() {
         guard let profile = activeProfile else {
             reviewError = "Set up a language profile first."
@@ -332,7 +350,8 @@ final class LanguageWorkspaceModel {
             profileID: profile.id, kind: .vocab, term: clean.targetTerm,
             reading: clean.reading, translation: clean.translation,
             partOfSpeech: clean.partOfSpeech, register: clean.register, notes: clean.notes,
-            examples: clean.example.isEmpty ? [] : [clean.example], tags: clean.tags)
+            examples: clean.example.isEmpty ? [] : [clean.example], tags: clean.tags,
+            acceptedTranslations: clean.acceptedTranslations)
         guard store.upsert(item) else {
             proposalError = "Could not save this vocabulary card."
             return false

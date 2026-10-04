@@ -4,6 +4,7 @@ struct VocabularyProposal: Identifiable, Equatable, Sendable {
     let id: UUID
     var targetTerm: String
     var translation: String
+    var acceptedTranslations: [String]
     var reading: String
     var partOfSpeech: String
     var register: String
@@ -12,13 +13,15 @@ struct VocabularyProposal: Identifiable, Equatable, Sendable {
     var tags: [String]
 
     init(
-        id: UUID = UUID(), targetTerm: String, translation: String, reading: String = "",
+        id: UUID = UUID(), targetTerm: String, translation: String, acceptedTranslations: [String] = [],
+        reading: String = "",
         partOfSpeech: String = "", register: String = "", example: String = "",
         notes: String = "", tags: [String] = []
     ) {
         self.id = id
         self.targetTerm = targetTerm
         self.translation = translation
+        self.acceptedTranslations = acceptedTranslations
         self.reading = reading
         self.partOfSpeech = partOfSpeech
         self.register = register
@@ -31,8 +34,16 @@ struct VocabularyProposal: Identifiable, Equatable, Sendable {
         let term = Self.normalizeField(targetTerm)
         let meaning = Self.normalizeField(translation)
         guard !term.isEmpty, !meaning.isEmpty else { return nil }
+        var seenTranslations: Set<String> = [LanguageLearningEngine.normalizeAnswer(meaning)]
+        let cleanAcceptedTranslations = acceptedTranslations.compactMap { value -> String? in
+            let answer = Self.normalizeField(value)
+            guard !answer.isEmpty,
+                  seenTranslations.insert(LanguageLearningEngine.normalizeAnswer(answer)).inserted
+            else { return nil }
+            return answer
+        }
         return VocabularyProposal(
-            id: id, targetTerm: term, translation: meaning,
+            id: id, targetTerm: term, translation: meaning, acceptedTranslations: cleanAcceptedTranslations,
             reading: Self.normalizeField(reading), partOfSpeech: Self.normalizeField(partOfSpeech),
             register: Self.normalizeField(register), example: Self.normalizeField(example),
             notes: Self.normalizeField(notes),

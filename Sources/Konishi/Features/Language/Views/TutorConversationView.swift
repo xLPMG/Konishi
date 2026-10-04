@@ -4,6 +4,8 @@ struct TutorConversationView: View {
     @Environment(AppModel.self) private var appModel
     @Bindable var workspace: LanguageWorkspaceModel
     @State private var confirmDelete = false
+    @State private var threadPendingDeletion: LanguageTutorThread?
+    @FocusState private var inputFocused: Bool
 
     private var selectedThread: LanguageTutorThread? {
         workspace.tutorThreads.first { $0.id == workspace.selectedTutorThreadID }
@@ -22,23 +24,45 @@ struct TutorConversationView: View {
         .onChange(of: appModel.voice.isListening) { _, listening in
             if !listening { appModel.voice.stopDictation() }
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .automatic) {
+                if appModel.voice.isSpeaking {
+                    Button { appModel.voice.stopSpeaking() } label: {
+                        Label("Stop Voice", systemImage: "speaker.slash")
+                    }
+                }
+                if workspace.isTutorStreaming {
+                    Button(role: .destructive) { workspace.cancelTutorTurn() } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                    }
+                }
+            }
+        }
         .confirmationDialog(
-            "Delete this tutor thread?", isPresented: $confirmDelete, titleVisibility: .visible
+            "Delete this tutor conversation?", isPresented: $confirmDelete, titleVisibility: .visible
         ) {
-            Button("Delete Thread", role: .destructive) {
-                if let id = workspace.selectedTutorThreadID { workspace.deleteTutorThread(id) }
-                if workspace.tutorThreads.isEmpty && workspace.activeProfile != nil { workspace.createTutorThread() }
+            Button("Delete Conversation", role: .destructive) {
+                if let thread = threadPendingDeletion {
+                    if thread.id == workspace.selectedTutorThreadID { appModel.voice.stopSpeaking() }
+                    workspace.deleteTutorThread(thread.id)
+                }
+                threadPendingDeletion = nil
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes only the selected language tutor thread.")
+            Text("This permanently deletes this tutor conversation.")
         }
     }
 
     private var threadList: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Tutor threads").font(.headline)
+                Text(workspace.activeProfile.map {
+                    "Tutor threads for \($0.targetName) & \($0.baseName)"
+                } ?? "Tutor threads")
+                .font(.headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
                 Spacer()
                 Button { workspace.createTutorThread() } label: {
                     Image(systemName: "square.and.pencil")
@@ -60,6 +84,14 @@ struct TutorConversationView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        Button(role: .destructive) {
+                            threadPendingDeletion = thread
+                            confirmDelete = true
+                        } label: {
+                            Label("Delete Conversation", systemImage: "trash")
+                        }
+                    }
                     .listRowBackground(
                         RoundedRectangle(cornerRadius: 6)
                             .fill(workspace.selectedTutorThreadID == thread.id
@@ -78,25 +110,6 @@ struct TutorConversationView: View {
     @ViewBuilder private var conversation: some View {
         if let profile = workspace.activeProfile, let thread = selectedThread {
             VStack(spacing: 0) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(thread.title).font(.headline).lineLimit(1)
-                        Text("\(profile.targetName) · \(profile.baseName)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button {
-                        appModel.voice.stopSpeaking()
-                        confirmDelete = true
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.plain)
-                    .help("Delete tutor thread")
-                }
-                .padding(.horizontal, 16).padding(.vertical, 11)
-                Divider()
-
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         ForEach(thread.messages) { message in
@@ -177,49 +190,94 @@ struct TutorConversationView: View {
     }
 
     private func inputBar(profile: LanguageProfile) -> some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            if appModel.voice.isListening {
-                Button {
-                    appModel.voice.stopDictation()
-                } label: {
-                    Image(systemName: "waveform.slash")
-                }
-                .help("Stop dictation")
-            } else {
-                Menu {
-                    Button(profile.targetName) { startDictation(locale: profile.targetLocale) }
-                    Button(profile.baseName) { startDictation(locale: profile.baseLocale) }
-                } label: {
-                    Image(systemName: "mic")
-                }
-                .help("Dictate in target or explanation language")
+        HStack(alignment: .center, spacing: 8) {
+            HStack(spacing: 9) {
+                TextField("Message tutor", text: $workspace.tutorDraft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: appModel.settings.fontSize))
+                    .lineLimit(1...8)
+                    .padding(.vertical, 4)
+                    .focused($inputFocused)
+                    .onKeyPress(keys: [.return]) { keyPress in
+                        if keyPress.modifiers.contains(.shift) {
+                            workspace.tutorDraft.append("\n")
+                            return .handled
+                        }
+                        send()
+                        return .handled
+                    }
+                    .disabled(workspace.isTutorStreaming)
             }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 5)
+            .frame(minHeight: 42)
+            .background(appModel.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 14))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(inputFocused ? appModel.currentAccent.opacity(0.62) : appModel.currentPalette.border,
+                            lineWidth: inputFocused ? 1.25 : 1)
+            }
+            .shadow(color: appModel.currentAccent.opacity(inputFocused ? 0.09 : 0.025),
+                    radius: inputFocused ? 12 : 6, y: 3)
+            .animation(.easeOut(duration: 0.16), value: inputFocused)
 
-            TextField("Message tutor", text: $workspace.tutorDraft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...5)
-                .onSubmit(send)
-                .disabled(workspace.isTutorStreaming)
+            dictationButton(profile: profile)
 
             Button(action: send) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 22))
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 42, height: 42)
+                    .background(appModel.currentAccent, in: RoundedRectangle(cornerRadius: 12))
             }
             .buttonStyle(.plain)
+            .fixedSize()
+            .layoutPriority(1)
+            .disabled(workspace.tutorDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || workspace.isTutorStreaming)
+            .opacity(workspace.tutorDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || workspace.isTutorStreaming ? 0.45 : 1)
             .help("Send message")
-            .disabled(workspace.tutorDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.isTutorStreaming)
+            .keyboardShortcut(.return, modifiers: .command)
         }
-        .padding(.horizontal, 13).padding(.vertical, 10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.18), lineWidth: 1))
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 12)
+        .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private func dictationButton(profile: LanguageProfile) -> some View {
+        Button {
+            if appModel.voice.isListening {
+                appModel.voice.stopDictation()
+            } else {
+                startDictation(locale: profile.targetLocale)
+            }
+        } label: {
+            Image(systemName: appModel.voice.isListening ? "mic.fill" : "mic")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(appModel.voice.isListening ? .red : .primary)
+                .symbolEffect(.pulse, isActive: appModel.voice.isListening)
+                .frame(width: 42, height: 42)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .layoutPriority(1)
+        .background(appModel.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(appModel.currentPalette.border, lineWidth: 1))
+        .help(appModel.voice.isListening ? "Stop dictation" : "Dictate in \(profile.targetName)")
+        .contextMenu {
+            Button("Dictate in \(profile.targetName)") {
+                startDictation(locale: profile.targetLocale)
+            }
+            Button("Dictate in \(profile.baseName)") {
+                startDictation(locale: profile.baseLocale)
+            }
+        }
     }
 
     private func prepareThreads() {
         workspace.refreshTutorThreads()
-        if workspace.tutorThreads.isEmpty && workspace.activeProfile != nil {
-            workspace.createTutorThread()
-        }
     }
 
     private func threadActivityLabel(_ date: Date) -> String {

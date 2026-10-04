@@ -64,6 +64,11 @@ struct StudyView: View {
                     .frame(maxWidth: 180)
             }
             themedField("Translation", text: proposal.translation)
+            themedField("Alternative translations, one per line", text: Binding(
+                get: { proposal.wrappedValue.acceptedTranslations.joined(separator: "\n") },
+                set: { proposal.wrappedValue.acceptedTranslations = $0.split(whereSeparator: \.isNewline).map(String.init) }),
+                axis: .vertical)
+                .lineLimit(2...4)
             HStack(spacing: 10) {
                 themedField("Part of speech", text: proposal.partOfSpeech)
                 themedField("Register", text: proposal.register)

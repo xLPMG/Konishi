@@ -8,6 +8,7 @@ enum LanguageTutorService {
     private struct Proposal: Decodable {
         let targetTerm: String?
         let translation: String?
+        let acceptedTranslations: [String]?
         let reading: String?
         let partOfSpeech: String?
         let register: String?
@@ -18,7 +19,8 @@ enum LanguageTutorService {
         var vocabularyProposal: VocabularyProposal? {
             guard let targetTerm, let translation else { return nil }
             return VocabularyProposal(
-                targetTerm: targetTerm, translation: translation, reading: reading ?? "",
+                targetTerm: targetTerm, translation: translation,
+                acceptedTranslations: acceptedTranslations ?? [], reading: reading ?? "",
                 partOfSpeech: partOfSpeech ?? "", register: register ?? "",
                 example: example ?? "", notes: notes ?? "", tags: tags ?? [])
         }
@@ -29,7 +31,7 @@ enum LanguageTutorService {
     ) async throws -> [VocabularyProposal] {
         let knownTerms = knownItems.filter { $0.kind == .vocab }.map(\.term).joined(separator: "\n")
         let system = """
-        You are a language-content assistant. Return only a JSON object with a `proposals` array containing at most five new vocabulary proposals. Every proposal must have a target_term and translation. Include reading, part_of_speech, register, example, notes, and tags when useful. Calibrate to the learner's level and topic. Do not repeat the known terms. Do not claim the content was saved.
+        You are a language-content assistant. Return only a JSON object with a `proposals` array containing at most five new vocabulary proposals. Every proposal must have a target_term and translation. Include accepted_translations as an array of 0-3 concise, genuinely interchangeable answers in the explanation language. Each must be valid on its own in a typed-recall quiz; do not split comma-separated senses mechanically, include the primary translation again, or include merely related meanings. Be conservative and use an empty array when no clear alternative exists. Include reading, part_of_speech, register, example, notes, and tags when useful. Calibrate to the learner's level and topic. Do not repeat the known terms. Do not claim the content was saved.
         """
         let user = """
         Target language: \(profile.targetName) (\(profile.targetLocale))
