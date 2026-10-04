@@ -8,13 +8,11 @@ enum PermissionPolicyMigration {
     private static let legacyAutoApprovalDefaults: Set<String> = [
         "memory_list", "memory_read", "conversation_search", "conversation_list",
         "conversation_read", "web_search", "web_fetch", "web_research", "calculate",
-        "calendar_events", "reminders_list", "ask_multiple_choice", "vault_search",
+        "calendar_events", "reminders_list", "vault_search",
         "vault_read", "vault_list",
     ]
 
-    static func legacyAutoApprovedDefaults(for mode: AppMode) -> Set<String> {
-        mode == .language ? Tools.languageToolNames : legacyAutoApprovalDefaults
-    }
+    static func legacyAutoApprovedDefaults(for _: AppMode) -> Set<String> { legacyAutoApprovalDefaults }
 
     static func migrate(
         mode: AppMode, legacyAutoApprovedTools: Set<String>?

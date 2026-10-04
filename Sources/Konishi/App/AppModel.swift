@@ -70,17 +70,7 @@ final class AppModel {
     var pendingToolStopNotice: UUID?
     var isStoppingWork = false
     var autopilotArmed = false
-    /// A paused turn waiting on the user to answer an `ask_multiple_choice` prompt.
-    var pendingInteraction: PendingInteraction?
     var mode: AppMode = .chat
-    /// Language-learning profiles (loaded from the SQLite deck store).
-    var languageProfiles: [LanguageProfile] = []
-    /// Bumped on any deck write so views recompute stats (LanguageStore isn't Observable).
-    var languageDeckRevision = 0
-    /// Transient config for the current language session (topic, difficulty, study/practice/free).
-    var languageSession = LanguageSession()
-    /// In Learn mode, whether the mic dictates in the target language (true) or the base language.
-    var languageInputTarget = true
     /// Ephemeral one-line status for tool activity (e.g. "Thinking…", "Calling web_search…").
     var activity: String?
 
@@ -103,12 +93,19 @@ final class AppModel {
     let voice = VoiceManager()
     let embeddingCache = EmbeddingCache()
     let languageStore = LanguageStore()
+    @ObservationIgnored
+    lazy var languageWorkspace: LanguageWorkspaceModel = {
+        let workspace = LanguageWorkspaceModel(
+            store: languageStore, activeProfileID: settings.activeLanguageProfileID)
+        workspace.onProfileChange = { [weak self] profileID in
+            guard let self else { return }
+            self.settings.activeLanguageProfileID = profileID?.uuidString ?? ""
+        }
+        return workspace
+    }()
     let traceStore = TraceStore()
     var streamTask: Task<Void, Never>?
     let streamPresentation = StreamPresentation()
-    /// Resumed with the tool result once the user answers a pending multiple-choice prompt.
-    var interactionContinuation: CheckedContinuation<String, Never>?
-
     struct PendingToolBatch: Identifiable {
         let id = UUID()
         let conversationID: UUID
@@ -138,20 +135,26 @@ final class AppModel {
         Paths.ensure()
         self.settings = AppSettings()
         self.conversations = Self.loadConversations().sorted { $0.updatedAt > $1.updatedAt }
+        self.selectedConversationID = nil
+
+        let legacyLanguageIDs = conversations.filter { $0.isLanguage == true }.map(\.id)
+        for id in legacyLanguageIDs { deleteConversation(id) }
+
+        if conversations.isEmpty {
+            newConversation()
+        } else {
+            selectedConversationID = conversations.first?.id
+        }
+
         let searchIndex = ConversationSearchIndex()
         Persistence.ioQueue.async {
             try? searchIndex.rebuildIfNeeded(conversationsDirectory: Paths.conversations)
         }
-        self.languageProfiles = languageStore.allProfiles()
-        self.selectedConversationID = conversations.first(where: { $0.isLanguage != true })?.id
-        VoiceManager.warmVoices()  // preload the slow system voice catalog off-main
-        if conversations.isEmpty {
-            newConversation()
-        } else if let id = selectedConversationID {
-            ensureHydrated(id)  // property observers don't fire during init
+        VoiceManager.warmVoices()
+        if let id = selectedConversationID {
+            ensureHydrated(id)
             restorePendingApproval(for: id)
         }
-        // Ensure the last queued disk writes are flushed before the process exits.
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
         ) { _ in Self.flushPendingWrites() }
@@ -165,9 +168,7 @@ final class AppModel {
     }
 
     var canCreateConversation: Bool {
-        guard let conversation = selectedConversation,
-            (conversation.isLanguage == true) == (mode == .language)
-        else { return true }
+        guard let conversation = selectedConversation else { return true }
         return !conversation.messages.isEmpty
     }
 
@@ -193,7 +194,6 @@ final class AppModel {
         {
             return ctx
         }
-        // mlx-lm reports the model as a local path; read its config.json.
         return contextFromConfig(modelID)
     }
 
@@ -203,7 +203,7 @@ final class AppModel {
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         let url = URL(fileURLWithPath: path).appendingPathComponent("config.json")
         guard let data = try? Data(contentsOf: url),
-            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         let ctx =
             (obj["max_position_embeddings"] as? Int)
@@ -211,7 +211,6 @@ final class AppModel {
         if let ctx { contextConfigCache[path] = ctx }
         return ctx
     }
-
     /// True when the server reports per-model load state (LM Studio).
     var hasLoadState: Bool {
         models.contains { $0.isLoaded != nil }
@@ -261,11 +260,9 @@ final class AppModel {
     }
 
     var filteredConversations: [Conversation] {
-        // Learn mode lists only language sessions; other modes list only normal chats.
-        let inMode = conversations.filter { ($0.isLanguage == true) == (mode == .language) }
         let q = searchText.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return inMode }
-        return inMode.filter { convo in
+        guard !q.isEmpty else { return conversations }
+        return conversations.filter { convo in
             convo.title.lowercased().contains(q) || contentMatchIDs.contains(convo.id)
         }
     }
@@ -388,7 +385,7 @@ final class AppModel {
     static let readOnlyTools: Set<String> = [
         "memory_list", "memory_read", "file_read", "list_dir",
         "git_status", "git_diff", "git_log", "web_search", "web_fetch", "web_research",
-        "search_deck", "get_due_items", "calculate",
+        "calculate",
         "vault_search", "vault_read", "vault_list",
         "conversation_search", "conversation_list", "conversation_read",
         "calendar_events", "reminders_list",
@@ -396,8 +393,8 @@ final class AppModel {
     /// Tools whose OUTPUT the model must read to finish its reply, so a continuation turn is warranted.
     /// After fire-and-forget writes (e.g. banking a card) with a written reply, the turn is complete.
     static let continuationTools: Set<String> = [
-        "get_due_items", "search_deck", "web_search", "web_fetch", "web_research", "file_read", "file_write",
-        "memory_list", "memory_read", "calculate", "python_exec", "run_shell", "ask_multiple_choice",
+        "web_search", "web_fetch", "web_research", "file_read", "file_write",
+        "memory_list", "memory_read", "calculate", "python_exec", "run_shell",
         "vault_search", "vault_read", "vault_list",
         "conversation_search", "conversation_list", "conversation_read",
         "calendar_events", "reminders_list",

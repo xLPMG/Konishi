@@ -45,6 +45,8 @@ struct LearnItem: Identifiable, Equatable, Sendable {
     var notes: String
     var examples: [String]
     var tags: [String]
+    /// Additional answers explicitly approved by the learner for typed recall.
+    var acceptedAnswers: [String]
 
     // Leitner scheduling
     var box: Int                // 1…5
@@ -80,6 +82,7 @@ struct LearnItem: Identifiable, Equatable, Sendable {
         notes: String = "",
         examples: [String] = [],
         tags: [String] = [],
+        acceptedAnswers: [String] = [],
         box: Int = 1,
         dueDate: Date? = nil,
         timesSeen: Int = 0,
@@ -100,6 +103,7 @@ struct LearnItem: Identifiable, Equatable, Sendable {
         self.partOfSpeech = partOfSpeech
         self.examples = examples
         self.tags = tags
+        self.acceptedAnswers = acceptedAnswers
         self.box = min(max(box, 1), Self.boxCount)
         // A brand-new card hasn't been studied yet, so it's due immediately (today); the box
         // interval only kicks in after the first review.

@@ -415,12 +415,19 @@ final class AppSettings {
             defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(.chat))
             defaults.set(6, forKey: Keys.settingsVersion)
         }
+        if defaults.integer(forKey: Keys.settingsVersion) < 8 {
+            enabledByMode[AppMode.language.rawValue] = []
+            autoByMode[AppMode.language.rawValue] = []
+            defaults.set([String](), forKey: Keys.enabledToolsKey(.language))
+            defaults.set([String](), forKey: Keys.autoApproveKey(.language))
+            defaults.set(false, forKey: Keys.toolsEnabledKey(.language))
+        }
         var modeMasterSwitches: [String: Bool] = [:]
         var permissionPolicies: [String: PermissionPolicy] = [:]
         for mode in AppMode.allCases {
             let masterKey = Keys.toolsEnabledKey(mode)
             let enabled = defaults.object(forKey: masterKey) as? Bool
-                ?? (mode == .language || legacyToolsEnabled)
+                ?? (mode == .language ? false : legacyToolsEnabled)
             modeMasterSwitches[mode.rawValue] = enabled
             defaults.set(enabled, forKey: masterKey)
 
@@ -435,7 +442,7 @@ final class AppSettings {
                 defaults.set(data, forKey: policyKey)
             }
         }
-        defaults.set(7, forKey: Keys.settingsVersion)
+        defaults.set(8, forKey: Keys.settingsVersion)
         self.toolsEnabledByMode = modeMasterSwitches
         self.permissionPolicyByMode = permissionPolicies
         self.enabledToolsByMode = enabledByMode

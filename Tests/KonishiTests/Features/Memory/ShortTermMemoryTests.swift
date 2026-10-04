@@ -325,15 +325,15 @@ struct ShortTermMemoryTests {
         #expect(!ConversationRecall.mentionsPast("How do I sort an array in Swift?"))
     }
 
-    @Test("entries skip the current chat, Learn sessions and chats without a digest")
+    @Test("entries skip the current chat and chats without a digest")
     func entriesFilter() {
         let current = Conversation(title: "current", digest: "now")
-        let learn = Conversation(title: "learn", isLanguage: true, digest: "vocab")
+        let other = Conversation(title: "other", digest: "More tea.")
         let blank = Conversation(title: "blank", digest: "  ")
         let good = Conversation(title: "good", digest: "Talked about tea.")
         let entries = ConversationRecall.entries(
-            from: [current, learn, blank, good, Conversation(title: "none")], excluding: current.id)
-        #expect(entries.map(\.title) == ["good"])
+            from: [current, other, blank, good, Conversation(title: "none")], excluding: current.id)
+        #expect(entries.map(\.title) == ["other", "good"])
     }
 
     // MARK: Rollup
@@ -352,7 +352,6 @@ struct ShortTermMemoryTests {
                 Conversation(title: "older", updatedAt: older, digest: "Moved to Berlin."),
                 Conversation(title: "recent", updatedAt: recent, digest: "Talked."),
                 Conversation(title: "blank", updatedAt: old, digest: " "),
-                Conversation(title: "learn", updatedAt: old, isLanguage: true, digest: "vocab"),
                 done,
             ], now: now)
         #expect(candidates.map(\.title) == ["older", "old"])

@@ -26,7 +26,7 @@ struct PermissionPolicyMigrationTests {
             mode: .chat, legacyAutoApprovedTools: ["memory_write"]).rules.isEmpty)
     }
 
-    @Test("preserves the legacy master switch and enables Learn by default")
+    @Test("preserves Chat and Voice settings while disabling Learn tools")
     func migratesMasterSwitches() {
         let defaults = makeDefaults()
         defaults.set(6, forKey: "konishi.settingsVersion")
@@ -36,8 +36,9 @@ struct PermissionPolicyMigrationTests {
 
         #expect(settings.toolsEnabled(for: .chat))
         #expect(settings.toolsEnabled(for: .conversational))
-        #expect(settings.toolsEnabled(for: .language))
-        #expect(defaults.integer(forKey: "konishi.settingsVersion") == 7)
+        #expect(!settings.toolsEnabled(for: .language))
+        #expect(settings.enabledTools(for: .language).isEmpty)
+        #expect(defaults.integer(forKey: "konishi.settingsVersion") == 8)
     }
 
     @Test("preserves the pre-v7 default-off master when its legacy key is absent")
@@ -49,7 +50,7 @@ struct PermissionPolicyMigrationTests {
 
         #expect(!settings.toolsEnabled(for: .chat))
         #expect(!settings.toolsEnabled(for: .conversational))
-        #expect(settings.toolsEnabled(for: .language))
+        #expect(!settings.toolsEnabled(for: .language))
     }
 
     @Test("persists migrated policy JSON per mode")
@@ -68,7 +69,7 @@ struct PermissionPolicyMigrationTests {
         #expect(policy.rules.map(\.capability) == [.memoryWrite])
         #expect(!settings.toolsEnabled(for: .chat))
         #expect(!settings.toolsEnabled(for: .conversational))
-        #expect(settings.toolsEnabled(for: .language))
+        #expect(!settings.toolsEnabled(for: .language))
     }
 
     @Test("version 7 ignores stale legacy master and auto-approve keys")

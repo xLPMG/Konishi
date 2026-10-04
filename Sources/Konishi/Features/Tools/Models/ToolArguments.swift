@@ -45,8 +45,6 @@ enum ToolArguments {
         var timeoutSeconds: Int?
     }
     struct Calculation: Decodable { let expression: String }
-    struct DueItems: Decodable { var limit: Int? }
-
     struct CalendarEvents: Decodable {
         var days: Int?
         var calendar: String?
@@ -100,38 +98,4 @@ enum ToolArguments {
         let content: String
     }
 
-    struct AddVocabulary: Decodable {
-        let term: String
-        let translation: String
-        var reading: String?
-        var partOfSpeech: String?
-        var example: String?
-        var register: String?
-        var notes: String?
-        var tags: [String]?
-    }
-
-    struct AddGrammar: Decodable {
-        let point: String
-        let explanation: String
-        var example: String?
-        var notes: String?
-        var tags: [String]?
-    }
-
-    struct Review: Decodable {
-        let id: UUID
-        let correct: Bool
-    }
-
-    struct MultipleChoice: Decodable {
-        let questions: [Question]
-
-        struct Question: Decodable {
-            let prompt: String
-            let options: [String]
-            var correctIndex: Int?
-            var itemID: UUID?
-        }
-    }
 }

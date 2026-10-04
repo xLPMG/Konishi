@@ -7,8 +7,6 @@ extension AppModel {
     func memoryContext(conversationID: UUID, persona: Persona, history: [ChatMessage]) async
         -> String
     {
-        // Language sessions get a compact deck summary instead of personal memory (the deck is the memory).
-        if isLanguageConversation(conversationID) { return languageDeckContext() }
         guard settings.injectMemory else { return "" }
         let scopes = [MemoryStore.globalScope, persona.memoryScope]
         let query = history.last(where: { $0.role == .user })?.content ?? ""
@@ -42,7 +40,6 @@ extension AppModel {
             let idx = conversationIndex(conversationID)
         else { return }
         let convo = conversations[idx]
-        guard convo.isLanguage != true else { return }  // language chats never feed personal memory
         let start = min(convo.memorizedCount ?? 0, convo.messages.count)
         let fresh = Array(convo.messages[start...])
         let newUserTurns = fresh.filter { $0.role == .user && !$0.content.isEmpty }.count

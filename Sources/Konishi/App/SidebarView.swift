@@ -8,12 +8,11 @@ struct SidebarView: View {
 
     var body: some View {
         @Bindable var model = model
-        let isLanguage = model.mode == .language
         List(selection: Binding(
             get: { model.selectedConversationID },
             set: { if let id = $0 { model.selectedConversationID = id } }
         )) {
-            Section(isLanguage ? "Language Sessions" : "Conversations") {
+            Section("Conversations") {
                 ForEach(model.filteredConversations) { convo in
                     row(convo).tag(convo.id)
                 }
@@ -21,11 +20,11 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        .searchable(text: $model.searchText, placement: .sidebar, prompt: isLanguage ? "Search sessions" : "Search chats")
+        .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search chats")
         .safeAreaInset(edge: .top) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
-                    Image(systemName: isLanguage ? "character.book.closed.fill" : "sparkles")
+                    Image(systemName: "sparkles")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(model.currentAccent)
                         .frame(width: 36, height: 36)
@@ -33,7 +32,7 @@ struct SidebarView: View {
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(model.currentPalette.border, lineWidth: 1))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Konishi").font(.headline)
-                        Text(isLanguage ? "LEARNING DESK" : "CHAT STUDIO")
+                        Text("CHAT STUDIO")
                             .font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.secondary)
                     }
@@ -48,7 +47,7 @@ struct SidebarView: View {
                 }
 
                 Button { model.newConversation() } label: {
-                    Label(isLanguage ? "New Session" : "New Chat", systemImage: "square.and.pencil")
+                    Label("New Chat", systemImage: "square.and.pencil")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.borderedProminent)

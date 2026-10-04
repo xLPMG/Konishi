@@ -96,7 +96,8 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var summarizedCount: Int?
     /// Number of leading messages already folded into long-term memory.
     var memorizedCount: Int?
-    /// True for Learn-mode sessions; kept separate from normal chats and excluded from memory.
+    /// Legacy marker decoded only so startup can remove pre-workspace Learn conversation files.
+    /// Legacy marker used by startup cleanup; not used for conversation routing or memory policy.
     var isLanguage: Bool?
     /// Number of messages at the time the title was last updated.
     var lastTitledMessageCount: Int?

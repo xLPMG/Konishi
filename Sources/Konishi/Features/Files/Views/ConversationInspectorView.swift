@@ -144,10 +144,10 @@ struct ConversationInspectorView: View {
     }
 
     private var capabilityGroups: [(String, [Capability])] {
-        let grouped = Dictionary(grouping: Capability.allCases, by: \.groupLabel)
+        let grouped = Dictionary(grouping: Capability.configurableCases, by: \.groupLabel)
         let order = [
             "Workspace", "External", "Memory", "Conversation history", "Vault",
-            "Personal data", "Language deck", "Web", "Code", "Interaction",
+            "Personal data", "Web", "Code",
         ]
         return order.compactMap { name in grouped[name].map { (name, $0) } }
     }

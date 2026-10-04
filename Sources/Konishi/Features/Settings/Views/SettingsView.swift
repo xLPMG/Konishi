@@ -370,12 +370,12 @@ private struct ToolsSettings: View {
                     get: { model.settings.toolsEnabled(for: toolMode) },
                     set: { model.settings.setToolsEnabled($0, for: toolMode) }
                 ))
-                Text("Master switch for \(toolMode.label). Learn mode starts enabled on new installs.")
+                Text("Master switch for \(toolMode.label).")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
                 Picker("Mode", selection: $toolMode) {
-                    ForEach(AppMode.allCases) { Text($0.label).tag($0) }
+                    ForEach([AppMode.chat, .conversational]) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
             } footer: {
@@ -471,10 +471,10 @@ private struct ToolsSettings: View {
     }
 
     private var capabilityGroups: [(String, [Capability])] {
-        let grouped = Dictionary(grouping: Capability.allCases, by: \.groupLabel)
+        let grouped = Dictionary(grouping: Capability.configurableCases, by: \.groupLabel)
         let order = [
             "Workspace", "External", "Memory", "Conversation history", "Vault",
-            "Personal data", "Language deck", "Web", "Code", "Interaction",
+            "Personal data", "Web", "Code",
         ]
         return order.compactMap { name in grouped[name].map { (name, $0) } }
     }

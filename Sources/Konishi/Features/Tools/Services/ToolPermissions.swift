@@ -162,9 +162,6 @@ enum ToolPermissions {
         case "calendar_events", "reminders_list": return [.init(.personalDataRead)]
         case "calendar_create_event", "calendar_update_event", "reminder_create", "reminder_update":
             return [.init(.personalDataWrite)]
-        case "search_deck", "get_due_items": return [.init(.deckRead)]
-        case "add_vocab", "add_grammar", "record_review": return [.init(.deckWrite)]
-        case "ask_multiple_choice": return [.init(.userInput)]
         case "vault_search", "vault_read", "vault_list": return [.init(.vaultRead)]
         case "vault_write", "vault_append": return [.init(.vaultWrite)]
         default: return nil
@@ -208,9 +205,7 @@ enum ToolPermissions {
         let decidingEffect = decisions.first(where: { $0.decision == rawVerdict })
         let source = decidingEffect?.source ?? .default
         let explanation: String?
-        if toolName == "ask_multiple_choice", context.surface == .unattended {
-            explanation = "User input is unavailable on the unattended surface."
-        } else if rawVerdict == .ask, context.surface == .unattended {
+        if rawVerdict == .ask, context.surface == .unattended {
             let capability = decisions.first(where: { $0.decision == .ask })?.effect.capability.label ?? "This action"
             explanation = "\(capability) needs permission. Do not retry this call; adapt or report the block."
         } else if rawVerdict == .deny {
@@ -253,7 +248,6 @@ enum ToolPermissions {
                   context.vaultAccessEnabled || !Tools.vaultToolNames.contains(spec.name)
             else { return false }
             guard context.surface == .unattended else { return true }
-            guard spec.name != "ask_multiple_choice" else { return false }
             return possibleCapabilities(for: spec.name).contains {
                 mayAllow($0, context: context)
             }
@@ -292,9 +286,6 @@ enum ToolPermissions {
         case "python_exec": [.codeExecution]
         case "calendar_events", "reminders_list": [.personalDataRead]
         case "calendar_create_event", "calendar_update_event", "reminder_create", "reminder_update": [.personalDataWrite]
-        case "search_deck", "get_due_items": [.deckRead]
-        case "add_vocab", "add_grammar", "record_review": [.deckWrite]
-        case "ask_multiple_choice": [.userInput]
         case "vault_search", "vault_read", "vault_list": [.vaultRead]
         case "vault_write", "vault_append": [.vaultWrite]
         default: []

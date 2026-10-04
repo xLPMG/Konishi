@@ -103,6 +103,7 @@ struct ToolPermissionsTests {
     @Test("unattended visibility hides tools without an allowed capability")
     func unattendedVisibilityUsesPermissions() {
         let enabled: Set<String> = ["file_write", "python_exec", "ask_multiple_choice", "memory_write"]
+        #expect(Tools.spec("ask_multiple_choice") == nil)
         let context = context(
             enabledTools: enabled,
             surface: .unattended,

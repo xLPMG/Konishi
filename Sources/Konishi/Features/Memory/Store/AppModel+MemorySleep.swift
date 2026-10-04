@@ -120,8 +120,7 @@ extension AppModel {
 
         guard !sleepShouldYield else { return retry ?? .seconds(60) }
         if settings.autoConsolidate, connectionOK != false,
-            let convo = conversations.filter({ $0.isLanguage != true })
-                .max(by: { $0.updatedAt < $1.updatedAt })
+            let convo = conversations.max(by: { $0.updatedAt < $1.updatedAt })
         {
             let scope = personaStore.persona(for: convo).memoryScope
             let bullets =
@@ -143,7 +142,6 @@ extension AppModel {
 
     private func staleDigestCandidates() -> [UUID] {
         conversations
-            .filter { $0.isLanguage != true }
             .sorted { $0.updatedAt > $1.updatedAt }
             .enumerated()
             .filter { offset, c in

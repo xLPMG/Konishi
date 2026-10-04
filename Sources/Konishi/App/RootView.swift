@@ -16,18 +16,28 @@ struct RootView: View {
         @Bindable var model = model
         let layout = panelLayout
         NavigationSplitView(columnVisibility: columnVisibility) {
-            SidebarView()
-                .navigationSplitViewColumnWidth(min: Self.minSidebarWidth, ideal: 260, max: Self.maxSidebarWidth)
+            Group {
+                if model.mode == .language {
+                    LanguageSidebarView(workspace: model.languageWorkspace)
+                } else {
+                    SidebarView()
+                }
+            }
+            .navigationSplitViewColumnWidth(min: Self.minSidebarWidth, ideal: 260, max: Self.maxSidebarWidth)
         } detail: {
-            HStack(spacing: 0) {
-                detailPane
-                    .frame(minWidth: Self.minChatWidth, maxWidth: .infinity, maxHeight: .infinity)
-                if let width = layout.inspectorWidth {
-                    inspectorHandle
-                    ConversationInspectorView()
-                        .environment(model)
-                        .frame(minWidth: 0, maxWidth: width)
-                        .frame(maxHeight: .infinity)
+            if model.mode == .language {
+                LanguageWorkspaceView(workspace: model.languageWorkspace)
+            } else {
+                HStack(spacing: 0) {
+                    detailPane
+                        .frame(minWidth: Self.minChatWidth, maxWidth: .infinity, maxHeight: .infinity)
+                    if let width = layout.inspectorWidth {
+                        inspectorHandle
+                        ConversationInspectorView()
+                            .environment(model)
+                            .frame(minWidth: 0, maxWidth: width)
+                            .frame(maxHeight: .infinity)
+                    }
                 }
             }
         }
@@ -37,12 +47,7 @@ struct RootView: View {
             ConversationView()
                 .environment(model)
         }
-        .sheet(item: $model.pendingInteraction) { interaction in
-            MultipleChoiceView(interaction: interaction)
-                .environment(model)
-        }
         .onChange(of: model.mode) { _, newMode in
-            model.syncSelectionToMode()
             if newMode == .conversational { showConversation = true }
         }
         .onChange(of: showConversation) { _, shown in
@@ -57,55 +62,57 @@ struct RootView: View {
                 .help("Chat, hands-free Voice, or Learn mode")
             }
             ToolbarItemGroup(placement: .principal) {
-                PersonaPicker()
+                if model.mode != .language { PersonaPicker() }
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    model.refreshServerInfo()
-                } label: {
-                    Label {
-                        Text(connectionStatusText)
-                            .foregroundStyle(.primary)
-                    } icon: {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 7))
-                            .foregroundStyle(connectionStatusColor)
+                if model.mode != .language {
+                    Button {
+                        model.refreshServerInfo()
+                    } label: {
+                        Label {
+                            Text(connectionStatusText)
+                                .foregroundStyle(.primary)
+                        } icon: {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 7))
+                                .foregroundStyle(connectionStatusColor)
+                        }
+                        .labelStyle(.iconOnly)
                     }
-                    .labelStyle(.iconOnly)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 8)
-                .help("Refresh server connection status")
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .help("Refresh server connection status")
 
-                Menu {
-                    Button { openWindow(id: "memory") } label: {
-                        Label("Open Memory…", systemImage: "tray.full")
+                    Menu {
+                        Button { openWindow(id: "memory") } label: {
+                            Label("Open Memory…", systemImage: "tray.full")
+                        }
+                        Button { model.reflect() } label: {
+                            Label("Update Memory", systemImage: "brain.head.profile")
+                        }
+                        .disabled(model.selectedConversation?.messages.isEmpty ?? true)
+                        Button { model.consolidateMemory() } label: {
+                            Label("Clean Up Memory", systemImage: "wand.and.stars")
+                        }
+                        .disabled(model.selectedConversation?.messages.isEmpty ?? true)
+                        Divider()
+                        Button { model.settings.pauseMemoryWrites.toggle() } label: {
+                            Label(model.settings.pauseMemoryWrites ? "Resume New Memories" : "Pause New Memories",
+                                  systemImage: model.settings.pauseMemoryWrites ? "play.circle" : "pause.circle")
+                        }
+                        Divider()
+                        Text(model.sleepStatusText)
+                    } label: {
+                        Label(
+                            "Memory",
+                            systemImage: model.settings.pauseMemoryWrites ? "brain.head.profile.fill" : "brain.head.profile")
                     }
-                    Button { model.reflect() } label: {
-                        Label("Update Memory", systemImage: "brain.head.profile")
-                    }
-                    .disabled(model.selectedConversation?.messages.isEmpty ?? true)
-                    Button { model.consolidateMemory() } label: {
-                        Label("Clean Up Memory", systemImage: "wand.and.stars")
-                    }
-                    .disabled(model.selectedConversation?.messages.isEmpty ?? true)
-                    Divider()
-                    Button { model.settings.pauseMemoryWrites.toggle() } label: {
-                        Label(model.settings.pauseMemoryWrites ? "Resume New Memories" : "Pause New Memories",
-                              systemImage: model.settings.pauseMemoryWrites ? "play.circle" : "pause.circle")
-                    }
-                    Divider()
-                    Text(model.sleepStatusText)
-                } label: {
-                    Label(
-                        "Memory",
-                        systemImage: model.settings.pauseMemoryWrites ? "brain.head.profile.fill" : "brain.head.profile")
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .foregroundStyle(model.settings.pauseMemoryWrites ? .orange : .primary)
+                    .help(model.settings.pauseMemoryWrites
+                        ? "Memory — new memories are paused (existing memory still used)."
+                        : "Open memory, update it now, or pause saving new memories.")
                 }
-                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                .foregroundStyle(model.settings.pauseMemoryWrites ? .orange : .primary)
-                .help(model.settings.pauseMemoryWrites
-                    ? "Memory — new memories are paused (existing memory still used)."
-                    : "Open memory, update it now, or pause saving new memories.")
 
                 if model.mode != .language {
                     Button {
@@ -128,19 +135,21 @@ struct RootView: View {
                     }
                 }
 
-                Button { showInspector.toggle() } label: {
-                    Label("Inspector", systemImage: "folder.badge.gearshape")
+                if model.mode != .language {
+                    Button { showInspector.toggle() } label: {
+                        Label("Inspector", systemImage: "folder.badge.gearshape")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(showInspector ? model.currentAccent : .primary)
+                    .help(showInspector ? "Hide conversation sidebar" : "Show conversation sidebar")
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(showInspector ? model.currentAccent : .primary)
-                .help(showInspector ? "Hide conversation sidebar" : "Show conversation sidebar")
 
                 Button { openWindow(id: "settings") } label: {
-                    Label("Settings", systemImage: "gearshape")
+                    Image(systemName: "gearshape")
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(",", modifiers: .command)
-                .padding(.trailing, 8)
                 .help("Settings")
             }
         }
@@ -200,16 +209,9 @@ struct RootView: View {
     @ViewBuilder
     private var detailPane: some View {
         if model.selectedConversationID != nil {
-            if model.mode == .language {
-                LanguageView()
-            } else {
-                ChatView()
-            }
+            ChatView()
         } else {
-            ContentUnavailableView(
-                model.mode == .language ? "No Session" : "No Conversation",
-                systemImage: model.mode == .language ? "character.book.closed" : "bubble.left.and.bubble.right"
-            )
+            ContentUnavailableView("No Conversation", systemImage: "bubble.left.and.bubble.right")
         }
     }
 

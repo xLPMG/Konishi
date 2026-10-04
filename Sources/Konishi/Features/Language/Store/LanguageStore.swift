@@ -6,6 +6,8 @@ import SQLite3
 @MainActor
 final class LanguageStore {
     nonisolated(unsafe) private var db: OpaquePointer?
+    private let databaseURL: URL
+    private(set) var initializationError: String?
 
     /// Aggregate deck figures for a profile, for the UI header/stats.
     struct Stats: Sendable {
@@ -19,10 +21,12 @@ final class LanguageStore {
     // SQLite wants to copy bound strings rather than keep our transient pointers.
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    init() {
-        try? FileManager.default.createDirectory(at: Paths.language, withIntermediateDirectories: true)
+    init(databaseURL: URL = Paths.languageDB) {
+        self.databaseURL = databaseURL
+        try? FileManager.default.createDirectory(
+            at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         open()
-        createSchema()
+        if initializationError == nil { migrateSchema() }
     }
 
     deinit {
@@ -30,58 +34,141 @@ final class LanguageStore {
     }
 
     private func open() {
-        if sqlite3_open(Paths.languageDB.path, &db) != SQLITE_OK {
-            NSLog("LanguageStore: failed to open \(Paths.languageDB.path)")
+        guard sqlite3_open(databaseURL.path, &db) == SQLITE_OK, let db else {
+            initializationError = db.map { String(cString: sqlite3_errmsg($0)) } ?? "Could not open language database."
+            NSLog("LanguageStore: failed to open \(databaseURL.path): \(initializationError ?? "unknown error")")
+            return
         }
-        exec("PRAGMA journal_mode=WAL;")
-        exec("PRAGMA foreign_keys=ON;")
+        sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
+        sqlite3_exec(db, "PRAGMA foreign_keys=ON;", nil, nil, nil)
     }
 
-    private func createSchema() {
-        exec("""
-        CREATE TABLE IF NOT EXISTS profiles (
-            id TEXT PRIMARY KEY,
-            targetLocale TEXT NOT NULL,
-            targetName TEXT NOT NULL,
-            baseLocale TEXT NOT NULL,
-            baseName TEXT NOT NULL,
-            level TEXT NOT NULL,
-            romanization TEXT NOT NULL,
-            scriptNotes TEXT NOT NULL,
-            targetVoiceID TEXT NOT NULL DEFAULT '',
-            baseVoiceID TEXT NOT NULL DEFAULT '',
-            goals TEXT NOT NULL,
-            createdAt REAL NOT NULL
-        );
-        """)
-        // Migrations for existing installs (errors ignored if the column already exists).
-        exec("ALTER TABLE profiles ADD COLUMN targetVoiceID TEXT NOT NULL DEFAULT '';")
-        exec("ALTER TABLE profiles ADD COLUMN baseVoiceID TEXT NOT NULL DEFAULT '';")
-        exec("""
-        CREATE TABLE IF NOT EXISTS items (
-            id TEXT PRIMARY KEY,
-            profileID TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            term TEXT NOT NULL,
-            reading TEXT NOT NULL,
-            translation TEXT NOT NULL,
-            partOfSpeech TEXT NOT NULL,
-            register TEXT NOT NULL DEFAULT '',
-            notes TEXT NOT NULL DEFAULT '',
-            examples TEXT NOT NULL,
-            tags TEXT NOT NULL,
-            box INTEGER NOT NULL,
-            dueDate REAL NOT NULL,
-            timesSeen INTEGER NOT NULL,
-            timesCorrect INTEGER NOT NULL,
-            timesWrong INTEGER NOT NULL,
-            createdAt REAL NOT NULL,
-            lastReviewedAt REAL,
-            sourceConversationID TEXT
-        );
-        """)
-        exec("CREATE INDEX IF NOT EXISTS idx_items_due ON items(profileID, dueDate);")
-        exec("CREATE INDEX IF NOT EXISTS idx_items_kind ON items(profileID, kind);")
+    private func migrateSchema() {
+        do {
+            let version = try userVersion()
+            if version < 1 {
+                try transaction {
+                    try execute("""
+                    CREATE TABLE IF NOT EXISTS profiles (
+                        id TEXT PRIMARY KEY, targetLocale TEXT NOT NULL, targetName TEXT NOT NULL,
+                        baseLocale TEXT NOT NULL, baseName TEXT NOT NULL, level TEXT NOT NULL,
+                        romanization TEXT NOT NULL, scriptNotes TEXT NOT NULL, goals TEXT NOT NULL,
+                        createdAt REAL NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS items (
+                        id TEXT PRIMARY KEY, profileID TEXT NOT NULL, kind TEXT NOT NULL,
+                        term TEXT NOT NULL, reading TEXT NOT NULL, translation TEXT NOT NULL,
+                        partOfSpeech TEXT NOT NULL, register TEXT NOT NULL DEFAULT '',
+                        notes TEXT NOT NULL DEFAULT '', examples TEXT NOT NULL, tags TEXT NOT NULL,
+                        box INTEGER NOT NULL, dueDate REAL NOT NULL, timesSeen INTEGER NOT NULL,
+                        timesCorrect INTEGER NOT NULL, timesWrong INTEGER NOT NULL, createdAt REAL NOT NULL,
+                        lastReviewedAt REAL, sourceConversationID TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_items_due ON items(profileID, dueDate);
+                    CREATE INDEX IF NOT EXISTS idx_items_kind ON items(profileID, kind);
+                    """)
+                    try addColumn("targetVoiceID", definition: "TEXT NOT NULL DEFAULT ''", table: "profiles")
+                    try addColumn("baseVoiceID", definition: "TEXT NOT NULL DEFAULT ''", table: "profiles")
+                    try execute("PRAGMA user_version = 1;")
+                }
+            }
+            if version < 2 {
+                try transaction {
+                    try addColumn("acceptedAnswers", definition: "TEXT NOT NULL DEFAULT '[]'", table: "items")
+                    try execute("""
+                    CREATE TABLE IF NOT EXISTS review_attempts (
+                        id TEXT PRIMARY KEY, profileID TEXT NOT NULL, itemID TEXT NOT NULL,
+                        activity TEXT NOT NULL, outcome TEXT NOT NULL, createdAt REAL NOT NULL,
+                        submittedAnswer TEXT, sessionID TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_review_attempts_profile_date
+                        ON review_attempts(profileID, createdAt DESC);
+                    CREATE INDEX IF NOT EXISTS idx_review_attempts_item
+                        ON review_attempts(itemID, createdAt DESC);
+                    """)
+                    try execute("PRAGMA user_version = 2;")
+                }
+            }
+            if version < 3 {
+                try transaction {
+                    try execute("""
+                    CREATE TABLE IF NOT EXISTS tutor_threads (
+                        id TEXT PRIMARY KEY, profileID TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                        title TEXT NOT NULL, createdAt REAL NOT NULL, updatedAt REAL NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS tutor_messages (
+                        id TEXT PRIMARY KEY, threadID TEXT NOT NULL REFERENCES tutor_threads(id) ON DELETE CASCADE,
+                        role TEXT NOT NULL, content TEXT NOT NULL, createdAt REAL NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_tutor_threads_profile_updated
+                        ON tutor_threads(profileID, updatedAt DESC);
+                    CREATE INDEX IF NOT EXISTS idx_tutor_messages_thread_date
+                        ON tutor_messages(threadID, createdAt);
+                    """)
+                    try execute("PRAGMA user_version = 3;")
+                }
+            }
+        } catch {
+            initializationError = error.localizedDescription
+            NSLog("LanguageStore: migration failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func userVersion() throws -> Int {
+        try withStatement("PRAGMA user_version;") { stmt in
+            guard sqlite3_step(stmt) == SQLITE_ROW else { throw storeError() }
+            return Int(sqlite3_column_int(stmt, 0))
+        }
+    }
+
+    private func addColumn(_ name: String, definition: String, table: String) throws {
+        let exists = try withStatement("PRAGMA table_info(\(table));") { stmt in
+            var found = false
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if Self.text(stmt, 1) == name { found = true }
+            }
+            return found
+        }
+        if !exists { try execute("ALTER TABLE \(table) ADD COLUMN \(name) \(definition);") }
+    }
+
+    private func transaction(_ body: () throws -> Void) throws {
+        try execute("BEGIN IMMEDIATE;")
+        do {
+            try body()
+            try execute("COMMIT;")
+        } catch {
+            try? execute("ROLLBACK;")
+            throw error
+        }
+    }
+
+    private func execute(_ sql: String) throws {
+        guard let db else { throw storeError() }
+        var message: UnsafeMutablePointer<CChar>?
+        let result = sqlite3_exec(db, sql, nil, nil, &message)
+        guard result == SQLITE_OK else {
+            let detail = message.map { String(cString: $0) } ?? String(cString: sqlite3_errmsg(db))
+            sqlite3_free(message)
+            throw NSError(domain: "LanguageStore.SQLite", code: Int(result),
+                          userInfo: [NSLocalizedDescriptionKey: detail])
+        }
+    }
+
+    private func withStatement<T>(_ sql: String, _ body: (OpaquePointer) throws -> T) throws -> T {
+        guard let db else { throw storeError() }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            throw storeError()
+        }
+        defer { sqlite3_finalize(stmt) }
+        return try body(stmt)
+    }
+
+    private func storeError() -> NSError {
+        let detail = db.map { String(cString: sqlite3_errmsg($0)) } ?? "Language database is unavailable."
+        return NSError(domain: "LanguageStore.SQLite", code: 1,
+                       userInfo: [NSLocalizedDescriptionKey: detail])
     }
 
     // MARK: - Profiles
@@ -140,6 +227,12 @@ final class LanguageStore {
     }
 
     func deleteProfile(id: UUID) {
+        prepared("DELETE FROM tutor_threads WHERE profileID = ?;") { stmt in
+            bind(stmt, 1, id.uuidString); sqlite3_step(stmt)
+        }
+        prepared("DELETE FROM review_attempts WHERE profileID = ?;") { stmt in
+            bind(stmt, 1, id.uuidString); sqlite3_step(stmt)
+        }
         prepared("DELETE FROM items WHERE profileID = ?;") { stmt in
             bind(stmt, 1, id.uuidString); sqlite3_step(stmt)
         }
@@ -150,18 +243,21 @@ final class LanguageStore {
 
     // MARK: - Items
 
-    func upsert(_ item: LearnItem) {
+    @discardableResult
+    func upsert(_ item: LearnItem) -> Bool {
         let sql = """
-        INSERT INTO items (id, profileID, kind, term, reading, translation, partOfSpeech, register, notes, examples, tags, box, dueDate, timesSeen, timesCorrect, timesWrong, createdAt, lastReviewedAt, sourceConversationID)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO items (id, profileID, kind, term, reading, translation, partOfSpeech, register, notes, examples, tags, box, dueDate, timesSeen, timesCorrect, timesWrong, createdAt, lastReviewedAt, sourceConversationID, acceptedAnswers)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             kind=excluded.kind, term=excluded.term, reading=excluded.reading, translation=excluded.translation,
             partOfSpeech=excluded.partOfSpeech, register=excluded.register, notes=excluded.notes,
             examples=excluded.examples, tags=excluded.tags,
             box=excluded.box, dueDate=excluded.dueDate, timesSeen=excluded.timesSeen,
             timesCorrect=excluded.timesCorrect, timesWrong=excluded.timesWrong,
-            lastReviewedAt=excluded.lastReviewedAt, sourceConversationID=excluded.sourceConversationID;
+            lastReviewedAt=excluded.lastReviewedAt, sourceConversationID=excluded.sourceConversationID,
+            acceptedAnswers=excluded.acceptedAnswers;
         """
+        var saved = false
         prepared(sql) { stmt in
             bind(stmt, 1, item.id.uuidString)
             bind(stmt, 2, item.profileID.uuidString)
@@ -182,8 +278,10 @@ final class LanguageStore {
             sqlite3_bind_double(stmt, 17, item.createdAt.timeIntervalSince1970)
             if let r = item.lastReviewedAt { sqlite3_bind_double(stmt, 18, r.timeIntervalSince1970) } else { sqlite3_bind_null(stmt, 18) }
             if let c = item.sourceConversationID { bind(stmt, 19, c.uuidString) } else { sqlite3_bind_null(stmt, 19) }
-            sqlite3_step(stmt)
+            bind(stmt, 20, Self.encodeArray(item.acceptedAnswers))
+            saved = sqlite3_step(stmt) == SQLITE_DONE
         }
+        return saved
     }
 
     func item(id: UUID) -> LearnItem? {
@@ -199,6 +297,223 @@ final class LanguageStore {
         prepared("DELETE FROM items WHERE id = ?;") { stmt in
             bind(stmt, 1, id.uuidString); sqlite3_step(stmt)
         }
+    }
+
+    /// Atomically inserts an idempotency key and applies the card's Leitner update.
+    func recordReview(_ attempt: LanguageReviewAttempt) -> LanguageReviewRecordResult {
+        guard initializationError == nil else { return .failed(initializationError ?? "Database unavailable.") }
+        guard (attempt.activity == .flashcards) ==
+            (attempt.outcome == .again || attempt.outcome == .remembered)
+        else { return .invalidAttempt }
+
+        do {
+            try execute("BEGIN IMMEDIATE;")
+            do {
+                guard let original = item(id: attempt.itemID) else {
+                    try execute("ROLLBACK;")
+                    return .missingCard
+                }
+                guard original.profileID == attempt.profileID else {
+                    try execute("ROLLBACK;")
+                    return .profileMismatch
+                }
+                if let previous = reviewAttempt(id: attempt.id) {
+                    try execute("COMMIT;")
+                    return previous == attempt ? .alreadyRecorded(original) : .attemptIDConflict
+                }
+
+                var updated = original
+                updated.recordReview(correct: attempt.outcome.isCorrect, at: attempt.createdAt)
+                try withStatement("""
+                    INSERT INTO review_attempts (id, profileID, itemID, activity, outcome, createdAt, submittedAnswer, sessionID)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                    """) { stmt in
+                    bind(stmt, 1, attempt.id.uuidString)
+                    bind(stmt, 2, attempt.profileID.uuidString)
+                    bind(stmt, 3, attempt.itemID.uuidString)
+                    bind(stmt, 4, attempt.activity.rawValue)
+                    bind(stmt, 5, attempt.outcome.rawValue)
+                    sqlite3_bind_double(stmt, 6, attempt.createdAt.timeIntervalSince1970)
+                    if let answer = attempt.submittedAnswer { bind(stmt, 7, answer) }
+                    else { sqlite3_bind_null(stmt, 7) }
+                    if let sessionID = attempt.sessionID { bind(stmt, 8, sessionID.uuidString) }
+                    else { sqlite3_bind_null(stmt, 8) }
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw storeError() }
+                }
+                try withStatement("""
+                    UPDATE items SET box = ?, dueDate = ?, timesSeen = ?, timesCorrect = ?, timesWrong = ?, lastReviewedAt = ?
+                    WHERE id = ? AND profileID = ?;
+                    """) { stmt in
+                    sqlite3_bind_int(stmt, 1, Int32(updated.box))
+                    sqlite3_bind_double(stmt, 2, updated.dueDate.timeIntervalSince1970)
+                    sqlite3_bind_int(stmt, 3, Int32(updated.timesSeen))
+                    sqlite3_bind_int(stmt, 4, Int32(updated.timesCorrect))
+                    sqlite3_bind_int(stmt, 5, Int32(updated.timesWrong))
+                    sqlite3_bind_double(stmt, 6, attempt.createdAt.timeIntervalSince1970)
+                    bind(stmt, 7, attempt.itemID.uuidString)
+                    bind(stmt, 8, attempt.profileID.uuidString)
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw storeError() }
+                }
+                guard sqlite3_changes(db) == 1 else {
+                    try execute("ROLLBACK;")
+                    return .missingCard
+                }
+                try execute("COMMIT;")
+                return .recorded(updated)
+            } catch {
+                try? execute("ROLLBACK;")
+                throw error
+            }
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    func reviewAttempts(profileID: UUID, limit: Int = 20) -> [LanguageReviewAttempt] {
+        var out: [LanguageReviewAttempt] = []
+        prepared("""
+            SELECT id, profileID, itemID, activity, outcome, createdAt, submittedAnswer, sessionID
+            FROM review_attempts WHERE profileID = ? ORDER BY createdAt DESC LIMIT ?;
+            """) { stmt in
+            bind(stmt, 1, profileID.uuidString)
+            sqlite3_bind_int(stmt, 2, Int32(max(1, limit)))
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let attempt = Self.readReviewAttempt(stmt) { out.append(attempt) }
+            }
+        }
+        return out
+    }
+
+    // MARK: - Tutor threads
+
+    func tutorThreads(profileID: UUID) -> [LanguageTutorThread] {
+        var threads: [LanguageTutorThread] = []
+        prepared("""
+            SELECT id, profileID, title, createdAt, updatedAt
+            FROM tutor_threads WHERE profileID = ? ORDER BY updatedAt DESC;
+            """) { stmt in
+            bind(stmt, 1, profileID.uuidString)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let thread = Self.readTutorThread(stmt) { threads.append(thread) }
+            }
+        }
+        for index in threads.indices {
+            threads[index].messages = tutorMessages(threadID: threads[index].id)
+        }
+        return threads
+    }
+
+    func createTutorThread(
+        profileID: UUID, title: String = "Tutor conversation", at now: Date = Date()
+    ) -> LanguageTutorThread? {
+        let thread = LanguageTutorThread(profileID: profileID, title: title, createdAt: now)
+        do {
+            try withStatement("""
+                INSERT INTO tutor_threads (id, profileID, title, createdAt, updatedAt)
+                VALUES (?, ?, ?, ?, ?);
+                """) { stmt in
+                bind(stmt, 1, thread.id.uuidString)
+                bind(stmt, 2, profileID.uuidString)
+                bind(stmt, 3, thread.title)
+                sqlite3_bind_double(stmt, 4, now.timeIntervalSince1970)
+                sqlite3_bind_double(stmt, 5, now.timeIntervalSince1970)
+                guard sqlite3_step(stmt) == SQLITE_DONE else { throw storeError() }
+            }
+            return thread
+        } catch {
+            return nil
+        }
+    }
+
+    func appendTutorMessage(_ message: LanguageTutorMessage, to threadID: UUID) -> Bool {
+        guard let db else { return false }
+        do {
+            try transaction {
+                try withStatement("""
+                    INSERT INTO tutor_messages (id, threadID, role, content, createdAt)
+                    VALUES (?, ?, ?, ?, ?);
+                    """) { stmt in
+                    bind(stmt, 1, message.id.uuidString)
+                    bind(stmt, 2, threadID.uuidString)
+                    bind(stmt, 3, message.role.rawValue)
+                    bind(stmt, 4, message.content)
+                    sqlite3_bind_double(stmt, 5, message.createdAt.timeIntervalSince1970)
+                    guard sqlite3_step(stmt) == SQLITE_DONE else { throw storeError() }
+                }
+                try withStatement("UPDATE tutor_threads SET updatedAt = ? WHERE id = ?;") { stmt in
+                    sqlite3_bind_double(stmt, 1, message.createdAt.timeIntervalSince1970)
+                    bind(stmt, 2, threadID.uuidString)
+                    guard sqlite3_step(stmt) == SQLITE_DONE, sqlite3_changes(db) == 1 else {
+                        throw storeError()
+                    }
+                }
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func updateTutorThreadTitle(_ title: String, threadID: UUID, at now: Date = Date()) -> Bool {
+        var changed = false
+        prepared("UPDATE tutor_threads SET title = ?, updatedAt = ? WHERE id = ?;") { stmt in
+            bind(stmt, 1, title)
+            sqlite3_bind_double(stmt, 2, now.timeIntervalSince1970)
+            bind(stmt, 3, threadID.uuidString)
+            if sqlite3_step(stmt) == SQLITE_DONE { changed = sqlite3_changes(db) == 1 }
+        }
+        return changed
+    }
+
+    func deleteTutorThread(id: UUID) {
+        prepared("DELETE FROM tutor_threads WHERE id = ?;") { stmt in
+            bind(stmt, 1, id.uuidString); sqlite3_step(stmt)
+        }
+    }
+
+    private func tutorMessages(threadID: UUID) -> [LanguageTutorMessage] {
+        var messages: [LanguageTutorMessage] = []
+        prepared("""
+            SELECT id, role, content, createdAt FROM tutor_messages
+            WHERE threadID = ? ORDER BY createdAt, rowid;
+            """) { stmt in
+            bind(stmt, 1, threadID.uuidString)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let message = Self.readTutorMessage(stmt) { messages.append(message) }
+            }
+        }
+        return messages
+    }
+
+    private static func readTutorThread(_ stmt: OpaquePointer?) -> LanguageTutorThread? {
+        guard let id = UUID(uuidString: text(stmt, 0)),
+              let profileID = UUID(uuidString: text(stmt, 1))
+        else { return nil }
+        return LanguageTutorThread(
+            id: id, profileID: profileID, title: text(stmt, 2),
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)),
+            updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4)))
+    }
+
+    private static func readTutorMessage(_ stmt: OpaquePointer?) -> LanguageTutorMessage? {
+        guard let id = UUID(uuidString: text(stmt, 0)),
+              let role = LanguageTutorRole(rawValue: text(stmt, 1))
+        else { return nil }
+        return LanguageTutorMessage(
+            id: id, role: role, content: text(stmt, 2),
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)))
+    }
+
+    private func reviewAttempt(id: UUID) -> LanguageReviewAttempt? {
+        var out: LanguageReviewAttempt?
+        prepared("""
+            SELECT id, profileID, itemID, activity, outcome, createdAt, submittedAnswer, sessionID
+            FROM review_attempts WHERE id = ?;
+            """) { stmt in
+            bind(stmt, 1, id.uuidString)
+            if sqlite3_step(stmt) == SQLITE_ROW { out = Self.readReviewAttempt(stmt) }
+        }
+        return out
     }
 
     /// All items for a profile, optionally filtered by kind, newest first.
@@ -339,7 +654,7 @@ final class LanguageStore {
     // MARK: - Row mapping
 
     private static let itemSelect = """
-    SELECT id, profileID, kind, term, reading, translation, partOfSpeech, register, notes, examples, tags, box, dueDate, timesSeen, timesCorrect, timesWrong, createdAt, lastReviewedAt, sourceConversationID FROM items
+    SELECT id, profileID, kind, term, reading, translation, partOfSpeech, register, notes, examples, tags, box, dueDate, timesSeen, timesCorrect, timesWrong, createdAt, lastReviewedAt, sourceConversationID, acceptedAnswers FROM items
     """
 
     private static func readItem(_ stmt: OpaquePointer?) -> LearnItem {
@@ -355,6 +670,7 @@ final class LanguageStore {
             notes: text(stmt, 8),
             examples: decodeArray(text(stmt, 9)),
             tags: decodeArray(text(stmt, 10)),
+            acceptedAnswers: decodeArray(text(stmt, 19)),
             box: Int(sqlite3_column_int(stmt, 11)),
             dueDate: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 12)),
             timesSeen: Int(sqlite3_column_int(stmt, 13)),
@@ -364,6 +680,20 @@ final class LanguageStore {
             lastReviewedAt: sqlite3_column_type(stmt, 17) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 17)),
             sourceConversationID: sqlite3_column_type(stmt, 18) == SQLITE_NULL ? nil : UUID(uuidString: text(stmt, 18))
         )
+    }
+
+    private static func readReviewAttempt(_ stmt: OpaquePointer?) -> LanguageReviewAttempt? {
+        guard let id = UUID(uuidString: text(stmt, 0)),
+              let profileID = UUID(uuidString: text(stmt, 1)),
+              let itemID = UUID(uuidString: text(stmt, 2)),
+              let activity = LanguageActivity(rawValue: text(stmt, 3)),
+              let outcome = LanguageReviewOutcome(rawValue: text(stmt, 4))
+        else { return nil }
+        return LanguageReviewAttempt(
+            id: id, profileID: profileID, itemID: itemID, activity: activity, outcome: outcome,
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5)),
+            submittedAnswer: sqlite3_column_type(stmt, 6) == SQLITE_NULL ? nil : text(stmt, 6),
+            sessionID: sqlite3_column_type(stmt, 7) == SQLITE_NULL ? nil : UUID(uuidString: text(stmt, 7)))
     }
 
     // MARK: - Low-level helpers

@@ -4,7 +4,7 @@ extension AppModel {
     func newConversation(personaID: UUID? = nil) {
         guard canCreateConversation else { return }
         let pid = personaID ?? currentPersonaIDForNewChat()
-        let convo = Conversation(personaID: pid, isLanguage: mode == .language ? true : nil)
+        let convo = Conversation(personaID: pid)
         searchText = ""
         conversations.insert(convo, at: 0)
         hydratedIDs.insert(convo.id)
@@ -31,8 +31,7 @@ extension AppModel {
         Self.deleteConversationFile(id)
         try? FileManager.default.removeItem(at: Paths.conversationFiles(id))
         if selectedConversationID == id {
-            selectedConversationID =
-                conversations.first(where: { ($0.isLanguage == true) == (mode == .language) })?.id
+            selectedConversationID = conversations.first?.id
         }
         if conversations.isEmpty { newConversation() }
     }

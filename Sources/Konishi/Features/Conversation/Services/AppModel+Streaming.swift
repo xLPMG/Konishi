@@ -138,12 +138,9 @@ extension AppModel {
 
         streamTask = Task { [weak self] in
             guard let self else { return }
-            let baseSystemText =
-                self.mode == .language
-                ? languageSystemPrompt(persona: persona)
-                : personaStore.stableSystemPrompt(
-                    persona: persona, injectDateContext: settings.injectDateContext, mode: mode,
-                    vaultConfigured: !settings.vaultPath.isEmpty)
+            let baseSystemText = personaStore.stableSystemPrompt(
+                persona: persona, injectDateContext: settings.injectDateContext, mode: mode,
+                vaultConfigured: !settings.vaultPath.isEmpty)
             let systemText = unattendedGuidance.isEmpty
                 ? baseSystemText : baseSystemText + "\n\n" + unattendedGuidance
             async let memTask = self.memoryContext(
@@ -611,7 +608,6 @@ extension AppModel {
         toolExecutionTask?.cancel()
         toolExecutionTask = nil
         if wasExecutingTools { isStoppingWork = true }
-        cancelInteraction()  // resume/clear any paused multiple-choice prompt
         resetSpeech()
         flushTask?.cancel()
         flushTask = nil

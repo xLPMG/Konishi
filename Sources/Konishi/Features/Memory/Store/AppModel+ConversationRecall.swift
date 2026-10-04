@@ -51,7 +51,7 @@ extension AppModel {
         let matches =
             conversations
             .filter { c in
-                c.isLanguage != true && c.id != current && (cutoff.map { c.updatedAt >= $0 } ?? true)
+                c.id != current && (cutoff.map { c.updatedAt >= $0 } ?? true)
             }
             .sorted { $0.updatedAt > $1.updatedAt }
             .prefix(min(max(limit ?? 10, 1), 30))
@@ -67,9 +67,7 @@ extension AppModel {
     func conversationReadResult(id: String) -> String {
         let key = id.trimmingCharacters(in: .whitespaces).lowercased()
         guard key.count >= 4 else { return "Error: id too short" }
-        let matches = conversations.filter {
-            $0.isLanguage != true && $0.id.uuidString.lowercased().hasPrefix(key)
-        }
+        let matches = conversations.filter { $0.id.uuidString.lowercased().hasPrefix(key) }
         guard let c = matches.first else { return "Error: no conversation with id \(id)" }
         guard matches.count == 1 else { return "Error: id \(id) is ambiguous; use more characters" }
         let digest = c.digest?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

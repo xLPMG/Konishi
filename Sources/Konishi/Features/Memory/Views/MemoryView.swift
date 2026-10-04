@@ -237,7 +237,7 @@ struct MemoryView: View {
 
     private var summarizedConversations: [Conversation] {
         model.conversations
-            .filter { $0.isLanguage != true && !($0.digest ?? "").isEmpty }
+            .filter { !($0.digest ?? "").isEmpty }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 

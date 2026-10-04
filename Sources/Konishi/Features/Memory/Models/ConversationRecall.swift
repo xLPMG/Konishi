@@ -16,7 +16,7 @@ enum ConversationRecall {
     /// Conversations that have a digest, excluding Learn sessions and the one in progress.
     static func entries(from conversations: [Conversation], excluding current: UUID?) -> [Entry] {
         conversations.compactMap { c in
-            guard c.isLanguage != true, c.id != current,
+            guard c.id != current,
                 let digest = c.digest?.trimmingCharacters(in: .whitespacesAndNewlines),
                 !digest.isEmpty
             else { return nil }
@@ -35,7 +35,7 @@ enum ConversationRecall {
     ) -> [Conversation] {
         conversations
             .filter { c in
-                c.isLanguage != true && c.digestRolledUpAt == nil
+                c.digestRolledUpAt == nil
                     && c.updatedAt <= now.addingTimeInterval(-rollupAge)
                     && !(c.digest?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
             }

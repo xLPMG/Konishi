@@ -4,6 +4,7 @@ import AVFoundation
 /// Create or edit a language-learning profile (target/base language, level, romanization, notes).
 struct LanguageProfileEditor: View {
     @Environment(AppModel.self) private var model
+       @Environment(LanguageWorkspaceModel.self) private var workspace
     @Environment(\.dismiss) private var dismiss
     @State private var draft: LanguageProfile
     private let isNew: Bool
@@ -53,7 +54,7 @@ struct LanguageProfileEditor: View {
                 if !isNew {
                     Section {
                         Button(role: .destructive) {
-                            model.deleteLanguageProfile(draft.id)
+                               workspace.deleteProfile(draft.id)
                             dismiss()
                         } label: {
                             Label("Delete Language", systemImage: "trash")
@@ -70,7 +71,7 @@ struct LanguageProfileEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
-                        model.saveLanguageProfile(draft, makeActive: true)
+                           workspace.saveProfile(draft, makeActive: true)
                         dismiss()
                     }
                     .disabled(draft.targetName.isEmpty || draft.targetLocale == draft.baseLocale)

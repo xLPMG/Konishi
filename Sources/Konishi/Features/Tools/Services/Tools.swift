@@ -8,8 +8,6 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
     case compute
     case calendar
     case system
-    case language
-    case interactive
     case vault
 
     var id: String { rawValue }
@@ -22,8 +20,6 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
         case .compute: "Compute"
         case .calendar: "Calendar & Reminders"
         case .system: "System"
-        case .language: "Language deck"
-        case .interactive: "Interactive"
         case .vault: "Research vault"
         }
     }
@@ -376,116 +372,7 @@ enum Tools {
         )
     ]
 
-    // MARK: Language deck (used in Learn mode; registered so they appear in per-mode settings)
-
-    static let languageSpecs: [ToolSpec] = [
-        ToolSpec(
-            name: "add_vocab",
-            summary: "Add a vocabulary card",
-            description: "Add a vocabulary card to the deck.",
-            parameters: .schema(
-                properties: [
-                    "term": .property("string", "word in the target language"),
-                    "translation": .property("string", "meaning"),
-                    "reading": .property("string", "pronunciation/romanization, if useful"),
-                    "part_of_speech": .property("string", "e.g. noun, verb"),
-                    "example": .property("string", "a short example sentence"),
-                    "register": .property("string", "formal, casual, honorific, slang — if notable"),
-                    "notes": .property("string", "brief usage caveat"),
-                    "tags": .arrayProperty("topic tags")
-                ],
-                required: ["term", "translation"]
-            ),
-            group: .language,
-            defaultEnabled: false
-        ),
-        ToolSpec(
-            name: "add_grammar",
-            summary: "Add a grammar card",
-            description: "Add a grammar point to the deck.",
-            parameters: .schema(
-                properties: [
-                    "point": .property("string", "the grammar point"),
-                    "explanation": .property("string", "concise explanation"),
-                    "example": .property("string", "a short example sentence"),
-                    "notes": .property("string", "brief caveat"),
-                    "tags": .arrayProperty("topic tags")
-                ],
-                required: ["point", "explanation"]
-            ),
-            group: .language,
-            defaultEnabled: false
-        ),
-        ToolSpec(
-            name: "search_deck",
-            summary: "Search the deck",
-            description: "Search the deck for existing cards before adding a duplicate.",
-            parameters: .schema(
-                properties: ["query": .property("string", "term or meaning to look up")],
-                required: ["query"]
-            ),
-            group: .language,
-            defaultEnabled: false
-        ),
-        ToolSpec(
-            name: "get_due_items",
-            summary: "Get cards due for review",
-            description: "List cards due for review, with their ids.",
-            parameters: .schema(
-                properties: ["limit": .property("integer", "max cards (default 10)")],
-                required: []
-            ),
-            group: .language,
-            defaultEnabled: false
-        ),
-        ToolSpec(
-            name: "record_review",
-            summary: "Record a review result",
-            description: "Record a judged open-response answer for a deck card and update its schedule. Do not call for a question answered through ask_multiple_choice with item_id; that tool records it automatically.",
-            parameters: .schema(
-                properties: [
-                    "id": .property("string", "the card id"),
-                    "correct": .property("boolean", "true if the user was right")
-                ],
-                required: ["id", "correct"]
-            ),
-            group: .language,
-            defaultEnabled: false
-        )
-    ]
-
-    // MARK: Interactive (general-purpose; usable in any mode)
-
-    static let interactiveSpecs: [ToolSpec] = [
-        ToolSpec(
-            name: "ask_multiple_choice",
-            summary: "Ask multiple-choice questions",
-            description: "Ask the user multiple-choice questions; returns their answers. For due-card practice, ask one card per call and include its item_id and correct_index. Linked cards are graded and recorded automatically; never call record_review for them. Ask the next card with another tool call, not plain text.",
-            parameters: .schema(
-                properties: [
-                    "questions": .object([
-                        "type": .string("array"),
-                        "description": .string("one or more questions"),
-                        "items": .object([
-                            "type": .string("object"),
-                            "properties": .object([
-                                "prompt": .property("string", "the question"),
-                                "options": .arrayProperty("answer choices"),
-                                "correct_index": .property("integer", "0-based index of the correct option, if known"),
-                                "item_id": .property("string", "deck card id this tests, if any")
-                            ]),
-                            "required": .array([.string("prompt"), .string("options")])
-                        ])
-                    ])
-                ],
-                required: ["questions"]
-            ),
-            group: .interactive,
-            defaultEnabled: false
-        )
-    ]
-
-    static let all: [ToolSpec] = baseSpecs + languageSpecs + interactiveSpecs + vaultSpecs + calendarSpecs
+    static let all: [ToolSpec] = baseSpecs + vaultSpecs + calendarSpecs
 
     // MARK: Research vault (Obsidian) — gated per-persona by Persona.vaultAccessEnabled.
 
@@ -574,16 +461,9 @@ enum Tools {
 
     static let defaultEnabled: Set<String> = Set((baseSpecs + vaultSpecs + calendarSpecs).filter(\.defaultEnabled).map(\.name))
 
-    /// Every deck tool plus the interactive picker — the sensible default toolset for Learn mode.
-    static let languageToolNames: Set<String> =
-        Set(languageSpecs.map(\.name)).union(interactiveSpecs.map(\.name))
-
     /// Default enabled tools for a given mode (used until the user customises per-mode settings).
     static func modeEnabledDefaults(_ mode: AppMode) -> Set<String> {
-        switch mode {
-        case .language: return languageToolNames
-        default: return defaultEnabled
-        }
+        mode == .language ? [] : defaultEnabled
     }
 
     static func spec(_ name: String) -> ToolSpec? { all.first { $0.name == name } }

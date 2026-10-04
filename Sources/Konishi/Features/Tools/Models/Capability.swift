@@ -19,6 +19,10 @@ enum Capability: String, CaseIterable, Codable, Sendable {
     case codeExecution
     case userInput
 
+    static var configurableCases: [Capability] {
+        allCases.filter { $0 != .deckRead && $0 != .deckWrite && $0 != .userInput }
+    }
+
     enum Kind: String, Codable, Sendable {
         case read
         case write
@@ -101,7 +105,7 @@ enum Capability: String, CaseIterable, Codable, Sendable {
              .personalDataRead, .webAccess, .shellAllowlisted:
             .allow
         case .deckRead, .deckWrite:
-            mode == .language ? .allow : .ask
+            .ask
         case .memoryWrite, .vaultWrite, .personalDataWrite, .externalRead,
              .externalWrite, .codeExecution, .userInput:
             .ask

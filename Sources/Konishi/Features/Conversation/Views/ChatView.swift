@@ -506,43 +506,6 @@ struct ChatView: View {
     }
 
     private var starterPrompts: [StarterPrompt] {
-        if model.mode == .language, let profile = model.activeLanguageProfile {
-            let enteredTopic = model.languageSession.topic.trimmingCharacters(in: .whitespacesAndNewlines)
-            let topic = enteredTopic.isEmpty ? "everyday life" : enteredTopic
-            switch model.languageSession.kind {
-            case .study:
-                return [
-                    StarterPrompt(title: "Learn a phrase", detail: "Pronunciation and a natural example", icon: "textformat.abc", action: .draft("Teach me a useful \(profile.targetName) phrase about \(topic), with pronunciation and an example.")),
-                    StarterPrompt(title: "Understand grammar", detail: "One pattern, explained with examples", icon: "text.book.closed", action: .draft("Explain one useful \(profile.targetName) grammar point related to \(topic), with examples.")),
-                    StarterPrompt(title: "Build vocabulary", detail: "Three useful words, one at a time", icon: "sparkles", action: .draft("Teach me three useful \(profile.targetName) words about \(topic), one at a time."))
-                ]
-            case .practice:
-                var prompts: [StarterPrompt] = []
-                if enabledStarterTools.contains("get_due_items") {
-                    if enabledStarterTools.contains("ask_multiple_choice") {
-                        prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz and record reviews from your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName), one at a time. Use ask_multiple_choice for every card, include its item_id, and continue with another tool call after each answer. The tool records linked reviews automatically.")))
-                    } else if enabledStarterTools.contains("record_review") {
-                        prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz and record reviews from your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName). Ask one open-response question at a time and call record_review with that card's id after each answer before continuing.")))
-                    } else {
-                        prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz cards currently due in your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName). Ask one question at a time.")))
-                    }
-                } else {
-                    prompts.append(StarterPrompt(title: "Build vocabulary", detail: "Learn three useful words, one at a time", icon: "textformat.abc", action: .draft("Teach me three useful \(profile.targetName) words about \(topic), one at a time.")))
-                }
-                prompts += [
-                    StarterPrompt(title: "Quick quiz", detail: "A short, one-question-at-a-time quiz", icon: "questionmark.circle", action: .draft("Give me a short \(profile.targetName) quiz about \(topic), one question at a time.")),
-                    StarterPrompt(title: "Practice a dialogue", detail: "Take turns in a short conversation", icon: "bubble.left.and.bubble.right", action: .draft("Start a short \(profile.targetName) dialogue about \(topic) and let me respond."))
-                ]
-                return prompts
-            case .free:
-                return [
-                    StarterPrompt(title: "Start a conversation", detail: "A relaxed chat about \(topic)", icon: "bubble.left.and.bubble.right", action: .draft("Start a natural \(profile.targetName) conversation about \(topic). Ask me one question at a time.")),
-                    StarterPrompt(title: "Tell a short story", detail: "A short story at your level", icon: "book", action: .draft("Tell me a short, level-appropriate story in \(profile.targetName) about \(topic), then ask what I understood.")),
-                    StarterPrompt(title: "Practice speaking", detail: "Chat and gently correct mistakes", icon: "waveform", action: .draft("Have a relaxed spoken \(profile.targetName) conversation about \(topic), gently correcting my mistakes."))
-                ]
-            }
-        }
-
         var prompts: [StarterPrompt] = []
         if model.mode == .chat {
             let enabledTools = enabledStarterTools
@@ -680,16 +643,10 @@ struct ChatView: View {
     }
 
     private var emptyStateTitle: String {
-        if model.mode == .language, let profile = model.activeLanguageProfile {
-            return "A little more \(profile.targetName) today."
-        }
         return "A little room to think."
     }
 
     private var emptyStateSubtitle: String {
-        if model.mode == .language, let profile = model.activeLanguageProfile {
-            return "\(model.languageSession.kind.label) with \(model.currentAssistantName), at \(profile.level.code)."
-        }
         return "Start a conversation with \(model.currentAssistantName)."
     }
 
@@ -1908,8 +1865,6 @@ private struct ToolCallView: View {
         case "vault_search", "vault_read", "vault_list", "vault_write", "vault_append": return "lock.doc"
         case "memory_list", "memory_read", "memory_write", "memory_append": return "brain.head.profile"
         case "conversation_search", "conversation_list", "conversation_read": return "clock.arrow.circlepath"
-        case "add_vocab", "add_grammar", "search_deck", "get_due_items", "record_review": return "character.book.closed"
-        case "ask_multiple_choice": return "questionmark.bubble"
         default: return "wrench.and.screwdriver"
         }
     }

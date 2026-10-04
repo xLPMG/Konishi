@@ -5,14 +5,6 @@ extension AppModel {
         let clean = text.strippedForSpeech
         guard !clean.isEmpty else { return }
         voice.lastError = nil
-        // Language practice: native voices switch per language; server TTS can't do the target language well.
-        if mode == .language, let p = activeLanguageProfile {
-            voice.speakBilingual(
-                clean, targetLocale: p.targetLocale, baseLocale: p.baseLocale,
-                targetVoiceID: p.targetVoiceID, baseVoiceID: p.baseVoiceID,
-                rate: settings.speechRate)
-            return
-        }
         if settings.ttsSource == .server {
             let config = settings.requestConfig(modelOverride: nil)
             Task { [weak self] in
@@ -46,7 +38,7 @@ extension AppModel {
             if settings.sttSource == .server {
                 voice.startRecording()
             } else {
-                voice.startNativeDictation(locale: languageDictationLocale()) {
+                voice.startNativeDictation(locale: "en-US") {
                     [weak self] update in
                     self?.draft = update.text
                 }
@@ -54,13 +46,7 @@ extension AppModel {
         }
     }
 
-    /// Locale for native dictation: the chosen practice language in Learn mode, else English.
-    func languageDictationLocale() -> String {
-        guard mode == .language, let p = activeLanguageProfile else { return "en-US" }
-        return languageInputTarget ? p.targetLocale : p.baseLocale
-    }
-
-    var nativeTTS: Bool { mode == .language || settings.ttsSource == .native }
+    var nativeTTS: Bool { settings.ttsSource == .native }
 
     /// Speaks newly-completed sentences as the reply streams in (native and server TTS), so speech
     /// starts almost immediately instead of waiting for the whole message. Only the unspoken tail
@@ -97,12 +83,7 @@ extension AppModel {
     private func enqueueSpeech(_ text: String) {
         let clean = text.strippedForSpeech
         guard !clean.isEmpty else { return }
-        if mode == .language, let p = activeLanguageProfile {
-            voice.enqueueBilingual(
-                clean, targetLocale: p.targetLocale, baseLocale: p.baseLocale,
-                targetVoiceID: p.targetVoiceID, baseVoiceID: p.baseVoiceID,
-                rate: settings.speechRate)
-        } else if nativeTTS {
+        if nativeTTS {
             voice.enqueueNative(clean, voiceID: settings.voiceIdentifier, rate: settings.speechRate)
         } else {
             beginServerSpeechIfNeeded()
