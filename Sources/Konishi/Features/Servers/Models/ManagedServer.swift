@@ -23,6 +23,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     var pipPackage: String
     /// Shell command that starts the server. Runs with the venv on PATH.
     var command: String
+    /// Local model path or Hugging Face identifier passed separately to the server command.
+    var model: String?
     var host: String
     var port: Int
     var role: Role
@@ -32,25 +34,30 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     var autostart: Bool?
 
     var launchCommand: String {
-        let stripped = command
+        let stripped = Self.commandWithoutModel(command)
             .replacingOccurrences(of: #"\s*--host(?:=|\s+)\S+"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s*--port(?:=|\s+)\d+"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespaces)
-        return stripped + " --host \(Self.shellQuote(host))" + " --port \(port)"
+        let modelArgument = modelPath.map { "--model \(Self.shellQuotePath($0))" }
+        return ([stripped] + (modelArgument.map { [$0] } ?? []) + ["--host \(Self.shellQuote(host))", "--port \(port)"])
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     var supportsModelSelection: Bool {
         let backend = pipPackage.lowercased()
-        return command.contains("--model") || backend.contains("mlx-lm") || backend.contains("mlx-vlm") || backend.contains("mlx-embeddings")
+        return role == .chat || role == .embedding || command.contains("--model")
+            || backend.contains("mlx-lm") || backend.contains("mlx-vlm") || backend.contains("mlx-embeddings")
     }
 
     var modelPath: String? {
+        if let model { return model }
         let pattern = #"(--model(?:=|\s+))(?:"([^"]*)"|'([^']*)'|(\S+))"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)) else { return nil }
-        let source = command as NSString
-        for group in 2...4 where match.range(at: group).location != NSNotFound {
-            return source.substring(with: match.range(at: group))
+                            let match = regex.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)) else { return nil }
+                let source = command as NSString
+                for group in 2...4 where match.range(at: group).location != NSNotFound {
+                        return source.substring(with: match.range(at: group))
         }
         return nil
     }
@@ -60,18 +67,40 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
         let fullRange = NSRange(command.startIndex..., in: command)
         let value = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let match = regex.firstMatch(in: command, range: fullRange) {
-            let prefix = (command as NSString).substring(with: match.range(at: 1))
-            let replacement = value.isEmpty ? "" : prefix + Self.shellQuote(value)
-            command = (command as NSString).replacingCharacters(in: match.range, with: replacement)
-                .trimmingCharacters(in: .whitespaces)
-        } else if !value.isEmpty {
-            command += " --model \(Self.shellQuote(value))"
-        }
+        model = value.isEmpty ? nil : value
+        command = regex.stringByReplacingMatches(in: command, range: fullRange, withTemplate: "")
+            .trimmingCharacters(in: .whitespaces)
     }
 
     private static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    private static func shellQuotePath(_ value: String) -> String {
+        if value == "~" { return "\"$HOME\"" }
+        if value.hasPrefix("~/") { return "\"$HOME\"/" + shellQuote(String(value.dropFirst(2))) }
+        return shellQuote(value)
+    }
+
+    private static func extractModelPath(from command: String) -> String? {
+        let pattern = #"--model(?:=|\s+)(?:"([^"]*)"|'([^']*)'|(\S+))"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)) else { return nil }
+        let source = command as NSString
+        for group in 1...3 where match.range(at: group).location != NSNotFound {
+            return source.substring(with: match.range(at: group))
+        }
+        return nil
+    }
+
+    private static func commandWithoutModel(_ command: String) -> String {
+        let pattern = #"\s*--model(?:=|\s+)(?:"[^"]*"|'[^']*'|\S+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return command }
+        return regex.stringByReplacingMatches(
+            in: command,
+            range: NSRange(command.startIndex..., in: command),
+            withTemplate: ""
+        ).trimmingCharacters(in: .whitespaces)
     }
 
     var endpointURL: String {
@@ -88,6 +117,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         name: String,
         pipPackage: String,
         command: String,
+        model: String? = nil,
         host: String,
         port: Int,
         role: Role,
@@ -97,7 +127,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         self.id = id
         self.name = name
         self.pipPackage = pipPackage
-        self.command = command
+        self.command = Self.commandWithoutModel(command)
+        self.model = model ?? Self.extractModelPath(from: command)
         self.host = host
         self.port = port
         self.role = role
@@ -105,12 +136,32 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         self.autostart = autostart
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, name, pipPackage, command, model, host, port, role, note, autostart
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let legacyCommand = try values.decode(String.self, forKey: .command)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        pipPackage = try values.decode(String.self, forKey: .pipPackage)
+        command = Self.commandWithoutModel(legacyCommand)
+        model = try values.decodeIfPresent(String.self, forKey: .model) ?? Self.extractModelPath(from: legacyCommand)
+        host = try values.decode(String.self, forKey: .host)
+        port = try values.decode(Int.self, forKey: .port)
+        role = try values.decode(Role.self, forKey: .role)
+        note = try values.decode(String.self, forKey: .note)
+        autostart = try values.decodeIfPresent(Bool.self, forKey: .autostart)
+    }
+
     static var presets: [ManagedServer] {
         [
             ManagedServer(
                 name: "mlx-lm (chat)",
                 pipPackage: "mlx-lm",
-                command: "mlx_lm.server --model ~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit",
+                command: "mlx_lm.server",
+                model: "~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit",
                 host: "127.0.0.1",
                 port: 8080,
                 role: .chat,
@@ -119,7 +170,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
             ManagedServer(
                 name: "mlx-vlm (vision chat)",
                 pipPackage: "mlx-vlm",
-                command: "mlx_vlm.server --model ~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit",
+                command: "mlx_vlm.server",
+                model: "~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit",
                 host: "127.0.0.1",
                 port: 8080,
                 role: .chat,
@@ -137,7 +189,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
             ManagedServer(
                 name: "mlx embeddings",
                 pipPackage: "mlx-embeddings",
-                command: "python ~/Konishi/python/mlx_embed_server.py --model ~/.lmstudio/models/AutomatosX/AX-Qwen3-Embedding-0.6B-MLX-AXQ-4bit",
+                command: "python ~/Konishi/python/mlx_embed_server.py",
+                model: "~/.lmstudio/models/AutomatosX/AX-Qwen3-Embedding-0.6B-MLX-AXQ-4bit",
                 host: "127.0.0.1",
                 port: 7997,
                 role: .embedding,

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct RuntimeSettings: View {
     @Environment(AppModel.self) private var model
@@ -337,29 +338,42 @@ private struct ManagedServerRow: View {
         @Bindable var settings = model.settings
         VStack(alignment: .leading, spacing: 5) {
             if draft.supportsModelSelection {
-                HStack {
-                    TextField("Model path or Hugging Face ID", text: modelPathBinding)
-                        .font(.system(size: 12, design: .monospaced))
+                LabeledContent(modelFieldLabel) {
+                    HStack {
+                        TextField("Local path or Hugging Face ID", text: modelPathBinding)
+                            .font(.system(size: 12, design: .monospaced))
+                            .disabled(managedActive)
+                        Button(action: chooseModelFolder) {
+                            Image(systemName: "folder")
+                        }
+                        .help("Choose a local model folder")
                         .disabled(managedActive)
-                    Menu {
-                        ForEach(model.discoveredModels.prefix(100)) { entry in
-                            Button(entry.name) { selectModel(entry.path) }
+                        Menu {
+                            ForEach(model.discoveredModels.prefix(100)) { entry in
+                                Button(entry.name) { selectModel(entry.path) }
+                            }
+                            if model.discoveredModels.isEmpty {
+                                Text("No local models detected")
+                            }
+                        } label: {
+                            Image(systemName: "square.grid.2x2")
                         }
-                        if model.discoveredModels.isEmpty {
-                            Text("No local models detected")
-                        }
-                    } label: {
-                        Image(systemName: "square.grid.2x2")
+                        .help("Choose a detected local model")
+                        .disabled(model.discoveredModels.isEmpty || managedActive)
                     }
-                    .help("Choose a detected local model")
-                    .disabled(model.discoveredModels.isEmpty)
                 }
             }
             switch draft.role {
             case .chat:
-                LabeledContent("Chat model", value: settings.model.isEmpty ? "Not selected" : settings.model)
+                LabeledContent("Chat model") {
+                    Text(settings.model.isEmpty ? "Not selected" : shortModelName(settings.model))
+                        .help(settings.model)
+                }
             case .embedding:
-                LabeledContent("Embedding model", value: settings.embeddingModel.isEmpty ? "Not selected" : settings.embeddingModel)
+                LabeledContent("Embedding model") {
+                    Text(settings.embeddingModel.isEmpty ? "Not selected" : shortModelName(settings.embeddingModel))
+                        .help(settings.embeddingModel)
+                }
             case .audio:
                 if model.audioModels.isEmpty {
                     HStack {
@@ -387,6 +401,16 @@ private struct ManagedServerRow: View {
         )
     }
 
+    private var modelFieldLabel: String {
+        guard let path = draft.modelPath,
+              !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Model" }
+        return shortModelName(path)
+    }
+
+    private func shortModelName(_ identifier: String) -> String {
+        (identifier.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).lastPathComponent
+    }
+
     private func selectModel(_ path: String) {
         var updated = draft
         updated.setModelPath(path)
@@ -396,5 +420,16 @@ private struct ManagedServerRow: View {
         case .embedding: model.settings.embeddingModel = path
         case .audio, .none: break
         }
+    }
+
+    private func chooseModelFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Model Folder"
+        panel.prompt = "Choose Model"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        selectModel(url.path)
     }
 }
