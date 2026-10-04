@@ -51,6 +51,22 @@ struct LanguageLearningEngineTests {
             for: first, from: [first, ambiguous], direction: .targetToBase) == nil)
     }
 
+    @Test("multiple choice excludes approved translations from distractors")
+    func multipleChoiceExcludesAcceptedAlternatives() throws {
+        let profileID = UUID()
+        let target = LearnItem(
+            profileID: profileID, kind: .vocab, term: "猫", translation: "cat",
+            acceptedTranslations: ["kitty"])
+        let synonymCollision = item(profileID: profileID, term: "子猫", translation: "kitty")
+        let distractor = item(profileID: profileID, term: "犬", translation: "dog")
+
+        let question = try #require(LanguageLearningEngine.multipleChoice(
+            for: target, from: [target, synonymCollision, distractor], direction: .targetToBase))
+
+        #expect(!question.choices.contains { LanguageLearningEngine.normalizeAnswer($0.text) == "kitty" })
+        #expect(question.acceptedAnswers.contains("kitty"))
+    }
+
     @Test("typed recall uses canonical Unicode, collapsed whitespace, and case folding only")
     func typedRecallNormalization() throws {
         let item = item(profileID: UUID(), term: "café", translation: "coffee")

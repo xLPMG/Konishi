@@ -10,6 +10,15 @@ struct PracticeSessionView: View {
 
     private var question: LanguageQuestion? { workspace.practiceSession?.currentQuestion }
 
+    private var shouldShowContinue: Bool {
+        guard workspace.answerRecorded,
+              let question,
+              question.activity != .flashcards,
+              let isCorrect = workspace.answerResult?.allCorrect
+        else { return false }
+        return !isCorrect
+    }
+
     var body: some View {
         Group {
             if let session = workspace.practiceSession, session.isComplete {
@@ -23,12 +32,13 @@ struct PracticeSessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: workspace.practiceSession?.currentQuestion?.id) { clearAnswer() }
           .task(id: workspace.answerRecorded) {
-            guard workspace.answerRecorded,
+            guard workspace.answerRecorded, !shouldShowContinue,
                 let questionID = workspace.practiceSession?.currentQuestion?.id
             else { return }
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled,
                 workspace.answerRecorded,
+                !shouldShowContinue,
                 workspace.practiceSession?.currentQuestion?.id == questionID
             else { return }
             workspace.continuePractice()
@@ -38,6 +48,9 @@ struct PracticeSessionView: View {
     private func exercise(session: LanguagePracticeSession, question: LanguageQuestion) -> some View {
         VStack(spacing: 0) {
             HStack {
+                Button("Pause") { workspace.pausePractice() }
+                    .buttonStyle(.plain)
+                    .help("Pause and return to Review setup")
                 Button {
                     workspace.cancelPractice()
                 } label: {
@@ -81,6 +94,12 @@ struct PracticeSessionView: View {
 
                 answerControls(question)
                     .frame(maxWidth: 620)
+
+                if shouldShowContinue {
+                    Button("Continue") { workspace.continuePractice() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.return, modifiers: [])
+                }
 
                 if let error = workspace.reviewError {
                     Label(error, systemImage: "exclamationmark.circle")
@@ -215,14 +234,37 @@ struct PracticeSessionView: View {
         let isCorrect = workspace.answerResult?.allCorrect == true
         let title = question.activity == .flashcards
             ? "Self-rating saved"
-            : isCorrect ? "Correct" : "Review saved"
+            : isCorrect ? "Correct" : "Not quite"
         let color: Color = question.activity == .flashcards || isCorrect ? .green : .orange
-        return Text(title)
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(color)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .accessibilityAddTraits(.updatesFrequently)
+        return VStack(spacing: 6) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(color)
+                .accessibilityAddTraits(.updatesFrequently)
+
+            if !isCorrect && question.activity != .flashcards {
+                if question.activity == .matching {
+                    ForEach(question.correctMatches, id: \.self) { match in
+                        if let answer = matchingAnswer(match, question: question) {
+                            Text(answer).font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    Text("Answer: \(question.answer)")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func matchingAnswer(_ match: LanguageMatch, question: LanguageQuestion) -> String? {
+        guard let term = question.matchTerms.first(where: { $0.id == match.termOptionID })?.text,
+              let meaning = question.matchMeanings.first(where: { $0.id == match.meaningOptionID })?.text
+        else { return nil }
+        return "\(term) -> \(meaning)"
     }
 
     private func completion(_ session: LanguagePracticeSession) -> some View {

@@ -61,18 +61,36 @@ struct PracticeSetupView: View {
                 .background(appModel.currentPalette.surface, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(appModel.currentPalette.border, lineWidth: 1))
                 .tint(appModel.currentPalette.signal)
+                .disabled(workspace.canResumePractice)
 
-                HStack {
-                    Label("\(workspace.activeStats.due) due", systemImage: "clock")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        workspace.startPractice()
-                    } label: {
-                        Label("Start Review", systemImage: "play.fill")
+                if let session = workspace.practiceSession, workspace.canResumePractice {
+                    HStack {
+                        Label("Paused · \(session.currentIndex + 1) of \(session.questions.count)",
+                              systemImage: "pause.circle")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("End Review", role: .destructive) { workspace.cancelPractice() }
+                            .buttonStyle(.bordered)
+                        Button {
+                            workspace.resumePractice()
+                        } label: {
+                            Label("Resume Review", systemImage: "play.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(workspace.activeProfile == nil)
+                } else {
+                    HStack {
+                        Label("\(workspace.activeStats.due) due", systemImage: "clock")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button {
+                            workspace.startPractice()
+                        } label: {
+                            Label("Start Review", systemImage: "play.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(workspace.activeProfile == nil)
+                    }
                 }
 
                 if let error = workspace.reviewError {

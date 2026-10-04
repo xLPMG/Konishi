@@ -64,6 +64,7 @@ final class LanguageWorkspaceModel {
     private(set) var tutorStreamedReply = ""
     private(set) var isTutorStreaming = false
     private(set) var tutorError: String?
+    private(set) var failedTutorMessageID: UUID?
     @ObservationIgnored private var tutorTask: Task<Void, Never>?
     var onProfileChange: ((UUID?) -> Void)?
 
@@ -88,6 +89,10 @@ final class LanguageWorkspaceModel {
 
     var canSkipCurrentQuestion: Bool {
         !answerRecorded && pendingAttemptIDs.isEmpty
+    }
+
+    var canResumePractice: Bool {
+        practiceSession.map { !$0.isComplete } == true
     }
 
     func refresh() {
@@ -134,6 +139,56 @@ final class LanguageWorkspaceModel {
     func deleteDeckItem(_ id: UUID) {
         store.delete(id: id)
         notifyDeckChanged()
+    }
+
+    @discardableResult
+    func saveDeckItem(_ item: LearnItem) -> String? {
+        guard let profile = activeProfile else { return "Set up a language profile first." }
+        guard item.profileID == profile.id else { return "This card belongs to another language profile." }
+
+        var cleaned = item
+        func clean(_ value: String) -> String {
+            value.precomposedStringWithCanonicalMapping
+                .split(whereSeparator: \.isWhitespace)
+                .joined(separator: " ")
+        }
+        cleaned.term = clean(item.term)
+        cleaned.translation = clean(item.translation)
+        guard !cleaned.term.isEmpty, !cleaned.translation.isEmpty else {
+            return "A term and translation are required."
+        }
+
+        func alternatives(_ values: [String], primary: String) -> [String] {
+            var seen: Set<String> = [LanguageLearningEngine.normalizeAnswer(primary)]
+            return values.compactMap { value in
+                let answer = clean(value)
+                let key = LanguageLearningEngine.normalizeAnswer(answer)
+                guard !key.isEmpty, seen.insert(key).inserted else { return nil }
+                return answer
+            }
+        }
+        cleaned.reading = clean(item.reading)
+        cleaned.partOfSpeech = clean(item.partOfSpeech)
+        cleaned.register = clean(item.register)
+        cleaned.notes = clean(item.notes)
+        cleaned.examples = item.examples.map(clean).filter { !$0.isEmpty }
+        cleaned.tags = Array(Set(item.tags.map(clean).filter { !$0.isEmpty })).sorted()
+        if cleaned.kind == .vocab {
+            cleaned.acceptedAnswers = alternatives(item.acceptedAnswers, primary: cleaned.term)
+            cleaned.acceptedTranslations = alternatives(item.acceptedTranslations, primary: cleaned.translation)
+        } else {
+            cleaned.acceptedAnswers = []
+            cleaned.acceptedTranslations = []
+        }
+
+        let normalizedTerm = LanguageLearningEngine.normalizeAnswer(cleaned.term)
+        let duplicate = store.items(profileID: profile.id, kind: cleaned.kind).contains {
+            $0.id != cleaned.id && LanguageLearningEngine.normalizeAnswer($0.term) == normalizedTerm
+        }
+        guard !duplicate else { return "A card with this term already exists in this profile." }
+        guard store.upsert(cleaned) else { return "Could not save this card." }
+        notifyDeckChanged()
+        return nil
     }
 
     @discardableResult
@@ -297,6 +352,16 @@ final class LanguageWorkspaceModel {
         destination = .practice
     }
 
+    func pausePractice() {
+        guard practiceSession != nil else { return }
+        destination = .practice
+    }
+
+    func resumePractice() {
+        guard practiceSession != nil else { return }
+        destination = .session
+    }
+
     func generateProposals(config: RequestConfig, topic: String) {
         guard let profile = activeProfile else {
             proposalError = "Set up a language profile first."
@@ -314,8 +379,19 @@ final class LanguageWorkspaceModel {
                 guard !Task.isCancelled, let self,
                       self.activeProfile?.id == requestedProfileID
                 else { return }
-                self.studyProposals = proposals
-                if proposals.isEmpty { self.proposalError = "No valid proposals were returned. Try a different topic." }
+                var seenTerms = Set(self.studyProposals.map {
+                    LanguageLearningEngine.normalizeAnswer($0.targetTerm)
+                })
+                let additions = proposals.filter { proposal in
+                    seenTerms.insert(LanguageLearningEngine.normalizeAnswer(proposal.targetTerm)).inserted
+                        && !self.isDuplicateProposal(proposal)
+                }
+                self.studyProposals.append(contentsOf: additions)
+                if proposals.isEmpty {
+                    self.proposalError = "No valid proposals were returned. Try a different topic."
+                } else if additions.isEmpty {
+                    self.proposalError = "No new proposals were returned. Try a different topic."
+                }
             } catch {
                 guard let self, !Task.isCancelled,
                       self.activeProfile?.id == requestedProfileID
@@ -454,9 +530,33 @@ final class LanguageWorkspaceModel {
             _ = store.updateTutorThreadTitle(tutorThreads[threadIndex].title, threadID: threadID)
         }
         let history = tutorThreads[threadIndex].messages
-        let knownItems = store.items(profileID: profile.id)
         tutorDraft = ""
+        startTutorTurn(
+            config: config, profile: profile, threadID: threadID,
+            history: history, userMessageID: message.id)
+    }
+
+    func retryTutorMessage(config: RequestConfig) {
+        guard !isTutorStreaming,
+              let failedMessageID = failedTutorMessageID,
+              let profile = activeProfile,
+              let threadID = selectedTutorThreadID,
+              let thread = tutorThreads.first(where: { $0.id == threadID }),
+              thread.messages.last?.id == failedMessageID,
+              thread.messages.last?.role == .user
+        else { return }
+        startTutorTurn(
+            config: config, profile: profile, threadID: threadID,
+            history: thread.messages, userMessageID: failedMessageID)
+    }
+
+    private func startTutorTurn(
+        config: RequestConfig, profile: LanguageProfile, threadID: UUID,
+        history: [LanguageTutorMessage], userMessageID: UUID
+    ) {
+        let knownItems = store.items(profileID: profile.id)
         tutorError = nil
+        failedTutorMessageID = nil
         tutorStreamedReply = ""
         isTutorStreaming = true
         tutorTask = Task { [weak self] in
@@ -469,19 +569,26 @@ final class LanguageWorkspaceModel {
                 }
                 guard !Task.isCancelled, let self else { return }
                 let reply = self.tutorStreamedReply.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !reply.isEmpty {
-                    let response = LanguageTutorMessage(role: .assistant, content: reply)
-                    guard self.store.appendTutorMessage(response, to: threadID) else {
-                        self.tutorError = "The tutor replied, but the response could not be saved."
-                        self.tutorStreamedReply = ""
-                        self.isTutorStreaming = false
-                        self.tutorTask = nil
-                        return
-                    }
-                    if let index = self.tutorThreads.firstIndex(where: { $0.id == threadID }) {
-                        self.tutorThreads[index].messages.append(response)
-                        self.tutorThreads[index].updatedAt = response.createdAt
-                    }
+                guard !reply.isEmpty else {
+                    self.tutorError = "The tutor returned an empty reply. Retry the last message."
+                    self.failedTutorMessageID = userMessageID
+                    self.tutorStreamedReply = ""
+                    self.isTutorStreaming = false
+                    self.tutorTask = nil
+                    return
+                }
+                let response = LanguageTutorMessage(role: .assistant, content: reply)
+                guard self.store.appendTutorMessage(response, to: threadID) else {
+                    self.tutorError = "The tutor replied, but the response could not be saved. Retry the last message."
+                    self.failedTutorMessageID = userMessageID
+                    self.tutorStreamedReply = ""
+                    self.isTutorStreaming = false
+                    self.tutorTask = nil
+                    return
+                }
+                if let index = self.tutorThreads.firstIndex(where: { $0.id == threadID }) {
+                    self.tutorThreads[index].messages.append(response)
+                    self.tutorThreads[index].updatedAt = response.createdAt
                 }
                 self.tutorStreamedReply = ""
                 self.isTutorStreaming = false
@@ -491,6 +598,7 @@ final class LanguageWorkspaceModel {
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 self.tutorError = error.localizedDescription
+                self.failedTutorMessageID = userMessageID
                 self.tutorStreamedReply = ""
                 self.isTutorStreaming = false
                 self.tutorTask = nil
@@ -503,6 +611,7 @@ final class LanguageWorkspaceModel {
         tutorTask = nil
         tutorStreamedReply = ""
         isTutorStreaming = false
+        failedTutorMessageID = nil
     }
 
     func notifyDeckChanged() {

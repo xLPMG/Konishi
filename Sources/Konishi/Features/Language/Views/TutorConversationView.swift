@@ -129,8 +129,19 @@ struct TutorConversationView: View {
                 }
 
                 if let error = workspace.tutorError {
-                    Label(error, systemImage: "exclamationmark.circle")
-                        .font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                    HStack(spacing: 10) {
+                        Label(error, systemImage: "exclamationmark.circle")
+                            .font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                        Spacer(minLength: 0)
+                        if workspace.failedTutorMessageID != nil {
+                            Button("Retry") {
+                                workspace.retryTutorMessage(
+                                    config: appModel.settings.requestConfig(modelOverride: nil))
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(workspace.isTutorStreaming)
+                        }
+                    }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14).padding(.top, 8)
                 }

@@ -17,6 +17,8 @@ struct DeckView: View {
     @State private var showExportAlert = false
     @State private var exportAlertTitle = ""
     @State private var exportAlertMessage = ""
+    @State private var cardEditorItem: LearnItem?
+    @State private var showCardEditor = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,6 +61,16 @@ struct DeckView: View {
         } message: {
             Text(exportAlertMessage)
         }
+        .sheet(isPresented: $showCardEditor) {
+            if let profileID = workspace.activeProfile?.id {
+                DeckCardEditor(item: cardEditorItem, profileID: profileID) { item in
+                    if kindFilter != nil && kindFilter != item.kind { kindFilter = nil }
+                    search = ""
+                    selection = item.id
+                    reload()
+                }
+            }
+        }
     }
 
     private var header: some View {
@@ -67,6 +79,15 @@ struct DeckView: View {
             statPill("Due", stats.due, .orange)
             statPill("Mastered", stats.mastered, .green)
             Spacer()
+            Button {
+                cardEditorItem = nil
+                showCardEditor = true
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.borderless)
+            .disabled(workspace.activeProfile == nil)
+            .help("Add card")
             Picker("Kind", selection: $kindFilter) {
                 Text("All").tag(LearnKind?.none)
                 ForEach(LearnKind.allCases, id: \.self) { Text($0.label).tag(LearnKind?.some($0)) }
@@ -127,6 +148,7 @@ struct DeckView: View {
                 item: item,
                 onSaveAcceptedAnswers: { values in workspace.saveAcceptedAnswers(for: id, values: values) },
                 onSaveAcceptedTranslations: { values in workspace.saveAcceptedTranslations(for: id, values: values) },
+                onEdit: { cardEditorItem = item; showCardEditor = true },
                 onDelete: { workspace.deleteDeckItem(id); selection = nil })
                 .id(item.id)
         } else {
@@ -168,10 +190,116 @@ struct DeckView: View {
     }
 }
 
+private struct DeckCardEditor: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(LanguageWorkspaceModel.self) private var workspace
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: LearnItem
+    @State private var saveError: String?
+    private let isEditing: Bool
+    private let onSave: (LearnItem) -> Void
+
+    init(item: LearnItem?, profileID: UUID, onSave: @escaping (LearnItem) -> Void) {
+        self.isEditing = item != nil
+        self.onSave = onSave
+        _draft = State(initialValue: item ?? LearnItem(
+            profileID: profileID, kind: .vocab, term: "", translation: ""))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Card") {
+                    Picker("Type", selection: $draft.kind) {
+                        ForEach(LearnKind.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    TextField("Term", text: $draft.term)
+                    TextField("Reading or pronunciation", text: $draft.reading)
+                    TextField("Translation", text: $draft.translation)
+                    TextField("Part of speech", text: $draft.partOfSpeech)
+                    TextField("Register", text: $draft.register)
+                }
+
+                Section("Usage") {
+                    TextField("Examples, one per line", text: examplesText, axis: .vertical)
+                        .lineLimit(2...5)
+                    TextField("Notes", text: $draft.notes, axis: .vertical)
+                        .lineLimit(2...5)
+                    TextField("Tags, separated by commas", text: tagsText)
+                }
+
+                if draft.kind == .vocab {
+                    Section("Accepted answers") {
+                        TextField("Target-language forms, one per line", text: acceptedAnswersText, axis: .vertical)
+                            .lineLimit(2...5)
+                        TextField("Translation alternatives, one per line", text: acceptedTranslationsText, axis: .vertical)
+                            .lineLimit(2...5)
+                    }
+                }
+
+                if let saveError {
+                    Label(saveError, systemImage: "exclamationmark.circle")
+                        .foregroundStyle(.red).textSelection(.enabled)
+                }
+            }
+            .formStyle(.grouped)
+            .themedFormBackground(appModel.currentPalette.canvas)
+            .navigationTitle(isEditing ? "Edit Card" : "New Card")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        guard let error = workspace.saveDeckItem(draft) else {
+                            onSave(draft)
+                            dismiss()
+                            return
+                        }
+                        saveError = error
+                    }
+                    .disabled(draft.term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || draft.translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .frame(width: 520, height: 650)
+    }
+
+    private var examplesText: Binding<String> {
+        Binding(
+            get: { draft.examples.joined(separator: "\n") },
+            set: { draft.examples = lines($0) })
+    }
+
+    private var tagsText: Binding<String> {
+        Binding(
+            get: { draft.tags.joined(separator: ", ") },
+            set: { draft.tags = $0.split(separator: ",").map(String.init) })
+    }
+
+    private var acceptedAnswersText: Binding<String> {
+        Binding(
+            get: { draft.acceptedAnswers.joined(separator: "\n") },
+            set: { draft.acceptedAnswers = lines($0) })
+    }
+
+    private var acceptedTranslationsText: Binding<String> {
+        Binding(
+            get: { draft.acceptedTranslations.joined(separator: "\n") },
+            set: { draft.acceptedTranslations = lines($0) })
+    }
+
+    private func lines(_ text: String) -> [String] {
+        text.split(whereSeparator: \.isNewline).map(String.init)
+    }
+}
+
 private struct CardDetail: View {
     let item: LearnItem
     let onSaveAcceptedAnswers: ([String]) -> Bool
     let onSaveAcceptedTranslations: ([String]) -> Bool
+    let onEdit: () -> Void
     let onDelete: () -> Void
     @State private var acceptedAnswersText: String
     @State private var acceptedAnswersStatus: String?
@@ -180,11 +308,13 @@ private struct CardDetail: View {
 
     init(
         item: LearnItem, onSaveAcceptedAnswers: @escaping ([String]) -> Bool,
-        onSaveAcceptedTranslations: @escaping ([String]) -> Bool, onDelete: @escaping () -> Void
+        onSaveAcceptedTranslations: @escaping ([String]) -> Bool, onEdit: @escaping () -> Void,
+        onDelete: @escaping () -> Void
     ) {
         self.item = item
         self.onSaveAcceptedAnswers = onSaveAcceptedAnswers
         self.onSaveAcceptedTranslations = onSaveAcceptedTranslations
+        self.onEdit = onEdit
         self.onDelete = onDelete
         _acceptedAnswersText = State(initialValue: item.acceptedAnswers.joined(separator: "\n"))
         _acceptedTranslationsText = State(initialValue: item.acceptedTranslations.joined(separator: "\n"))
@@ -200,6 +330,11 @@ private struct CardDetail: View {
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(Capsule().fill(.blue.opacity(0.15)))
                     }
+                    Button(action: onEdit) {
+                        Image(systemName: "pencil")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Edit card")
                     Spacer()
                 }
                 if !item.reading.isEmpty {
@@ -288,6 +423,12 @@ private struct CardDetail: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color.clear)
+        .onChange(of: item.acceptedAnswers) { _, answers in
+            acceptedAnswersText = answers.joined(separator: "\n")
+        }
+        .onChange(of: item.acceptedTranslations) { _, translations in
+            acceptedTranslationsText = translations.joined(separator: "\n")
+        }
     }
 
     private func labelled(_ label: String, _ value: String) -> some View {

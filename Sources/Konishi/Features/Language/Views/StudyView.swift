@@ -26,11 +26,11 @@ struct StudyView: View {
                         if workspace.isGeneratingProposals {
                             ProgressView().controlSize(.small)
                         } else {
-                            Label("Generate", systemImage: "sparkles")
+                            Label(workspace.studyProposals.isEmpty ? "Generate" : "Generate More", systemImage: "sparkles")
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(workspace.activeProfile == nil || workspace.isGeneratingProposals || !workspace.studyProposals.isEmpty)
+                    .disabled(workspace.activeProfile == nil || workspace.isGeneratingProposals)
                 }
 
                 if let error = workspace.proposalError {

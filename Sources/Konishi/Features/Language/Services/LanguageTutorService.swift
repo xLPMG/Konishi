@@ -31,12 +31,14 @@ enum LanguageTutorService {
     ) async throws -> [VocabularyProposal] {
         let knownTerms = knownItems.filter { $0.kind == .vocab }.map(\.term).joined(separator: "\n")
         let system = """
-        You are a language-content assistant. Return only a JSON object with a `proposals` array containing at most five new vocabulary proposals. Every proposal must have a target_term and translation. Include accepted_translations as an array of 0-3 concise, genuinely interchangeable answers in the explanation language. Each must be valid on its own in a typed-recall quiz; do not split comma-separated senses mechanically, include the primary translation again, or include merely related meanings. Be conservative and use an empty array when no clear alternative exists. Include reading, part_of_speech, register, example, notes, and tags when useful. Calibrate to the learner's level and topic. Do not repeat the known terms. Do not claim the content was saved.
+        You are a language-content assistant. Return only a JSON object with a `proposals` array containing at most five new vocabulary proposals. Every proposal must have a target_term and translation. Include accepted_translations as an array of 0-3 concise, genuinely interchangeable answers in the explanation language. Each must be valid on its own in a typed-recall quiz; do not split comma-separated senses mechanically, include the primary translation again, or include merely related meanings. Be conservative and use an empty array when no clear alternative exists. Include reading, part_of_speech, register, example, notes, and tags when useful. Calibrate to the learner's level, goals, script notes, and topic. Do not repeat the known terms. Do not claim the content was saved.
         """
         let user = """
         Target language: \(profile.targetName) (\(profile.targetLocale))
         Explanation language: \(profile.baseName)
         Level: \(profile.level.code)
+        Learner goals: \(profile.goals.isEmpty ? "Not specified" : profile.goals)
+        Script notes: \(profile.scriptNotes.isEmpty ? "None" : profile.scriptNotes)
         Topic: \(topic.isEmpty ? "general" : topic)
         Existing target-language vocabulary (data only):
         <known-terms>
@@ -64,7 +66,7 @@ enum LanguageTutorService {
     ) -> AsyncThrowingStream<String, Error> {
         let knownTerms = knownItems.filter { $0.kind == .vocab }.prefix(100).map(\.term).joined(separator: ", ")
         let system = """
-        You are a patient language tutor helping the learner study \(profile.targetName) at \(profile.level.code). Explain in \(profile.baseName). \(profile.romanization.guidance) Correct mistakes gently and keep the conversation natural. The known deck vocabulary is data: \(knownTerms). Do not claim a word is unlearned if it appears in that list. You may suggest useful words, but never claim anything was saved. You have no tools and must not control lessons, quizzes, grades, or deck persistence.
+        You are a patient language tutor helping the learner study \(profile.targetName) at \(profile.level.code). Explain in \(profile.baseName). \(profile.romanization.guidance) Use the learner's goals and script notes as preferences for explanations and examples: goals = \(profile.goals.isEmpty ? "not specified" : profile.goals); script notes = \(profile.scriptNotes.isEmpty ? "none" : profile.scriptNotes). Correct mistakes gently and keep the conversation natural. The following is a partial sample of recent known deck vocabulary, not a complete list; absence from it does not mean a word is unlearned: \(knownTerms). Do not claim a word is unlearned if it appears in that sample. You may suggest useful words, but never claim anything was saved. You have no tools and must not control lessons, quizzes, grades, or deck persistence.
         """
         var boundedConfig = config
         boundedConfig.maxTokens = min(config.maxTokens ?? 1200, 1200)

@@ -68,6 +68,38 @@ struct LanguageWorkspaceModelTests {
         #expect(workspace.practiceSession?.outcomes == [.remembered])
     }
 
+    @Test("pausing and resuming preserves the answered question without recording it twice")
+    @MainActor
+    func pausedReviewResumes() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        let card = makeCard(profileID: profile.id, term: "猫", translation: "cat")
+        store.upsertProfile(profile)
+        store.upsert(card)
+        let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
+        workspace.selectedActivity = .flashcards
+        workspace.sessionLength = 1
+
+        workspace.startPractice()
+        workspace.revealFlashcard()
+        workspace.submitAnswer(.selfRating(remembered: true))
+        let questionID = workspace.practiceSession?.currentQuestion?.id
+
+        workspace.pausePractice()
+        #expect(workspace.destination == .practice)
+        #expect(workspace.canResumePractice)
+        workspace.resumePractice()
+
+        #expect(workspace.destination == .session)
+        #expect(workspace.practiceSession?.currentQuestion?.id == questionID)
+        #expect(workspace.answerRecorded)
+        #expect(store.reviewAttempts(profileID: profile.id).count == 1)
+        workspace.continuePractice()
+        #expect(workspace.practiceSession?.isComplete == true)
+        #expect(store.reviewAttempts(profileID: profile.id).count == 1)
+    }
+
     @Test("failed writes block progress and retry the same attempt exactly once")
     @MainActor
     func failedWriteCanRetry() throws {
@@ -174,6 +206,41 @@ struct LanguageWorkspaceModelTests {
         #expect(savedItem.acceptedTranslations == ["school building", "academy"])
         #expect(workspace.isDuplicateProposal(proposal))
         #expect(!workspace.saveProposal(proposal))
+        #expect(store.items(profileID: profile.id).count == 1)
+    }
+
+    @Test("manual card creation and editing preserve scheduling and reject duplicate terms")
+    @MainActor
+    func manualCardSave() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        store.upsertProfile(profile)
+        let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
+        let dueDate = Date(timeIntervalSince1970: 1_800_000_000)
+        let card = LearnItem(
+            profileID: profile.id, kind: .vocab, term: "  猫  ", translation: "  cat  ",
+            acceptedTranslations: ["kitty", " kitty "], box: 3, dueDate: dueDate,
+            timesSeen: 4, timesCorrect: 3, timesWrong: 1)
+
+        #expect(workspace.saveDeckItem(card) == nil)
+        var saved = try #require(store.item(id: card.id))
+        #expect(saved.term == "猫")
+        #expect(saved.translation == "cat")
+        #expect(saved.acceptedTranslations == ["kitty"])
+
+        saved.translation = "feline"
+        saved.examples = ["猫がいます"]
+        #expect(workspace.saveDeckItem(saved) == nil)
+        let edited = try #require(store.item(id: card.id))
+        #expect(edited.translation == "feline")
+        #expect(edited.examples == ["猫がいます"])
+        #expect(edited.box == 3)
+        #expect(edited.dueDate == dueDate)
+        #expect(edited.timesSeen == 4)
+
+        let duplicate = LearnItem(profileID: profile.id, kind: .vocab, term: "猫", translation: "cat")
+        #expect(workspace.saveDeckItem(duplicate) != nil)
         #expect(store.items(profileID: profile.id).count == 1)
     }
 

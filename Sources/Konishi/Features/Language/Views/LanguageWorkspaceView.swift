@@ -30,7 +30,13 @@ struct LanguageSidebarView: View {
     @Environment(AppModel.self) private var appModel
     let workspace: LanguageWorkspaceModel
 
-    private let primary: [LanguageWorkspaceDestination] = [.home, .practice, .study, .deck, .tutor]
+    private var primary: [LanguageWorkspaceDestination] {
+        var destinations: [LanguageWorkspaceDestination] = [.home, .practice, .study, .deck, .tutor]
+        if workspace.practiceSession != nil {
+            destinations.insert(.session, at: 2)
+        }
+        return destinations
+    }
 
     var body: some View {
         VStack(spacing: 0) {

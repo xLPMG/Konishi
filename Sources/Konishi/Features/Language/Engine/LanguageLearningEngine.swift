@@ -135,10 +135,12 @@ enum LanguageLearningEngine {
         direction: LanguageQuestionDirection
     ) -> LanguageQuestion? {
         guard let pair = promptAndAnswer(for: item, direction: direction) else { return nil }
+        let accepted = acceptedAnswers(for: item, primary: pair.answer)
+        let acceptedKeys = Set(accepted.map(normalizeAnswer))
         let distractors = candidates
             .filter { $0.profileID == item.profileID && $0.id != item.id }
             .compactMap { promptAndAnswer(for: $0, direction: direction)?.answer }
-            .filter { normalizeAnswer($0) != normalizeAnswer(pair.answer) }
+            .filter { !acceptedKeys.contains(normalizeAnswer($0)) }
         var unique: [String] = []
         var seen: Set<String> = [normalizeAnswer(pair.answer)]
         for distractor in distractors where seen.insert(normalizeAnswer(distractor)).inserted {
@@ -153,7 +155,7 @@ enum LanguageLearningEngine {
         }
         return LanguageQuestion(
             activity: .multipleChoice, direction: direction, prompt: pair.prompt, itemIDs: [item.id],
-            answer: pair.answer, acceptedAnswers: acceptedAnswers(for: item, primary: pair.answer),
+            answer: pair.answer, acceptedAnswers: accepted,
             choices: options, correctChoiceID: correct.id)
     }
 
