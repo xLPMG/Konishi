@@ -18,6 +18,21 @@ struct LanguageWorkspaceModelTests {
         #expect(LanguageProgressTimeFormatter.text(for: now.addingTimeInterval(-400 * 24 * 60 * 60), now: now) == "400 days ago")
     }
 
+    @Test("Tutor context estimate includes the unsent draft")
+    @MainActor
+    func tutorContextEstimateIncludesDraft() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        store.upsertProfile(profile)
+        let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
+        let emptyEstimate = workspace.tutorContextEstimate
+
+        workspace.tutorDraft = String(repeating: "猫", count: 400)
+
+        #expect(workspace.tutorContextEstimate > emptyEstimate)
+    }
+
     @Test("skip advances without writing an attempt or changing the schedule")
     @MainActor
     func skipDoesNotReview() throws {

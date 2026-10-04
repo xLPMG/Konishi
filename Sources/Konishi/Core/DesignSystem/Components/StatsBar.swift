@@ -4,6 +4,7 @@ import SwiftUI
 struct ContextGauge: View {
     let used: Int
     let window: Int?
+    var isEstimate = false
     @State private var showDetail = false
 
     private var fraction: Double {
@@ -51,11 +52,13 @@ struct ContextGauge: View {
 
     private var helpText: String {
         guard let window else {
-            return "Context: \(used) tokens used — window size unknown. Set an override in Settings › Generation."
+            return "\(contextLabel): \(used) tokens used — window size unknown. Set an override in Settings › Generation."
         }
         let pct = Int(fraction * 100)
-        return "Context: \(used) / \(window) tokens (\(pct)%)"
+        return "\(contextLabel): \(used) / \(window) tokens (\(pct)%)"
     }
+
+    private var contextLabel: String { isEstimate ? "Estimated context" : "Context" }
 }
 
 /// Slim metrics row: generation status + TTFT/tokens-per-second, with a context gauge.

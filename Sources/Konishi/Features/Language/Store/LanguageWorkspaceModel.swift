@@ -87,6 +87,17 @@ final class LanguageWorkspaceModel {
         activeProfile.map { store.stats(profileID: $0.id) } ?? .init()
     }
 
+    var tutorContextEstimate: Int {
+        guard let profile = activeProfile else { return 0 }
+        var history = tutorThreads.first(where: { $0.id == selectedTutorThreadID })?.messages ?? []
+        let draft = tutorDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !draft.isEmpty {
+            history.append(LanguageTutorMessage(role: .user, content: draft))
+        }
+        return LanguageTutorService.estimatedContextTokens(
+            profile: profile, knownItems: store.items(profileID: profile.id), history: history)
+    }
+
     var canSkipCurrentQuestion: Bool {
         !answerRecorded && pendingAttemptIDs.isEmpty
     }

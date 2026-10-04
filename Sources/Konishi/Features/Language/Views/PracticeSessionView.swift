@@ -1,5 +1,30 @@
 import SwiftUI
 
+private struct AnswerChoiceHover: ViewModifier {
+    let enabled: Bool
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        let active = enabled && isHovering
+        return content
+            .background {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.accentColor.opacity(active ? 0.12 : 0))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.accentColor.opacity(active ? 0.42 : 0), lineWidth: 1)
+            }
+            .scaleEffect(active ? 1.015 : 1)
+            .shadow(color: Color.accentColor.opacity(active ? 0.16 : 0), radius: active ? 6 : 0, y: active ? 2 : 0)
+            .onHover { isHovering = enabled && $0 }
+            .onChange(of: enabled) { _, isEnabled in
+                if !isEnabled { isHovering = false }
+            }
+            .animation(.easeOut(duration: 0.16), value: active)
+    }
+}
+
 struct PracticeSessionView: View {
     @Bindable var workspace: LanguageWorkspaceModel
     @State private var selectedChoiceID: UUID?
@@ -148,6 +173,7 @@ struct PracticeSessionView: View {
                     }
                     .buttonStyle(.bordered)
                     .tint(selectedChoiceID == choice.id ? .accentColor : .secondary)
+                    .modifier(AnswerChoiceHover(enabled: !workspace.answerRecorded))
                     .disabled(workspace.answerRecorded)
                 }
                 Button("I don't know") {
@@ -224,6 +250,7 @@ struct PracticeSessionView: View {
                 }
                 .buttonStyle(.bordered)
                 .tint(selectedID == option.id ? .accentColor : .secondary)
+                .modifier(AnswerChoiceHover(enabled: !isMatched && !workspace.answerRecorded))
                 .disabled(isMatched || workspace.answerRecorded)
             }
         }

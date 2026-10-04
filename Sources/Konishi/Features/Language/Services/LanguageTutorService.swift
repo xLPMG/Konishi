@@ -64,18 +64,12 @@ enum LanguageTutorService {
         config: RequestConfig, profile: LanguageProfile, knownItems: [LearnItem],
         history: [LanguageTutorMessage]
     ) -> AsyncThrowingStream<String, Error> {
-        let knownTerms = knownItems.filter { $0.kind == .vocab }.prefix(100).map(\.term).joined(separator: ", ")
-        let system = """
-        You are a patient language tutor helping the learner study \(profile.targetName) at \(profile.level.code). Explain in \(profile.baseName). \(profile.romanization.guidance) Use the learner's goals and script notes as preferences for explanations and examples: goals = \(profile.goals.isEmpty ? "not specified" : profile.goals); script notes = \(profile.scriptNotes.isEmpty ? "none" : profile.scriptNotes). Correct mistakes gently and keep the conversation natural. The following is a partial sample of recent known deck vocabulary, not a complete list; absence from it does not mean a word is unlearned: \(knownTerms). Do not claim a word is unlearned if it appears in that sample. You may suggest useful words, but never claim anything was saved. You have no tools and must not control lessons, quizzes, grades, or deck persistence.
-        """
         var boundedConfig = config
         boundedConfig.maxTokens = min(config.maxTokens ?? 1200, 1200)
         boundedConfig.temperature = min(max(config.temperature, 0.35), 0.8)
-        boundedConfig.enableThinking = false
+        boundedConfig.enableThinking = config.enableThinking ?? false
         let streamConfig = boundedConfig
-        let messages = [WireMessage(role: "system", text: system)] + history.suffix(16).map {
-            WireMessage(role: $0.role.rawValue, text: String($0.content.prefix(4_000)))
-        }
+        let messages = conversationMessages(profile: profile, knownItems: knownItems, history: history)
 
         return AsyncThrowingStream(String.self) { continuation in
             let task = Task {
@@ -93,6 +87,34 @@ enum LanguageTutorService {
                 }
             }
             continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    static func estimatedContextTokens(
+        profile: LanguageProfile, knownItems: [LearnItem], history: [LanguageTutorMessage]
+    ) -> Int {
+        let bytes = conversationMessages(profile: profile, knownItems: knownItems, history: history)
+            .reduce(0) { total, message in
+                let contentBytes: Int
+                switch message.content {
+                case .text(let text): contentBytes = text.utf8.count
+                case .parts(let parts): contentBytes = parts.reduce(0) { $0 + ($1.text?.utf8.count ?? 0) }
+                case nil: contentBytes = 0
+                }
+                return total + contentBytes + 16
+            }
+        return (bytes + 3) / 4
+    }
+
+    private static func conversationMessages(
+        profile: LanguageProfile, knownItems: [LearnItem], history: [LanguageTutorMessage]
+    ) -> [WireMessage] {
+        let knownTerms = knownItems.filter { $0.kind == .vocab }.prefix(100).map(\.term).joined(separator: ", ")
+        let system = """
+        You are a patient language tutor helping the learner study \(profile.targetName) at \(profile.level.code). Explain in \(profile.baseName). \(profile.romanization.guidance) Use the learner's goals and script notes as preferences for explanations and examples: goals = \(profile.goals.isEmpty ? "not specified" : profile.goals); script notes = \(profile.scriptNotes.isEmpty ? "none" : profile.scriptNotes). Correct mistakes gently and keep the conversation natural. The following is a partial sample of recent known deck vocabulary, not a complete list; absence from it does not mean a word is unlearned: \(knownTerms). Do not claim a word is unlearned if it appears in that sample. You may suggest useful words, but never claim anything was saved. You have no tools and must not control lessons, quizzes, grades, or deck persistence.
+        """
+        return [WireMessage(role: "system", text: system)] + history.suffix(16).map {
+            WireMessage(role: $0.role.rawValue, text: String($0.content.prefix(4_000)))
         }
     }
 

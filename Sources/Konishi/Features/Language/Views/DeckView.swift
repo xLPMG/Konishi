@@ -19,6 +19,8 @@ struct DeckView: View {
     @State private var exportAlertMessage = ""
     @State private var cardEditorItem: LearnItem?
     @State private var showCardEditor = false
+    @State private var cardPendingDeletion: LearnItem?
+    @State private var showCardDeleteConfirmation = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +62,21 @@ struct DeckView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(exportAlertMessage)
+        }
+        .confirmationDialog(
+            "Delete \(cardPendingDeletion?.term ?? "this card")?",
+            isPresented: $showCardDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Card", role: .destructive) {
+                guard let item = cardPendingDeletion else { return }
+                workspace.deleteDeckItem(item.id)
+                if selection == item.id { selection = nil }
+                cardPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { cardPendingDeletion = nil }
+        } message: {
+            Text("This removes the card from this deck.")
         }
         .sheet(isPresented: $showCardEditor) {
             if let profileID = workspace.activeProfile?.id {
@@ -137,6 +154,14 @@ struct DeckView: View {
                     .fill(selection == item.id ? appModel.currentPalette.surfaceRaised : appModel.currentPalette.surface)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(appModel.currentPalette.border, lineWidth: 1))
             )
+            .contextMenu {
+                Button(role: .destructive) {
+                    cardPendingDeletion = item
+                    showCardDeleteConfirmation = true
+                } label: {
+                    Label("Delete Card", systemImage: "trash")
+                }
+            }
         }
         .scrollContentBackground(.hidden)
         .background(appModel.currentPalette.canvas)

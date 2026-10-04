@@ -197,6 +197,16 @@ final class AppModel {
         return contextFromConfig(modelID)
     }
 
+    func contextWindow(forModelID modelID: String) -> Int? {
+        if settings.contextWindowOverride > 0 { return settings.contextWindowOverride }
+        if let info = models.first(where: { $0.id == modelID }),
+            let ctx = info.loadedContextLength ?? info.maxContextLength
+        {
+            return ctx
+        }
+        return contextFromConfig(modelID)
+    }
+
     private func contextFromConfig(_ modelID: String) -> Int? {
         let path = (modelID as NSString).expandingTildeInPath
         if let cached = contextConfigCache[path] { return cached }

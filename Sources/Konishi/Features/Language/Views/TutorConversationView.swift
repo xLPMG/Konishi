@@ -135,8 +135,7 @@ struct TutorConversationView: View {
                         Spacer(minLength: 0)
                         if workspace.failedTutorMessageID != nil {
                             Button("Retry") {
-                                workspace.retryTutorMessage(
-                                    config: appModel.settings.requestConfig(modelOverride: nil))
+                                workspace.retryTutorMessage(config: tutorRequestConfig())
                             }
                             .buttonStyle(.bordered)
                             .disabled(workspace.isTutorStreaming)
@@ -203,6 +202,25 @@ struct TutorConversationView: View {
     private func inputBar(profile: LanguageProfile) -> some View {
         HStack(alignment: .center, spacing: 8) {
             HStack(spacing: 9) {
+                ContextGauge(
+                    used: workspace.tutorContextEstimate,
+                    window: appModel.contextWindow(forModelID: appModel.settings.model),
+                    isEstimate: true)
+
+                Button { appModel.settings.reasoningEnabled.toggle() } label: {
+                    Image(systemName: "brain")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(appModel.settings.reasoningEnabled
+                            ? AnyShapeStyle(appModel.currentAccent) : AnyShapeStyle(.secondary))
+                        .opacity(appModel.settings.reasoningEnabled ? 1 : 0.55)
+                        .frame(width: 26, height: 30)
+                }
+                .buttonStyle(.plain)
+                .disabled(workspace.isTutorStreaming)
+                .help(appModel.settings.reasoningEnabled
+                    ? "Reasoning on — model thinks before answering (slower). Click to turn off."
+                    : "Reasoning off — faster replies. Click to turn on.")
+
                 TextField("Message tutor", text: $workspace.tutorDraft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: appModel.settings.fontSize))
@@ -304,6 +322,12 @@ struct TutorConversationView: View {
     }
 
     private func send() {
-        workspace.sendTutorMessage(config: appModel.settings.requestConfig(modelOverride: nil))
+        workspace.sendTutorMessage(config: tutorRequestConfig())
+    }
+
+    private func tutorRequestConfig() -> RequestConfig {
+        var config = appModel.settings.requestConfig(modelOverride: nil)
+        config.enableThinking = appModel.settings.reasoningEnabled
+        return config
     }
 }
