@@ -2,6 +2,20 @@ import Foundation
 
 /// A user-managed local server process (LLM or audio), runnable from the venv.
 struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
+    enum BuiltInServer: String, Codable, Sendable {
+        case mlxLMChat
+        case mlxVLMChat
+        case mlxAudio
+        case mlxEmbeddings
+
+        var isChat: Bool { self == .mlxLMChat || self == .mlxVLMChat }
+    }
+
+    private enum LegacyChatBackend: String, Codable {
+        case mlxLM
+        case mlxVLM
+    }
+
     enum Role: String, Codable, Sendable, CaseIterable, Identifiable {
         case none, chat, audio, embedding
         var id: String { rawValue }
@@ -25,6 +39,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     var command: String
     /// Local model path or Hugging Face identifier passed separately to the server command.
     var model: String?
+    var builtInServer: BuiltInServer?
+    var isCustom: Bool
     var host: String
     var port: Int
     var role: Role
@@ -70,6 +86,25 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         model = value.isEmpty ? nil : value
         command = regex.stringByReplacingMatches(in: command, range: fullRange, withTemplate: "")
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    mutating func setVisionServer(_ enabled: Bool) {
+        guard let current = builtInServer, current.isChat else { return }
+        configureBuiltInServer(enabled ? .mlxVLMChat : .mlxLMChat)
+    }
+
+    mutating func configureBuiltInServer(_ server: BuiltInServer) {
+        let previousDefaultModel = builtInServer?.defaultModel
+        if model == nil || model?.isEmpty == true || model == previousDefaultModel {
+            model = server.defaultModel
+        }
+        builtInServer = server
+        isCustom = false
+        name = server.displayName
+        pipPackage = server.pipPackage
+        command = server.command
+        role = server.role
+        note = server.note
     }
 
     private static func shellQuote(_ value: String) -> String {
@@ -122,22 +157,31 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         port: Int,
         role: Role,
         note: String,
-        autostart: Bool? = nil
+        autostart: Bool? = nil,
+        builtInServer: BuiltInServer? = nil,
+        isCustom: Bool = false
     ) {
         self.id = id
         self.name = name
         self.pipPackage = pipPackage
         self.command = Self.commandWithoutModel(command)
         self.model = model ?? Self.extractModelPath(from: command)
+        self.builtInServer = builtInServer
+        self.isCustom = isCustom
         self.host = host
         self.port = port
         self.role = role
         self.note = note
         self.autostart = autostart
+        if let builtInServer { configureBuiltInServer(builtInServer) }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, pipPackage, command, model, host, port, role, note, autostart
+        case id, name, pipPackage, command, model, builtInServer, isCustom, host, port, role, note, autostart
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case builtInChatBackend
     }
 
     init(from decoder: Decoder) throws {
@@ -148,6 +192,15 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         pipPackage = try values.decode(String.self, forKey: .pipPackage)
         command = Self.commandWithoutModel(legacyCommand)
         model = try values.decodeIfPresent(String.self, forKey: .model) ?? Self.extractModelPath(from: legacyCommand)
+        if let persisted = try values.decodeIfPresent(BuiltInServer.self, forKey: .builtInServer) {
+            builtInServer = persisted
+        } else if let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+            .decodeIfPresent(LegacyChatBackend.self, forKey: .builtInChatBackend) {
+            builtInServer = legacy == .mlxLM ? .mlxLMChat : .mlxVLMChat
+        } else {
+            builtInServer = nil
+        }
+        isCustom = try values.decodeIfPresent(Bool.self, forKey: .isCustom) ?? false
         host = try values.decode(String.self, forKey: .host)
         port = try values.decode(Int.self, forKey: .port)
         role = try values.decode(Role.self, forKey: .role)
@@ -157,45 +210,90 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
 
     static var presets: [ManagedServer] {
         [
-            ManagedServer(
-                name: "mlx-lm (chat)",
-                pipPackage: "mlx-lm",
-                command: "mlx_lm.server",
-                model: "~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit",
-                host: "127.0.0.1",
-                port: 8080,
-                role: .chat,
-                note: "Local path = no download. An HF repo id (e.g. mlx-community/…) would download to ~/.cache/huggingface/hub. Text-only — for image input use the mlx-vlm preset instead."
-            ),
-            ManagedServer(
-                name: "mlx-vlm (vision chat)",
-                pipPackage: "mlx-vlm",
-                command: "mlx_vlm.server",
-                model: "~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit",
-                host: "127.0.0.1",
-                port: 8080,
-                role: .chat,
-                note: "Vision-capable OpenAI server: accepts image inputs (unlike mlx_lm.server). Then enable 'Send images to the model' in Settings › Generation. Uses port 8080 — stop the mlx-lm server first."
-            ),
-            ManagedServer(
-                name: "mlx-audio (TTS + STT)",
-                pipPackage: "mlx-audio[server] misaki[en]",
-                command: "mlx_audio.server",
-                host: "127.0.0.1",
-                port: 8081,
-                role: .audio,
-                note: "OpenAI-compatible /v1/audio/speech + /v1/audio/transcriptions. Kokoro needs misaki[en] (pulls spacy — use a Python 3.12 env, not 3.14). Pick the model per request in the Voice tab (e.g. TTS mlx-community/Kokoro-82M-bf16). Models download to ~/.cache/huggingface/hub on first use."
-            ),
-            ManagedServer(
-                name: "mlx embeddings",
-                pipPackage: "mlx-embeddings",
-                command: "python ~/Konishi/python/mlx_embed_server.py",
-                model: "~/.lmstudio/models/AutomatosX/AX-Qwen3-Embedding-0.6B-MLX-AXQ-4bit",
-                host: "127.0.0.1",
-                port: 7997,
-                role: .embedding,
-                note: "Native MLX embeddings server (no torch) exposing /v1/embeddings, so RAG/semantic memory runs on Apple Silicon while mlx serves chat. Konishi ships the server script; just install mlx-embeddings, point --model at a local mlx embedding model, Start, then 'Use for Embeddings'. Set the same id as your Embedding model in Settings."
-            )
+            makeBuiltIn(.mlxLMChat),
+            makeBuiltIn(.mlxAudio),
+            makeBuiltIn(.mlxEmbeddings)
         ]
     }
+
+    private static func makeBuiltIn(_ kind: BuiltInServer) -> ManagedServer {
+        ManagedServer(
+            name: kind.displayName,
+            pipPackage: kind.pipPackage,
+            command: kind.command,
+            model: kind.defaultModel,
+            host: "127.0.0.1",
+            port: kind.port,
+            role: kind.role,
+            note: kind.note,
+            builtInServer: kind
+        )
+    }
 }
+
+private extension ManagedServer.BuiltInServer {
+    var displayName: String {
+        switch self {
+        case .mlxLMChat, .mlxVLMChat: "Chat"
+        case .mlxAudio: "Audio"
+        case .mlxEmbeddings: "Embeddings"
+        }
+    }
+
+    var pipPackage: String {
+        switch self {
+        case .mlxLMChat: "mlx-lm"
+        case .mlxVLMChat: "mlx-vlm"
+        case .mlxAudio: "mlx-audio[server] misaki[en]"
+        case .mlxEmbeddings: "mlx-embeddings"
+        }
+    }
+
+    var command: String {
+        switch self {
+        case .mlxLMChat: "mlx_lm.server"
+        case .mlxVLMChat: "mlx_vlm.server"
+        case .mlxAudio: "mlx_audio.server"
+        case .mlxEmbeddings: "python ~/Konishi/python/mlx_embed_server.py"
+        }
+    }
+
+    var defaultModel: String? {
+        switch self {
+        case .mlxLMChat: "~/.lmstudio/models/lmstudio-community/gemma-4-26B-A4B-it-QAT-MLX-4bit"
+        case .mlxVLMChat: "mlx-community/gemma-4-12B-it-qat-4bit"
+        case .mlxAudio: nil
+        case .mlxEmbeddings: "~/.lmstudio/models/AutomatosX/AX-Qwen3-Embedding-0.6B-MLX-AXQ-4bit"
+        }
+    }
+
+    var role: ManagedServer.Role {
+        switch self {
+        case .mlxLMChat, .mlxVLMChat: .chat
+        case .mlxAudio: .audio
+        case .mlxEmbeddings: .embedding
+        }
+    }
+
+    var port: Int {
+        switch self {
+        case .mlxLMChat, .mlxVLMChat: 8080
+        case .mlxAudio: 8081
+        case .mlxEmbeddings: 7997
+        }
+    }
+
+    var note: String {
+        switch self {
+        case .mlxLMChat:
+            "Text-only chat server. Use the vision toggle to switch to mlx-vlm."
+        case .mlxVLMChat:
+            "Vision-capable chat server. The default model downloads from Hugging Face on first start."
+        case .mlxAudio:
+            "OpenAI-compatible speech and transcription server. Kokoro needs misaki[en]; Python 3.12 is recommended."
+        case .mlxEmbeddings:
+            "Native MLX embeddings server for semantic memory and document retrieval."
+        }
+    }
+}
+

@@ -16,7 +16,14 @@ extension AppModel {
     /// relaunching, so it never spawns a duplicate.
     func startAllServers() {
         Task {
-            for server in runtime.roleServers {
+            let servers = runtime.roleServers
+            let chatServers = servers.filter { $0.role == .chat }
+            let selectedChat = chatServers.first { $0.endpointURL == settings.baseURL }
+                ?? chatServers.first { $0.builtInServer == .mlxLMChat }
+                ?? chatServers.first
+            var serversToStart = servers.filter { $0.role != .chat }
+            if let selectedChat { serversToStart.insert(selectedChat, at: 0) }
+            for server in serversToStart {
                 guard await runtime.ensureRunning(server) else { continue }
                 if server.role == .chat {
                     pointChat(at: server)
@@ -38,7 +45,14 @@ extension AppModel {
     func autostartServers() {
         Task {
             runtime.rescan()
-            for server in runtime.roleServers where server.autostart == true {
+            let autostartServers = runtime.roleServers.filter { $0.autostart == true }
+            let chatServers = autostartServers.filter { $0.role == .chat }
+            let selectedChat = chatServers.first { $0.endpointURL == settings.baseURL }
+                ?? chatServers.first { $0.builtInServer == .mlxLMChat }
+                ?? chatServers.first
+            var serversToStart = autostartServers.filter { $0.role != .chat }
+            if let selectedChat { serversToStart.insert(selectedChat, at: 0) }
+            for server in serversToStart {
                 guard await runtime.ensureRunning(server) else { continue }
                 if server.role == .chat {
                     pointChat(at: server)

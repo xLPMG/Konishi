@@ -60,9 +60,15 @@ final class Runtime {
     private var pythonBinPath: String { Paths.venv.appendingPathComponent("bin/python").path }
 
     var roleServers: [ManagedServer] {
-        ManagedServer.Role.primaryRoles.compactMap { role in
-            servers.first { $0.role == role }
-        }
+        servers.filter { ManagedServer.Role.primaryRoles.contains($0.role) }
+    }
+
+    var mlxServers: [ManagedServer] {
+        servers.filter { $0.builtInServer != nil }
+    }
+
+    var customServers: [ManagedServer] {
+        servers.filter { $0.builtInServer == nil }
     }
 
     var venvReady: Bool { FileManager.default.fileExists(atPath: pythonBinPath) }
@@ -599,13 +605,56 @@ final class Runtime {
     }
 
     func addServer() {
-        servers.append(ManagedServer(name: "New Server", pipPackage: "", command: "", host: "127.0.0.1", port: 8090, role: .none, note: ""))
+        servers.append(ManagedServer(name: "New Server", pipPackage: "", command: "", host: "127.0.0.1", port: 8090, role: .none, note: "", isCustom: true))
         saveServers()
     }
 
-    func ensureRoleServers() {
-        for role in ManagedServer.Role.primaryRoles where !servers.contains(where: { $0.role == role }) {
-            guard let preset = ManagedServer.presets.first(where: { $0.role == role }) else { continue }
+    func ensureRoleServers(preferredChatURL: String? = nil) {
+        for index in servers.indices where servers[index].builtInServer == nil && !servers[index].isCustom {
+            let server = servers[index]
+            let package = server.pipPackage.lowercased()
+            let command = server.command.lowercased()
+            let kind: ManagedServer.BuiltInServer?
+            if server.role == .chat && package.hasPrefix("mlx-lm") && command.contains("mlx_lm.server") {
+                kind = .mlxLMChat
+            } else if server.role == .chat && package.hasPrefix("mlx-vlm") && command.contains("mlx_vlm.server") {
+                kind = .mlxVLMChat
+            } else if server.role == .audio && package.hasPrefix("mlx-audio") && command.contains("mlx_audio.server") {
+                kind = .mlxAudio
+            } else if server.role == .embedding && package.hasPrefix("mlx-embeddings") {
+                kind = .mlxEmbeddings
+            } else {
+                kind = nil
+            }
+            if let kind {
+                servers[index].configureBuiltInServer(kind)
+            }
+        }
+
+        for index in servers.indices {
+            if let kind = servers[index].builtInServer {
+                servers[index].configureBuiltInServer(kind)
+            }
+        }
+
+        let chatIndices = servers.indices.filter { servers[$0].builtInServer?.isChat == true }
+        if chatIndices.count > 1 {
+            let keep = chatIndices.first { servers[$0].endpointURL == preferredChatURL }
+                ?? chatIndices.first { servers[$0].builtInServer == .mlxLMChat }
+                ?? chatIndices[0]
+            for index in chatIndices where index != keep {
+                if servers[index].name == "Chat" {
+                    servers[index].name = "\(servers[index].pipPackage) (custom)"
+                }
+                servers[index].builtInServer = nil
+                servers[index].isCustom = true
+            }
+        }
+
+        for preset in ManagedServer.presets {
+            guard let kind = preset.builtInServer else { continue }
+            let exists = kind.isChat ? servers.contains(where: { $0.builtInServer?.isChat == true }) : servers.contains(where: { $0.builtInServer == kind })
+            guard !exists else { continue }
             var server = preset
             server.id = UUID()
             servers.append(server)

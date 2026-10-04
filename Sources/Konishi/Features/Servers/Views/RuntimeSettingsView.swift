@@ -11,6 +11,8 @@ struct RuntimeSettings: View {
     var body: some View {
         Form {
             serversSection
+            mlxServersSection
+            customServersSection
             detectedEndpointsSection
             environmentSection
             packagesSection
@@ -22,7 +24,7 @@ struct RuntimeSettings: View {
             if model.discoveredModels.isEmpty { model.scanLocalModels() }
             model.scanLocalEndpoints()
             if runtime.installedPackages.isEmpty { runtime.refreshPackages() }
-            runtime.ensureRoleServers()
+            runtime.ensureRoleServers(preferredChatURL: model.settings.baseURL)
             runtime.rescan()   // pick up servers started outside Konishi
         }
     }
@@ -86,11 +88,27 @@ struct RuntimeSettings: View {
                 get: { model.settings.stopServersOnQuit },
                 set: { model.settings.stopServersOnQuit = $0 }
             ))
-            if runtime.servers.isEmpty {
-                Text("No servers. Add one below.").foregroundStyle(.secondary)
-            }
-            ForEach(runtime.roleServers) { server in
+        }
+    }
+
+    private var mlxServersSection: some View {
+        Section("MLX Servers") {
+            ForEach(runtime.mlxServers) { server in
                 ManagedServerRow(server: server).id(server.id)
+            }
+        }
+    }
+
+    private var customServersSection: some View {
+        Section("Custom Servers") {
+            if runtime.customServers.isEmpty {
+                Text("No custom servers configured.").foregroundStyle(.secondary)
+            }
+            ForEach(runtime.customServers) { server in
+                ManagedServerRow(server: server).id(server.id)
+            }
+            Button { runtime.addServer() } label: {
+                Label("Add Custom Server", systemImage: "plus")
             }
         }
     }
@@ -191,6 +209,7 @@ private struct ManagedServerRow: View {
     @Environment(AppModel.self) private var model
     @State private var draft: ManagedServer
     @State private var advanced = false
+    @State private var showDeleteConfirmation = false
 
     init(server: ManagedServer) { _draft = State(initialValue: server) }
 
@@ -232,10 +251,30 @@ private struct ManagedServerRow: View {
                     Text(draft.name).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if draft.builtInServer == nil {
+                    Button(role: .destructive) { showDeleteConfirmation = true } label: {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Delete custom server")
+                }
                 statusLabel
                 actionButton
             }
             modelPicker
+            if draft.builtInServer?.isChat == true {
+                Toggle("Use vision server", isOn: Binding(
+                    get: { draft.builtInServer == .mlxVLMChat },
+                    set: { enabled in
+                        var updated = draft
+                        updated.setVisionServer(enabled)
+                        draft = updated
+                        model.settings.model = updated.modelPath ?? ""
+                    }
+                ))
+                .toggleStyle(.switch)
+                .disabled(managedActive)
+            }
             LabeledContent("Active endpoint", value: endpointURL.isEmpty ? "Not configured" : endpointURL)
                 .font(.caption)
             if case .failed(let message) = status {
@@ -250,7 +289,11 @@ private struct ManagedServerRow: View {
                 Spacer()
                 let primary = Runtime.primaryPackageName(draft.pipPackage)
                 let version = primary.flatMap { runtime.installedVersion(of: $0) }
-                if let version {
+                if draft.builtInServer != nil {
+                    Text("\(primary ?? draft.pipPackage) \(version.map { "v\($0)" } ?? "not installed")")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(version == nil ? .secondary : .primary)
+                } else if let version {
                     Text("v\(version)").font(.caption.monospaced()).foregroundStyle(.secondary)
                 }
                 Button(version == nil ? "Install" : "Update") {
@@ -261,13 +304,22 @@ private struct ManagedServerRow: View {
             }
             DisclosureGroup("Server options", isExpanded: $advanced) {
                 VStack(alignment: .leading, spacing: 8) {
-                    TextField("Server name", text: $draft.name)
-                    TextField("Python package", text: $draft.pipPackage)
+                    if draft.builtInServer == nil {
+                        TextField("Server name", text: $draft.name)
+                            .disabled(managedActive)
+                        TextField("Python package", text: $draft.pipPackage)
+                            .disabled(managedActive)
+                        TextField("Launch command", text: $draft.command, axis: .vertical)
+                            .font(.system(size: 12, design: .monospaced))
+                            .lineLimit(1...3)
+                            .disabled(managedActive)
+                        Picker("Endpoint role", selection: $draft.role) {
+                            ForEach(ManagedServer.Role.allCases, id: \.self) { role in
+                                Text(role.label).tag(role)
+                            }
+                        }
                         .disabled(managedActive)
-                    TextField("Launch command", text: $draft.command, axis: .vertical)
-                        .font(.system(size: 12, design: .monospaced))
-                        .lineLimit(1...3)
-                        .disabled(managedActive)
+                    }
                     TextField("Bind address", text: $draft.host)
                         .disabled(managedActive)
                     NumberField("Port", value: $draft.port, range: 1024...65535, step: 1)
@@ -280,6 +332,12 @@ private struct ManagedServerRow: View {
             }
         }
         .onChange(of: draft) { runtime.update(draft) }
+        .confirmationDialog("Delete \(draft.name)?", isPresented: $showDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete Server", role: .destructive) { runtime.delete(draft.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the custom server configuration.")
+        }
     }
 
     private var roleIcon: String {
