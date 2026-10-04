@@ -61,6 +61,7 @@ struct LanguageQuestion: Identifiable, Equatable, Sendable {
 enum LanguageAnswer: Equatable, Sendable {
     case selfRating(remembered: Bool)
     case choice(UUID)
+    case dontKnow
     case text(String)
     case matches([LanguageMatch])
 }

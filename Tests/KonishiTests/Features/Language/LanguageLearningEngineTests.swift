@@ -38,6 +38,7 @@ struct LanguageLearningEngineTests {
         #expect(LanguageLearningEngine.evaluate(.choice(question.correctChoiceID!), for: question).allCorrect)
         let wrong = try #require(question.choices.first { $0.id != question.correctChoiceID })
         #expect(LanguageLearningEngine.evaluate(.choice(wrong.id), for: question).allCorrect == false)
+        #expect(LanguageLearningEngine.evaluate(.dontKnow, for: question).outcomes?[target.id] == .incorrect)
         #expect(LanguageLearningEngine.evaluate(.choice(UUID()), for: question) == .invalid)
     }
 
@@ -55,6 +56,7 @@ struct LanguageLearningEngineTests {
         let item = item(profileID: UUID(), term: "café", translation: "coffee")
         let question = try #require(LanguageLearningEngine.typedRecall(for: item, direction: .targetToBase))
         #expect(LanguageLearningEngine.evaluate(.text("  COFFEE  "), for: question).allCorrect)
+        #expect(LanguageLearningEngine.evaluate(.dontKnow, for: question).outcomes?[item.id] == .incorrect)
         #expect(LanguageLearningEngine.normalizeAnswer("cafe\u{301}") == LanguageLearningEngine.normalizeAnswer("café"))
         #expect(LanguageLearningEngine.evaluate(.text("coffee!"), for: question).allCorrect == false)
         #expect(LanguageLearningEngine.evaluate(.text("コーヒー"), for: question).allCorrect == false)
@@ -76,12 +78,27 @@ struct LanguageLearningEngineTests {
         let profileID = UUID()
         let first = item(profileID: profileID, term: "猫", translation: "cat")
         let second = item(profileID: profileID, term: "犬", translation: "dog")
-        let question = try #require(LanguageLearningEngine.matching(
-            from: [first, second], profileID: profileID, direction: .targetToBase))
-        let allCorrect = LanguageLearningEngine.evaluate(.matches(question.correctMatches), for: question)
-        #expect(allCorrect.allCorrect)
-        #expect(allCorrect.outcomes?.count == 2)
-        #expect(LanguageLearningEngine.evaluate(.matches(Array(question.correctMatches.dropLast())), for: question) == .invalid)
+        let items = [first, second]
+
+        for direction in LanguageQuestionDirection.allCases {
+            let question = try #require(LanguageLearningEngine.matching(
+                from: items, profileID: profileID, direction: direction))
+            let itemByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+
+            for (itemID, correctMatch) in zip(question.itemIDs, question.correctMatches) {
+                let item = try #require(itemByID[itemID])
+                let term = try #require(question.matchTerms.first { $0.id == correctMatch.termOptionID })
+                let meaning = try #require(question.matchMeanings.first { $0.id == correctMatch.meaningOptionID })
+                #expect(term.text == (direction == .targetToBase ? item.term : item.translation))
+                #expect(meaning.text == (direction == .targetToBase ? item.translation : item.term))
+            }
+
+            let allCorrect = LanguageLearningEngine.evaluate(.matches(question.correctMatches), for: question)
+            #expect(allCorrect.allCorrect)
+            #expect(allCorrect.outcomes?.count == 2)
+            #expect(LanguageLearningEngine.evaluate(.matches(Array(question.correctMatches.dropLast())), for: question) == .invalid)
+        }
+
         #expect(LanguageLearningEngine.matching(from: [first], profileID: profileID, direction: .targetToBase) == nil)
     }
 
@@ -91,7 +108,32 @@ struct LanguageLearningEngineTests {
         let question = try #require(LanguageLearningEngine.cloze(for: withExample))
         #expect(question.prompt == "____と猫です")
         #expect(LanguageLearningEngine.evaluate(.text("猫"), for: question).allCorrect)
+        #expect(LanguageLearningEngine.evaluate(.dontKnow, for: question).outcomes?[withExample.id] == .incorrect)
         #expect(LanguageLearningEngine.cloze(for: item(profileID: UUID(), term: "cat")) == nil)
+    }
+
+    @Test("mixed review includes each available activity and both directions")
+    func mixedReview() throws {
+        let profileID = UUID()
+        let cards = (0..<30).map { index in
+            let term = "term\(index)"
+            return item(
+                profileID: profileID, term: term, translation: "meaning\(index)",
+                examples: ["I used \(term) today"])
+        }
+
+        let session = LanguageLearningEngine.makeSession(
+            from: cards, profileID: profileID, activity: .mixedReview,
+            direction: .targetToBase, count: cards.count, at: Date(timeIntervalSince1970: 1_800_000_000))
+
+        #expect(Set(session.questions.map(\.activity)) == Set([
+            .flashcards, .multipleChoice, .matching, .typedRecall, .cloze,
+        ]))
+        #expect(session.questions.contains { $0.direction == .targetToBase })
+        #expect(session.questions.contains { $0.direction == .baseToTarget })
+        let reviewedIDs = session.questions.flatMap(\.itemIDs)
+        #expect(reviewedIDs.count == cards.count)
+        #expect(Set(reviewedIDs).count == cards.count)
     }
 
     @Test("session advances only after a recorded result and completes at its bound")

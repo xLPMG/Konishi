@@ -6,6 +6,18 @@ import Testing
 
 @Suite("LanguageWorkspaceModel")
 struct LanguageWorkspaceModelTests {
+    @Test("recent progress timestamps use minutes, then hours, then days")
+    @MainActor
+    func progressTimestampUnits() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(LanguageProgressTimeFormatter.text(for: now, now: now) == "Just now")
+        #expect(LanguageProgressTimeFormatter.text(for: now.addingTimeInterval(-59 * 60), now: now) == "59 minutes ago")
+        #expect(LanguageProgressTimeFormatter.text(for: now.addingTimeInterval(-60 * 60), now: now) == "1 hour ago")
+        #expect(LanguageProgressTimeFormatter.text(for: now.addingTimeInterval(-23 * 60 * 60), now: now) == "23 hours ago")
+        #expect(LanguageProgressTimeFormatter.text(for: now.addingTimeInterval(-24 * 60 * 60), now: now) == "1 day ago")
+        #expect(LanguageProgressTimeFormatter.text(for: now.addingTimeInterval(-400 * 24 * 60 * 60), now: now) == "400 days ago")
+    }
+
     @Test("skip advances without writing an attempt or changing the schedule")
     @MainActor
     func skipDoesNotReview() throws {
@@ -111,6 +123,32 @@ struct LanguageWorkspaceModelTests {
         #expect(workspace.recordedAttemptCount == 2)
         #expect(workspace.recordedCorrectCount == 2)
         #expect(store.reviewAttempts(profileID: profile.id).count == 2)
+    }
+
+    @Test("I don't know records an incorrect multiple-choice review")
+    @MainActor
+    func dontKnowRecordsIncorrectAttempt() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        let first = makeCard(profileID: profile.id, term: "猫", translation: "cat")
+        let second = makeCard(profileID: profile.id, term: "犬", translation: "dog")
+        let third = makeCard(profileID: profile.id, term: "鳥", translation: "bird")
+        store.upsertProfile(profile)
+        store.upsert(first)
+        store.upsert(second)
+        store.upsert(third)
+        let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
+        workspace.selectedActivity = .multipleChoice
+        workspace.sessionLength = 1
+
+        workspace.startPractice()
+        workspace.submitAnswer(.dontKnow)
+
+        let attempt = try #require(store.reviewAttempts(profileID: profile.id).first)
+        #expect(attempt.outcome == .incorrect)
+        #expect(attempt.submittedAnswer == "I don't know")
+        #expect(workspace.answerRecorded)
     }
 
     @Test("vocabulary proposals do not write until learner approval")

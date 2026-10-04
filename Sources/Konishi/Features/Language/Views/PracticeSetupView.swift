@@ -33,13 +33,18 @@ struct PracticeSetupView: View {
                     HStack {
                         Text("Direction").foregroundStyle(.secondary)
                         Spacer()
-                        Picker("Direction", selection: $workspace.questionDirection) {
-                            ForEach(LanguageQuestionDirection.allCases) { direction in
-                                Text(direction.label).tag(direction)
+                        if workspace.selectedActivity == .mixedReview {
+                            Label("Both, randomized", systemImage: "shuffle")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Picker("Direction", selection: $workspace.questionDirection) {
+                                ForEach(LanguageQuestionDirection.allCases) { direction in
+                                    Text(direction.label).tag(direction)
+                                }
                             }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
                         }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
                     }
                     Divider().overlay(appModel.currentPalette.border)
                     HStack {

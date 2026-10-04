@@ -22,6 +22,17 @@ struct PracticeSessionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: workspace.practiceSession?.currentQuestion?.id) { clearAnswer() }
+          .task(id: workspace.answerRecorded) {
+            guard workspace.answerRecorded,
+                let questionID = workspace.practiceSession?.currentQuestion?.id
+            else { return }
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled,
+                workspace.answerRecorded,
+                workspace.practiceSession?.currentQuestion?.id == questionID
+            else { return }
+            workspace.continuePractice()
+          }
     }
 
     private func exercise(session: LanguagePracticeSession, question: LanguageQuestion) -> some View {
@@ -64,6 +75,10 @@ struct PracticeSessionView: View {
                 }
                 .frame(minHeight: 112)
 
+                if workspace.answerRecorded {
+                    answerFeedback(question)
+                }
+
                 answerControls(question)
                     .frame(maxWidth: 620)
 
@@ -73,10 +88,6 @@ struct PracticeSessionView: View {
                         .frame(maxWidth: 620, alignment: .leading)
                 }
 
-                if workspace.answerRecorded {
-                    savedResult(question)
-                        .frame(maxWidth: 620, alignment: .leading)
-                }
             }
             .padding(.horizontal, 24)
             Spacer(minLength: 24)
@@ -107,6 +118,7 @@ struct PracticeSessionView: View {
                 ForEach(question.choices) { choice in
                     Button {
                         selectedChoiceID = choice.id
+                        workspace.submitAnswer(.choice(choice.id))
                     } label: {
                         HStack {
                             Text(choice.text).frame(maxWidth: .infinity, alignment: .leading)
@@ -119,11 +131,12 @@ struct PracticeSessionView: View {
                     .tint(selectedChoiceID == choice.id ? .accentColor : .secondary)
                     .disabled(workspace.answerRecorded)
                 }
-                Button("Check answer") {
-                    if let selectedChoiceID { workspace.submitAnswer(.choice(selectedChoiceID)) }
+                Button("I don't know") {
+                    selectedChoiceID = nil
+                    workspace.submitAnswer(.dontKnow)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(selectedChoiceID == nil || workspace.answerRecorded)
+                .buttonStyle(.bordered)
+                .disabled(workspace.answerRecorded)
                 .padding(.top, 6)
             }
         case .typedRecall, .cloze:
@@ -133,47 +146,56 @@ struct PracticeSessionView: View {
                     .font(.title3)
                     .onSubmit { submitText() }
                     .disabled(workspace.answerRecorded)
-                Button("Check answer", action: submitText)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.answerRecorded)
+                HStack(spacing: 10) {
+                    Button("Check answer", action: submitText)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || workspace.answerRecorded)
+                    Button("I don't know") { workspace.submitAnswer(.dontKnow) }
+                        .buttonStyle(.bordered)
+                        .disabled(workspace.answerRecorded)
+                }
             }
         case .matching:
             matchingControls(question)
+        case .mixedReview:
+            EmptyView()
         }
     }
 
     private func matchingControls(_ question: LanguageQuestion) -> some View {
-        VStack(spacing: 12) {
+        let termsTitle = question.direction == .targetToBase ? "Terms" : "Meanings"
+        let meaningsTitle = question.direction == .targetToBase ? "Meanings" : "Terms"
+        return VStack(spacing: 12) {
             HStack(alignment: .top, spacing: 14) {
-                optionColumn(title: "Terms", options: question.matchTerms, selectedID: selectedTermID) { id in
+                optionColumn(
+                    title: termsTitle, options: question.matchTerms, selectedID: selectedTermID, isTermSide: true
+                ) { id in
                     selectedTermID = id
-                    makeMatchIfReady()
+                    makeMatchIfReady(for: question)
                 }
-                optionColumn(title: "Meanings", options: question.matchMeanings, selectedID: selectedMeaningID) { id in
+                optionColumn(
+                    title: meaningsTitle, options: question.matchMeanings, selectedID: selectedMeaningID, isTermSide: false
+                ) { id in
                     selectedMeaningID = id
-                    makeMatchIfReady()
+                    makeMatchIfReady(for: question)
                 }
             }
             if !matches.isEmpty {
                 Text("\(matches.count) of \(question.itemIDs.count) pairs selected")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Button("Check matches") {
-                workspace.submitAnswer(.matches(matches))
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(matches.count != question.itemIDs.count || workspace.answerRecorded)
         }
     }
 
     private func optionColumn(
-        title: String, options: [LanguageOption], selectedID: UUID?, select: @escaping (UUID) -> Void
+        title: String, options: [LanguageOption], selectedID: UUID?, isTermSide: Bool,
+        select: @escaping (UUID) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(options) { option in
                 let isMatched = matches.contains {
-                    title == "Terms" ? $0.termOptionID == option.id : $0.meaningOptionID == option.id
+                    isTermSide ? $0.termOptionID == option.id : $0.meaningOptionID == option.id
                 }
                 Button { select(option.id) } label: {
                     Text(option.text)
@@ -189,25 +211,18 @@ struct PracticeSessionView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func savedResult(_ question: LanguageQuestion) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: resultSymbol(question))
-                    .foregroundStyle(resultColor(question))
-                Text(resultTitle(question)).font(.headline)
-                Spacer()
-            }
-            if question.activity == .matching {
-                Text("\(workspace.recordedCorrectCount) of \(workspace.recordedAttemptCount) pairs correct")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else if question.activity != .flashcards && !workspace.answerResult!.allCorrect {
-                Text("Expected: \(question.answer)")
-                    .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-            Button("Continue") { workspace.continuePractice() }
-                .buttonStyle(.borderedProminent)
-        }
-        .padding(.top, 8)
+    private func answerFeedback(_ question: LanguageQuestion) -> some View {
+        let isCorrect = workspace.answerResult?.allCorrect == true
+        let title = question.activity == .flashcards
+            ? "Self-rating saved"
+            : isCorrect ? "Correct" : "Review saved"
+        let color: Color = question.activity == .flashcards || isCorrect ? .green : .orange
+        return Text(title)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(color)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .accessibilityAddTraits(.updatesFrequently)
     }
 
     private func completion(_ session: LanguagePracticeSession) -> some View {
@@ -226,33 +241,22 @@ struct PracticeSessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func resultSymbol(_ question: LanguageQuestion) -> String {
-        if question.activity == .flashcards { return "checkmark.circle.fill" }
-        return workspace.answerResult?.allCorrect == true ? "checkmark.circle.fill" : "arrow.counterclockwise.circle.fill"
-    }
-
-    private func resultColor(_ question: LanguageQuestion) -> Color {
-        if question.activity == .flashcards { return .green }
-        return workspace.answerResult?.allCorrect == true ? .green : .orange
-    }
-
-    private func resultTitle(_ question: LanguageQuestion) -> String {
-        if question.activity == .flashcards { return "Self-rating saved" }
-        return workspace.answerResult?.allCorrect == true ? "Correct" : "Review saved" 
-    }
-
     private func submitText() {
         guard workspace.practiceSession?.currentQuestion != nil else { return }
         workspace.submitAnswer(.text(answerText))
     }
 
-    private func makeMatchIfReady() {
+    private func makeMatchIfReady(for question: LanguageQuestion) {
         guard let term = selectedTermID, let meaning = selectedMeaningID,
               !matches.contains(where: { $0.termOptionID == term || $0.meaningOptionID == meaning })
         else { return }
-        matches.append(LanguageMatch(termOptionID: term, meaningOptionID: meaning))
+        let nextMatches = matches + [LanguageMatch(termOptionID: term, meaningOptionID: meaning)]
+        matches = nextMatches
         selectedTermID = nil
         selectedMeaningID = nil
+        if nextMatches.count == question.itemIDs.count {
+            workspace.submitAnswer(.matches(nextMatches))
+        }
     }
 
     private func clearAnswer() {

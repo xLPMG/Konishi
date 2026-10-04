@@ -5,6 +5,27 @@ private struct ProfileEditorTarget: Identifiable {
     let profile: LanguageProfile?
 }
 
+enum LanguageProgressTimeFormatter {
+    static func text(for date: Date, now: Date = Date()) -> String {
+        let elapsed = max(0, now.timeIntervalSince(date))
+        if elapsed < 60 { return "Just now" }
+
+        let amount: Int
+        let unit: String
+        if elapsed < 60 * 60 {
+            amount = Int(elapsed / 60)
+            unit = amount == 1 ? "minute" : "minutes"
+        } else if elapsed < 24 * 60 * 60 {
+            amount = Int(elapsed / (60 * 60))
+            unit = amount == 1 ? "hour" : "hours"
+        } else {
+            amount = Int(elapsed / (24 * 60 * 60))
+            unit = amount == 1 ? "day" : "days"
+        }
+        return "\(amount) \(unit) ago"
+    }
+}
+
 struct LanguageSidebarView: View {
     @Environment(AppModel.self) private var appModel
     let workspace: LanguageWorkspaceModel
@@ -224,7 +245,8 @@ private struct LanguageHomeView: View {
                         Text(workspace.store.item(id: attempt.itemID)?.term ?? "Removed card").font(.callout)
                         Spacer()
                         Text(attempt.activity.label).font(.caption).foregroundStyle(.secondary)
-                        Text(attempt.createdAt, style: .relative).font(.caption2).foregroundStyle(.tertiary)
+                        Text(LanguageProgressTimeFormatter.text(for: attempt.createdAt))
+                            .font(.caption2).foregroundStyle(.tertiary)
                     }
                     .padding(.vertical, 4)
                 }

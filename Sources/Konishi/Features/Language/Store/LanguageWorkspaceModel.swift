@@ -42,7 +42,7 @@ final class LanguageWorkspaceModel {
     private(set) var activeProfileID: UUID?
     var destination: LanguageWorkspaceDestination = .home
     private(set) var deckRevision = 0
-    var selectedActivity: LanguageActivity = .flashcards
+    var selectedActivity: LanguageActivity = .mixedReview
     var questionDirection: LanguageQuestionDirection = .targetToBase
     var sessionLength = 10
     private(set) var practiceSession: LanguagePracticeSession?
@@ -496,6 +496,8 @@ final class LanguageWorkspaceModel {
             return remembered ? "remembered" : "again"
         case .choice(let optionID):
             return question.choices.first(where: { $0.id == optionID })?.text
+        case .dontKnow:
+            return "I don't know"
         case .text(let text):
             return text
         case .matches(let pairs):

@@ -1,6 +1,10 @@
 import Foundation
 
 enum LanguageLearningEngine {
+    private static let mixedActivities: [LanguageActivity] = [
+        .flashcards, .multipleChoice, .matching, .typedRecall, .cloze,
+    ]
+
     static func dueQueue(
         from items: [LearnItem], profileID: UUID, limit: Int, at now: Date = Date()
     ) -> [LearnItem] {
@@ -21,7 +25,9 @@ enum LanguageLearningEngine {
     ) -> LanguagePracticeSession {
         let queue = dueQueue(from: items, profileID: profileID, limit: max(0, count), at: now)
         let questions: [LanguageQuestion]
-        if activity == .matching {
+        if activity == .mixedReview {
+            questions = mixedReviewQuestions(from: queue, candidates: items, profileID: profileID)
+        } else if activity == .matching {
             questions = matching(from: queue, profileID: profileID, direction: direction, limit: count)
                 .map { [$0] } ?? []
         } else {
@@ -36,12 +42,82 @@ enum LanguageLearningEngine {
                     return typedRecall(for: item, direction: direction)
                 case .cloze:
                     return cloze(for: item) ?? typedRecall(for: item, direction: direction)
-                case .matching:
+                case .matching, .mixedReview:
                     return nil
                 }
             }
         }
         return LanguagePracticeSession(profileID: profileID, activity: activity, questions: questions)
+    }
+
+    private static func mixedReviewQuestions(
+        from queue: [LearnItem], candidates: [LearnItem], profileID: UUID
+    ) -> [LanguageQuestion] {
+        var remaining = queue.shuffled()
+        var activityCycle: [LanguageActivity] = []
+        var directionCycle: [LanguageQuestionDirection] = []
+        var questions: [LanguageQuestion] = []
+
+        func nextDirection() -> LanguageQuestionDirection {
+            if directionCycle.isEmpty { directionCycle = LanguageQuestionDirection.allCases.shuffled() }
+            return directionCycle.removeFirst()
+        }
+
+        while !remaining.isEmpty {
+            if activityCycle.isEmpty { activityCycle = mixedActivities.shuffled() }
+            let requestedActivity = activityCycle.removeFirst()
+
+            if requestedActivity == .matching, remaining.count >= 2,
+               let question = matching(
+                    from: remaining, profileID: profileID,
+                    direction: nextDirection(), limit: min(4, remaining.count)) {
+                questions.append(question)
+                let matchedIDs = Set(question.itemIDs)
+                remaining.removeAll { matchedIDs.contains($0.id) }
+                continue
+            }
+
+            guard let item = remaining.first else { break }
+            if requestedActivity == .cloze, let question = cloze(for: item) {
+                questions.append(question)
+                remaining.removeFirst()
+                continue
+            }
+
+            let direction = nextDirection()
+            let alternatives = mixedActivities
+                .filter { $0 != .matching && $0 != requestedActivity }
+                .shuffled()
+            let question = makeMixedQuestion(
+                requestedActivity, for: item, candidates: candidates, direction: direction)
+                ?? alternatives.compactMap {
+                    makeMixedQuestion($0, for: item, candidates: candidates, direction: direction)
+                }.first
+
+            if let question {
+                questions.append(question)
+            }
+            remaining.removeFirst()
+        }
+        return questions
+    }
+
+    private static func makeMixedQuestion(
+        _ activity: LanguageActivity, for item: LearnItem,
+        candidates: [LearnItem], direction: LanguageQuestionDirection
+    ) -> LanguageQuestion? {
+        switch activity {
+        case .flashcards:
+            flashcard(for: item, direction: direction)
+        case .multipleChoice:
+            multipleChoice(for: item, from: candidates, direction: direction)
+        case .typedRecall:
+            typedRecall(for: item, direction: direction)
+        case .cloze:
+            cloze(for: item)
+        case .matching, .mixedReview:
+            nil
+        }
     }
 
     static func flashcard(
@@ -98,14 +174,14 @@ enum LanguageLearningEngine {
         }
         guard uniqueItems.count >= 2 else { return nil }
 
-        let termOptions = uniqueItems.map { item in
-            LanguageOption(text: direction == .targetToBase ? item.term : item.translation)
-        }.shuffled()
-        let meaningOptions = uniqueItems.map { item in
-            LanguageOption(text: direction == .targetToBase ? item.translation : item.term)
-        }.shuffled()
-        let meaningsByItem = Dictionary(uniqueKeysWithValues: zip(uniqueItems.map(\.id), meaningOptions))
-        let termsByItem = Dictionary(uniqueKeysWithValues: zip(uniqueItems.map(\.id), termOptions))
+        let termsByItem = Dictionary(uniqueKeysWithValues: uniqueItems.map { item in
+            (item.id, LanguageOption(text: direction == .targetToBase ? item.term : item.translation))
+        })
+        let meaningsByItem = Dictionary(uniqueKeysWithValues: uniqueItems.map { item in
+            (item.id, LanguageOption(text: direction == .targetToBase ? item.translation : item.term))
+        })
+        let termOptions = uniqueItems.compactMap { termsByItem[$0.id] }.shuffled()
+        let meaningOptions = uniqueItems.compactMap { meaningsByItem[$0.id] }.shuffled()
         let matches = uniqueItems.compactMap { item -> LanguageMatch? in
             guard let term = termsByItem[item.id], let meaning = meaningsByItem[item.id] else { return nil }
             return LanguageMatch(termOptionID: term.id, meaningOptionID: meaning.id)
@@ -142,14 +218,21 @@ enum LanguageLearningEngine {
             guard question.itemIDs.count == 1 else { return .invalid }
             return .graded([question.itemIDs[0]: remembered ? .remembered : .again])
         case let (.multipleChoice, .choice(choiceID)):
-            guard question.itemIDs.count == 1,
-                  question.choices.count >= 2,
-                  Set(question.choices.map(\.id)).count == question.choices.count,
-                  let correctID = question.correctChoiceID,
-                  question.choices.contains(where: { $0.id == correctID }),
+            guard let correctID = validMultipleChoiceCorrectID(for: question),
                   question.choices.contains(where: { $0.id == choiceID })
             else { return .invalid }
             return .graded([question.itemIDs[0]: choiceID == correctID ? .correct : .incorrect])
+        case (.multipleChoice, .dontKnow):
+            guard validMultipleChoiceCorrectID(for: question) != nil,
+                  let itemID = question.itemIDs.first
+            else { return .invalid }
+            return .graded([itemID: .incorrect])
+        case (.typedRecall, .dontKnow), (.cloze, .dontKnow):
+            let expected = question.acceptedAnswers + [question.answer]
+            guard question.itemIDs.count == 1,
+                  !expected.isEmpty, expected.allSatisfy({ !normalizeAnswer($0).isEmpty })
+            else { return .invalid }
+            return .graded([question.itemIDs[0]: .incorrect])
         case let (.typedRecall, .text(text)), let (.cloze, .text(text)):
             let expected = question.acceptedAnswers + [question.answer]
             guard question.itemIDs.count == 1,
@@ -180,6 +263,16 @@ enum LanguageLearningEngine {
         default:
             return .invalid
         }
+    }
+
+    private static func validMultipleChoiceCorrectID(for question: LanguageQuestion) -> UUID? {
+        guard question.itemIDs.count == 1,
+              question.choices.count >= 2,
+              Set(question.choices.map(\.id)).count == question.choices.count,
+              let correctID = question.correctChoiceID,
+              question.choices.contains(where: { $0.id == correctID })
+        else { return nil }
+        return correctID
     }
 
     static func advancing(

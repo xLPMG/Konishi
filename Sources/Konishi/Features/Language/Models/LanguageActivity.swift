@@ -1,6 +1,7 @@
 import Foundation
 
 enum LanguageActivity: String, Codable, CaseIterable, Identifiable, Sendable {
+    case mixedReview
     case flashcards
     case multipleChoice
     case matching
@@ -16,6 +17,7 @@ enum LanguageActivity: String, Codable, CaseIterable, Identifiable, Sendable {
         case .matching: "Word matching"
         case .typedRecall: "Typed recall"
         case .cloze: "Cloze"
+        case .mixedReview: "Mixed review"
         }
     }
 
@@ -26,6 +28,7 @@ enum LanguageActivity: String, Codable, CaseIterable, Identifiable, Sendable {
         case .matching: "arrow.left.arrow.right"
         case .typedRecall: "keyboard"
         case .cloze: "text.badge.minus"
+        case .mixedReview: "shuffle"
         }
     }
 }
