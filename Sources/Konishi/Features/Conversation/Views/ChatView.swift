@@ -519,8 +519,10 @@ struct ChatView: View {
             case .practice:
                 var prompts: [StarterPrompt] = []
                 if enabledStarterTools.contains("get_due_items") {
-                    if enabledStarterTools.contains("record_review") {
-                        prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz and record reviews from your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName). Ask one question at a time and record each answer.")))
+                    if enabledStarterTools.contains("ask_multiple_choice") {
+                        prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz and record reviews from your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName), one at a time. Use ask_multiple_choice for every card, include its item_id, and continue with another tool call after each answer. The tool records linked reviews automatically.")))
+                    } else if enabledStarterTools.contains("record_review") {
+                        prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz and record reviews from your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName). Ask one open-response question at a time and call record_review with that card's id after each answer before continuing.")))
                     } else {
                         prompts.append(StarterPrompt(title: "Review due words", detail: "Quiz cards currently due in your deck", icon: "checkmark.circle", action: .draft("Quiz me on words due for review in \(profile.targetName). Ask one question at a time.")))
                     }

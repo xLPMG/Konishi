@@ -441,7 +441,7 @@ enum Tools {
         ToolSpec(
             name: "record_review",
             summary: "Record a review result",
-            description: "Record whether the user got a card right; updates its schedule.",
+            description: "Record a judged open-response answer for a deck card and update its schedule. Do not call for a question answered through ask_multiple_choice with item_id; that tool records it automatically.",
             parameters: .schema(
                 properties: [
                     "id": .property("string", "the card id"),
@@ -460,7 +460,7 @@ enum Tools {
         ToolSpec(
             name: "ask_multiple_choice",
             summary: "Ask multiple-choice questions",
-            description: "Ask the user one or more multiple-choice questions; returns their answers. Questions with an item_id are graded and recorded automatically — never also call record_review for those.",
+            description: "Ask the user multiple-choice questions; returns their answers. For due-card practice, ask one card per call and include its item_id and correct_index. Linked cards are graded and recorded automatically; never call record_review for them. Ask the next card with another tool call, not plain text.",
             parameters: .schema(
                 properties: [
                     "questions": .object([

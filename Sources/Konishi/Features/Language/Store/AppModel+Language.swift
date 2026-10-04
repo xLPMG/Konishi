@@ -36,7 +36,6 @@ extension AppModel {
     }
 
     /// System prompt for language mode: pedagogy + profile + session config.
-    /// (Deck/tool instructions are appended once the language tools land.)
     func languageSystemPrompt(persona: Persona) -> String {
         var lines: [String] = []
         if let name = persona.assistantName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
