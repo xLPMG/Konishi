@@ -11,7 +11,7 @@ struct RuntimeSettings: View {
     var body: some View {
         Form {
             serversSection
-            mlxServersSection
+            builtInServersSection
             customServersSection
             detectedEndpointsSection
             environmentSection
@@ -91,8 +91,8 @@ struct RuntimeSettings: View {
         }
     }
 
-    private var mlxServersSection: some View {
-        Section("MLX Servers") {
+    private var builtInServersSection: some View {
+        Section("Built-in Servers") {
             ForEach(runtime.mlxServers) { server in
                 ManagedServerRow(server: server).id(server.id)
             }
@@ -287,20 +287,31 @@ private struct ManagedServerRow: View {
                 ))
                 .toggleStyle(.switch)
                 Spacer()
-                let primary = Runtime.primaryPackageName(draft.pipPackage)
-                let version = primary.flatMap { runtime.installedVersion(of: $0) }
-                if draft.builtInServer != nil {
-                    Text("\(primary ?? draft.pipPackage) \(version.map { "v\($0)" } ?? "not installed")")
+                if draft.builtInServer == .splash {
+                    Text("Splash \(runtime.splashVersion.map { "v\($0)" } ?? "not installed")")
                         .font(.caption.monospaced())
-                        .foregroundStyle(version == nil ? .secondary : .primary)
-                } else if let version {
-                    Text("v\(version)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                        .foregroundStyle(runtime.splashVersion == nil ? .secondary : .primary)
+                    Button(runtime.splashVersion == nil ? "Install" : "Update") {
+                        runtime.installSplash()
+                    }
+                    .disabled(runtime.busy)
+                    .help("Install or update Splash with Homebrew")
+                } else {
+                    let primary = Runtime.primaryPackageName(draft.pipPackage)
+                    let version = primary.flatMap { runtime.installedVersion(of: $0) }
+                    if draft.builtInServer != nil {
+                        Text("\(primary ?? draft.pipPackage) \(version.map { "v\($0)" } ?? "not installed")")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(version == nil ? .secondary : .primary)
+                    } else if let version {
+                        Text("v\(version)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                    }
+                    Button(version == nil ? "Install" : "Update") {
+                        runtime.install(package: draft.pipPackage)
+                    }
+                    .disabled(runtime.busy || !runtime.venvReady || draft.pipPackage.isEmpty)
+                    .help("Install or update this server runtime")
                 }
-                Button(version == nil ? "Install" : "Update") {
-                    runtime.install(package: draft.pipPackage)
-                }
-                .disabled(runtime.busy || !runtime.venvReady || draft.pipPackage.isEmpty)
-                .help("Install or update this server runtime")
             }
             DisclosureGroup("Server options", isExpanded: $advanced) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -396,7 +407,7 @@ private struct ManagedServerRow: View {
         @Bindable var settings = model.settings
         VStack(alignment: .leading, spacing: 5) {
             if draft.supportsModelSelection {
-                LabeledContent(modelFieldLabel) {
+                LabeledContent("Model path") {
                     HStack {
                         TextField("Local path or Hugging Face ID", text: modelPathBinding)
                             .font(.system(size: 12, design: .monospaced))
@@ -422,16 +433,6 @@ private struct ManagedServerRow: View {
                 }
             }
             switch draft.role {
-            case .chat:
-                LabeledContent("Chat model") {
-                    Text(settings.model.isEmpty ? "Not selected" : shortModelName(settings.model))
-                        .help(settings.model)
-                }
-            case .embedding:
-                LabeledContent("Embedding model") {
-                    Text(settings.embeddingModel.isEmpty ? "Not selected" : shortModelName(settings.embeddingModel))
-                        .help(settings.embeddingModel)
-                }
             case .audio:
                 if model.audioModels.isEmpty {
                     HStack {
@@ -446,7 +447,7 @@ private struct ManagedServerRow: View {
                         ForEach(model.ttsCandidates) { Text($0.id).tag($0.id) }
                     }
                 }
-            case .none:
+            case .chat, .embedding, .none:
                 EmptyView()
             }
         }
@@ -459,12 +460,6 @@ private struct ManagedServerRow: View {
         )
     }
 
-    private var modelFieldLabel: String {
-        guard let path = draft.modelPath,
-              !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Model" }
-        return shortModelName(path)
-    }
-
     private func shortModelName(_ identifier: String) -> String {
         (identifier.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).lastPathComponent
     }
@@ -474,7 +469,7 @@ private struct ManagedServerRow: View {
         updated.setModelPath(path)
         draft = updated
         switch updated.role {
-        case .chat: model.settings.model = path
+        case .chat: model.settings.model = updated.apiModelID ?? path
         case .embedding: model.settings.embeddingModel = path
         case .audio, .none: break
         }

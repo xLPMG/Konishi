@@ -22,6 +22,7 @@ final class Runtime {
     /// True while a venv/pip operation is running (one at a time).
     var busy = false
     var pythonVersion: String?
+    var splashVersion: String?
     /// Packages installed in the venv, refreshed after each pip operation.
     var installedPackages: [PipPackage] = []
 
@@ -81,6 +82,7 @@ final class Runtime {
         discoverInterpreters()
         adoptRunning()
         refreshPackages()
+        refreshSplashVersion()
         // Kill managed servers when the app quits (unless the user opted out).
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
@@ -276,6 +278,20 @@ final class Runtime {
         runOp("Install \(pkg)", command: "noglob '\(pythonBinPath)' -m pip install -U \(pkg)")
     }
 
+    func installSplash() {
+        guard !busy else { return }
+        let command = "if brew list --versions splash >/dev/null 2>&1; then brew upgrade splash; else brew install incoai/tap/splash; fi"
+        runOp("Install or update Splash", command: command)
+    }
+
+    func refreshSplashVersion() {
+        Task { [weak self] in
+            let output = await Self.shellOutput("brew list --versions splash 2>/dev/null") ?? ""
+            let version = output.split(whereSeparator: \.isWhitespace).dropFirst().first.map(String.init)
+            self?.splashVersion = version
+        }
+    }
+
     /// Uninstall a package from the venv.
     func uninstall(_ name: String) {
         let pkg = name.trimmingCharacters(in: .whitespaces)
@@ -465,9 +481,13 @@ final class Runtime {
             return false
         }
         statuses[server.id] = .starting
-        EmbedServer.ensureInstalled()   // materialise the bundled mlx embeddings server script
+        if server.builtInServer == .mlxEmbeddings {
+            EmbedServer.ensureInstalled()
+        }
         let command = server.launchCommand
-        let full = "export PATH=\"\(venvBinPath):$PATH\"; exec \(command)"
+        let full = server.builtInServer == .splash
+            ? command
+            : "export PATH=\"\(venvBinPath):$PATH\"; exec \(command)"
         appendLog("▶︎ \(server.name): \(command)\n")
 
         guard let proc = launch(full, id: server.id, isServer: true, logFile: Paths.serverLog(server.id)) else {
@@ -754,6 +774,7 @@ final class Runtime {
             appendLog(code == 0 ? "✓ done\n" : "✗ exited with code \(code)\n")
             detectPython()
             refreshPackages()
+            refreshSplashVersion()
         }
     }
 

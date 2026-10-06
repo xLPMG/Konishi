@@ -7,6 +7,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         case mlxVLMChat
         case mlxAudio
         case mlxEmbeddings
+        case splash
 
         var isChat: Bool { self == .mlxLMChat || self == .mlxVLMChat }
     }
@@ -39,6 +40,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     var command: String
     /// Local model path or Hugging Face identifier passed separately to the server command.
     var model: String?
+    /// API model identifier when it differs from the local model directory.
+    var apiModelID: String?
     var builtInServer: BuiltInServer?
     var isCustom: Bool
     var host: String
@@ -50,6 +53,12 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     var autostart: Bool?
 
     var launchCommand: String {
+        if builtInServer == .splash {
+            let modelDirectory = modelPath.map(Self.shellQuotePath)
+                ?? Self.shellQuotePath("~/.lmstudio/models/incoai/Qwen3.8-27B-Splash")
+            let modelID = Self.shellQuote(apiModelID ?? "incoai/Qwen3.8-27B-Splash")
+            return "SPLASH_ROOT=\"$(brew --prefix splash)/libexec\"; MODEL_DIR=\(modelDirectory); MODEL_ID=\(modelID); export PYTHONPATH=\"$SPLASH_ROOT\"; exec \"$SPLASH_ROOT/python/bin/python3\" -u -P -m server.server \"$MODEL_DIR\" --tokenizer \"$MODEL_DIR/tokenizer\" --model \"$MODEL_ID\" --binary \"$SPLASH_ROOT/engine/splash\" --port \(port)"
+        }
         let stripped = Self.commandWithoutModel(command)
             .replacingOccurrences(of: #"\s*--host(?:=|\s+)\S+"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s*--port(?:=|\s+)\d+"#, with: "", options: .regularExpression)
@@ -103,6 +112,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         name = server.displayName
         pipPackage = server.pipPackage
         command = server.command
+        apiModelID = server.apiModelID
         role = server.role
         note = server.note
     }
@@ -153,6 +163,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         pipPackage: String,
         command: String,
         model: String? = nil,
+        apiModelID: String? = nil,
         host: String,
         port: Int,
         role: Role,
@@ -166,6 +177,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         self.pipPackage = pipPackage
         self.command = Self.commandWithoutModel(command)
         self.model = model ?? Self.extractModelPath(from: command)
+        self.apiModelID = apiModelID
         self.builtInServer = builtInServer
         self.isCustom = isCustom
         self.host = host
@@ -177,7 +189,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, pipPackage, command, model, builtInServer, isCustom, host, port, role, note, autostart
+        case id, name, pipPackage, command, model, apiModelID, builtInServer, isCustom, host, port, role, note, autostart
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
@@ -192,6 +204,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         pipPackage = try values.decode(String.self, forKey: .pipPackage)
         command = Self.commandWithoutModel(legacyCommand)
         model = try values.decodeIfPresent(String.self, forKey: .model) ?? Self.extractModelPath(from: legacyCommand)
+        apiModelID = try values.decodeIfPresent(String.self, forKey: .apiModelID)
         if let persisted = try values.decodeIfPresent(BuiltInServer.self, forKey: .builtInServer) {
             builtInServer = persisted
         } else if let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
@@ -212,7 +225,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         [
             makeBuiltIn(.mlxLMChat),
             makeBuiltIn(.mlxAudio),
-            makeBuiltIn(.mlxEmbeddings)
+            makeBuiltIn(.mlxEmbeddings),
+            makeBuiltIn(.splash)
         ]
     }
 
@@ -237,6 +251,7 @@ private extension ManagedServer.BuiltInServer {
         case .mlxLMChat, .mlxVLMChat: "Chat"
         case .mlxAudio: "Audio"
         case .mlxEmbeddings: "Embeddings"
+        case .splash: "Splash"
         }
     }
 
@@ -246,6 +261,7 @@ private extension ManagedServer.BuiltInServer {
         case .mlxVLMChat: "mlx-vlm"
         case .mlxAudio: "mlx-audio[server] misaki[en]"
         case .mlxEmbeddings: "mlx-embeddings"
+        case .splash: ""
         }
     }
 
@@ -255,6 +271,7 @@ private extension ManagedServer.BuiltInServer {
         case .mlxVLMChat: "mlx_vlm.server"
         case .mlxAudio: "mlx_audio.server"
         case .mlxEmbeddings: "python ~/Konishi/python/mlx_embed_server.py"
+        case .splash: "splash-server"
         }
     }
 
@@ -264,6 +281,14 @@ private extension ManagedServer.BuiltInServer {
         case .mlxVLMChat: "mlx-community/gemma-4-12B-it-qat-4bit"
         case .mlxAudio: nil
         case .mlxEmbeddings: "~/.lmstudio/models/AutomatosX/AX-Qwen3-Embedding-0.6B-MLX-AXQ-4bit"
+        case .splash: "~/.lmstudio/models/incoai/Qwen3.8-27B-Splash"
+        }
+    }
+
+    var apiModelID: String? {
+        switch self {
+        case .splash: "incoai/Qwen3.8-27B-Splash"
+        default: nil
         }
     }
 
@@ -272,6 +297,7 @@ private extension ManagedServer.BuiltInServer {
         case .mlxLMChat, .mlxVLMChat: .chat
         case .mlxAudio: .audio
         case .mlxEmbeddings: .embedding
+        case .splash: .chat
         }
     }
 
@@ -280,6 +306,7 @@ private extension ManagedServer.BuiltInServer {
         case .mlxLMChat, .mlxVLMChat: 8080
         case .mlxAudio: 8081
         case .mlxEmbeddings: 7997
+        case .splash: 8080
         }
     }
 
@@ -293,6 +320,8 @@ private extension ManagedServer.BuiltInServer {
             "OpenAI-compatible speech and transcription server. Kokoro needs misaki[en]; Python 3.12 is recommended."
         case .mlxEmbeddings:
             "Native MLX embeddings server for semantic memory and document retrieval."
+        case .splash:
+            "Runs Splash with a local model directory; install/update with the official Homebrew formula."
         }
     }
 }

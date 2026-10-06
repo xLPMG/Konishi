@@ -67,7 +67,9 @@ extension AppModel {
 
     private func pointChat(at server: ManagedServer) {
         settings.baseURL = server.endpointURL
-        if case .running = runtime.status(server.id), let modelPath = server.modelPath {
+        if let apiModelID = server.apiModelID {
+            settings.model = apiModelID
+        } else if case .running = runtime.status(server.id), let modelPath = server.modelPath {
             settings.model = modelPath
         }
         refreshServerInfo()
@@ -89,6 +91,7 @@ extension AppModel {
     func useForChat(_ server: ManagedServer) {
         settings.baseURL = server.endpointURL
         settings.apiToken = ""
+        if let apiModelID = server.apiModelID { settings.model = apiModelID }
         refreshServerInfo()
     }
 

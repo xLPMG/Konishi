@@ -18,6 +18,25 @@ struct ManagedServerTests {
         #expect(server.launchCommand.contains("--host '127.0.0.1' --port 8080"))
     }
 
+    @Test("Splash starts from a local model directory but advertises its API model ID")
+    func splashLocalModelLaunch() {
+        var server = ManagedServer.presets.first { $0.builtInServer == .splash }!
+        let path = "/Models/Qwen 3.8 Splash"
+
+        server.setModelPath(path)
+        let command = server.launchCommand
+
+        #expect(server.apiModelID == "incoai/Qwen3.8-27B-Splash")
+        #expect(command.contains("MODEL_DIR='/Models/Qwen 3.8 Splash'"))
+        #expect(command.contains("-m server.server \"$MODEL_DIR\""))
+        #expect(command.contains("--tokenizer \"$MODEL_DIR/tokenizer\""))
+        #expect(command.contains("--model \"$MODEL_ID\""))
+        #expect(command.contains("MODEL_ID='incoai/Qwen3.8-27B-Splash'"))
+        #expect(command.contains("; export PYTHONPATH=\"$SPLASH_ROOT\"; exec \"$SPLASH_ROOT/python/bin/python3\""))
+        #expect(command.contains("--port 8080"))
+        #expect(!command.contains("--model '/Models/Qwen 3.8 Splash'"))
+    }
+
     @Test("built-in Chat switches its fixed server when vision is enabled")
     func builtInChatVisionToggle() {
         var chat = ManagedServer.presets[0]
