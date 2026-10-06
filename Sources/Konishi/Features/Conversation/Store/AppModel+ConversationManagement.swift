@@ -20,6 +20,7 @@ extension AppModel {
     }
 
     func deleteConversation(_ id: UUID) {
+        if activeTurnContext?.conversationID == id { activeTurnContext = nil }
         conversations.removeAll { $0.id == id }
         hydratedIDs.remove(id)
         hydrationOrder.removeAll { $0 == id }

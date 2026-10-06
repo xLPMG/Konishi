@@ -106,6 +106,28 @@ final class AppModel {
     let traceStore = TraceStore()
     var streamTask: Task<Void, Never>?
     let streamPresentation = StreamPresentation()
+    struct ActiveTurnContext: Sendable {
+        let conversationID: UUID
+        let persona: Persona
+        let requestConfig: RequestConfig
+
+        @MainActor
+        static func resolve(
+            conversationID: UUID,
+            existing: ActiveTurnContext?,
+            persona: Persona,
+            settings: AppSettings
+        ) -> ActiveTurnContext {
+            if let existing, existing.conversationID == conversationID { return existing }
+            var config = settings.requestConfig(modelOverride: persona.model)
+            config.enableThinking = settings.reasoningEnabled
+            return ActiveTurnContext(
+                conversationID: conversationID, persona: persona, requestConfig: config)
+        }
+    }
+
+    var activeTurnContext: ActiveTurnContext?
+
     struct PendingToolBatch: Identifiable {
         let id = UUID()
         let conversationID: UUID

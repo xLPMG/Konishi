@@ -37,6 +37,18 @@ struct ManagedServerTests {
         #expect(!command.contains("--model '/Models/Qwen 3.8 Splash'"))
     }
 
+    @Test("Splash derives its API model ID from the selected LM Studio folder")
+    func splashModelIDTracksSelectedFolder() {
+        var server = ManagedServer.presets.first { $0.builtInServer == .splash }!
+        server.setModelPath("/Users/me/.lmstudio/models/incoai/Qwen3.6-35B-A3B-Splash")
+
+        #expect(server.effectiveAPIModelID == "incoai/Qwen3.6-35B-A3B-Splash")
+        #expect(server.launchCommand.contains("MODEL_ID='incoai/Qwen3.6-35B-A3B-Splash'"))
+
+        server.configureBuiltInServer(.splash)
+        #expect(server.effectiveAPIModelID == "incoai/Qwen3.6-35B-A3B-Splash")
+    }
+
     @Test("built-in Chat switches its fixed server when vision is enabled")
     func builtInChatVisionToggle() {
         var chat = ManagedServer.presets[0]

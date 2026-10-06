@@ -469,7 +469,7 @@ private struct ManagedServerRow: View {
         updated.setModelPath(path)
         draft = updated
         switch updated.role {
-        case .chat: model.settings.model = updated.apiModelID ?? path
+        case .chat: model.settings.model = updated.effectiveAPIModelID ?? path
         case .embedding: model.settings.embeddingModel = path
         case .audio, .none: break
         }

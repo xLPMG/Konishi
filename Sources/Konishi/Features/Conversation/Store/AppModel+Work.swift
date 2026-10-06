@@ -17,7 +17,10 @@ extension AppModel {
     }
 
     func pauseAgentWork(reason: AgentWorkPauseReason, batch: PendingToolBatch? = nil) {
-        guard let session = workSession else { return }
+        guard let session = workSession else {
+            activeTurnContext = nil
+            return
+        }
         if session.autopilot {
             stopAutopilot(reason: reason, batch: batch)
             return
@@ -56,6 +59,7 @@ extension AppModel {
     }
 
     func finishAgentWork() {
+        activeTurnContext = nil
         workSession = nil
         isAutopilotActive = false
         pendingWorkGate = nil

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import Konishi
@@ -61,5 +62,38 @@ struct ToolContinuationTests {
         let recovered = AppModel.recoverableToolCalls(in: [assistant, calculateResult])
         #expect(recovered?.calls.map(\.id) == [write.id])
         #expect(recovered?.continueAfter == true)
+    }
+
+    @Test("tool continuation keeps its original model and endpoint")
+    func continuationKeepsTurnRoute() {
+        let suite = "ToolContinuationTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        settings.baseURL = "http://127.0.0.1:8080"
+        settings.model = "incoai/Qwen3.8-27B-Splash"
+        let conversationID = UUID()
+        let persona = Persona.defaults[0]
+
+        let initial = AppModel.ActiveTurnContext.resolve(
+            conversationID: conversationID, existing: nil, persona: persona, settings: settings)
+
+        settings.baseURL = "http://127.0.0.1:8040"
+        settings.model = "/Users/me/Models/gemma"
+        var changedPersona = persona
+        changedPersona.model = "/Users/me/Models/gemma"
+
+        let continuation = AppModel.ActiveTurnContext.resolve(
+            conversationID: conversationID, existing: initial,
+            persona: changedPersona, settings: settings)
+        #expect(continuation.requestConfig.model == "incoai/Qwen3.8-27B-Splash")
+        #expect(continuation.requestConfig.chatURL?.port == 8080)
+        #expect(continuation.persona.model == nil)
+
+        let nextTurn = AppModel.ActiveTurnContext.resolve(
+            conversationID: UUID(), existing: continuation,
+            persona: changedPersona, settings: settings)
+        #expect(nextTurn.requestConfig.model == "/Users/me/Models/gemma")
+        #expect(nextTurn.requestConfig.chatURL?.port == 8040)
     }
 }

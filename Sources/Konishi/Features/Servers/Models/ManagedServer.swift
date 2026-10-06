@@ -52,11 +52,16 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     /// Start automatically when Konishi launches. Optional for back-compat.
     var autostart: Bool?
 
+    var effectiveAPIModelID: String? {
+        guard builtInServer == .splash else { return apiModelID }
+        return Self.splashModelID(from: modelPath) ?? apiModelID
+    }
+
     var launchCommand: String {
         if builtInServer == .splash {
             let modelDirectory = modelPath.map(Self.shellQuotePath)
                 ?? Self.shellQuotePath("~/.lmstudio/models/incoai/Qwen3.8-27B-Splash")
-            let modelID = Self.shellQuote(apiModelID ?? "incoai/Qwen3.8-27B-Splash")
+            let modelID = Self.shellQuote(effectiveAPIModelID ?? "incoai/Qwen3.8-27B-Splash")
             return "SPLASH_ROOT=\"$(brew --prefix splash)/libexec\"; MODEL_DIR=\(modelDirectory); MODEL_ID=\(modelID); export PYTHONPATH=\"$SPLASH_ROOT\"; exec \"$SPLASH_ROOT/python/bin/python3\" -u -P -m server.server \"$MODEL_DIR\" --tokenizer \"$MODEL_DIR/tokenizer\" --model \"$MODEL_ID\" --binary \"$SPLASH_ROOT/engine/splash\" --port \(port)"
         }
         let stripped = Self.commandWithoutModel(command)
@@ -125,6 +130,14 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         if value == "~" { return "\"$HOME\"" }
         if value.hasPrefix("~/") { return "\"$HOME\"/" + shellQuote(String(value.dropFirst(2))) }
         return shellQuote(value)
+    }
+
+    private static func splashModelID(from localPath: String?) -> String? {
+        guard let localPath,
+              let modelsRange = localPath.range(of: "/.lmstudio/models/") else { return nil }
+        let components = localPath[modelsRange.upperBound...].split(separator: "/")
+        guard components.count >= 2 else { return nil }
+        return "\(components[0])/\(components[1])"
     }
 
     private static func extractModelPath(from command: String) -> String? {

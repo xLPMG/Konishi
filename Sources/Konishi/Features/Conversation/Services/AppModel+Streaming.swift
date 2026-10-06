@@ -88,6 +88,12 @@ extension AppModel {
     func startTurn(conversationID: UUID) {
         guard let idx = conversationIndex(conversationID) else { return }
         guard pendingWorkGate == nil else { return }
+        let turnContext = ActiveTurnContext.resolve(
+            conversationID: conversationID,
+            existing: activeTurnContext,
+            persona: personaStore.persona(for: conversations[idx]),
+            settings: settings)
+        activeTurnContext = turnContext
         if var session = workSession, session.conversationID == conversationID {
             let pauseReason = session.beginTurn()
             workSession = session
@@ -106,19 +112,18 @@ extension AppModel {
         let assistant = ChatMessage(role: .assistant, content: "")
         conversations[idx].messages.append(assistant)
         streamPresentation.begin(conversationID: conversationID, assistantID: assistant.id)
-        runStream(conversationID: conversationID, assistantID: assistant.id)
+        runStream(conversationID: conversationID, assistantID: assistant.id, turnContext: turnContext)
     }
 
-    private func runStream(conversationID: UUID, assistantID: UUID) {
+    private func runStream(conversationID: UUID, assistantID: UUID, turnContext: ActiveTurnContext) {
         guard let idx = conversationIndex(conversationID) else { return }
-        let persona = personaStore.persona(for: conversations[idx])
+        let persona = turnContext.persona
         let allHistory = conversations[idx].messages.filter { $0.id != assistantID }
         let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
         let history = Array(allHistory.dropFirst(folded))
         let summary = conversations[idx].summary ?? ""
         let pinnedContext = ContextPin.promptText(for: conversations[idx].contextPins ?? [])
-        var config = settings.requestConfig(modelOverride: persona.model)
-        config.enableThinking = settings.reasoningEnabled
+        let config = turnContext.requestConfig
         let toolSurface: PermissionSurface = workSession?.autopilot == true ? .unattended : .interactive
         let permissionContext = toolPermissionContext(
             conversationID: conversationID, surface: toolSurface)
@@ -458,6 +463,7 @@ extension AppModel {
             streamPresentation.clear()
             isStreaming = false
             streamingConversationID = nil
+            if activeTurnContext?.conversationID == conversationID { activeTurnContext = nil }
             return
         }
 
@@ -605,6 +611,7 @@ extension AppModel {
         let wasExecutingTools = toolExecutionTask != nil
         streamTask?.cancel()
         streamTask = nil
+        activeTurnContext = nil
         toolExecutionTask?.cancel()
         toolExecutionTask = nil
         if wasExecutingTools { isStoppingWork = true }
