@@ -442,6 +442,79 @@ extension AppModel {
             let result = await WebResearch.research(args.query, maxSources: args.maxSources ?? 3)
             for source in result.sources { addTurnSource(title: source.title, url: source.url) }
             return result.text
+        case "finance_lookup":
+            guard let args: ToolArguments.FinanceLookup = Self.decodeToolArgs(call) else {
+                return "Error: finance_lookup requires an identifier"
+            }
+            do {
+                let result = try await FinanceData.lookup(
+                    identifier: args.identifier, identifierType: args.identifierType)
+                addFinanceSources(result)
+                return FinanceData.encode(result)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "finance_quote":
+            guard let args: ToolArguments.FinanceQuote = Self.decodeToolArgs(call) else {
+                return "Error: finance_quote requires an identifier"
+            }
+            do {
+                let result = try await FinanceData.quote(
+                    identifier: args.identifier, identifierType: args.identifierType,
+                    exchange: args.exchange)
+                addFinanceSources(result)
+                return FinanceData.encode(result)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "finance_history":
+            guard let args: ToolArguments.FinanceHistory = Self.decodeToolArgs(call) else {
+                return "Error: finance_history requires an identifier"
+            }
+            do {
+                let result = try await FinanceData.history(identifier: args.identifier, days: args.days ?? 365)
+                addFinanceSources(result)
+                return FinanceData.encode(result)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "finance_series":
+            guard let args: ToolArguments.FinanceSeries = Self.decodeToolArgs(call) else {
+                return "Error: finance_series requires a FRED series_id"
+            }
+            do {
+                let result = try await FinanceData.economicSeries(
+                    seriesID: args.seriesId, days: args.days ?? 365)
+                addFinanceSources(result)
+                return FinanceData.encode(result)
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "finance_portfolio":
+            guard let args: ToolArguments.FinancePortfolio = Self.decodeToolArgs(call) else {
+                return "Error: finance_portfolio requires currency and holdings"
+            }
+            do {
+                let input = FinanceData.PortfolioInput(currency: args.currency, holdings: args.holdings)
+                return FinanceData.encode(try FinanceData.analyzePortfolio(input))
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
+        case "finance_scenario":
+            guard let args: ToolArguments.FinanceScenario = Self.decodeToolArgs(call) else {
+                return "Error: finance_scenario arguments are invalid"
+            }
+            do {
+                let input = FinanceData.ScenarioInput(
+                    currency: args.currency, initialAmount: args.initialAmount,
+                    monthlyContribution: args.monthlyContribution, years: args.years,
+                    annualReturnPercent: args.annualReturnPercent,
+                    annualFeePercent: args.annualFeePercent,
+                    inflationPercent: args.inflationPercent)
+                return FinanceData.encode(try FinanceData.project(input))
+            } catch {
+                return "Error: \(error.localizedDescription)"
+            }
         case "calculate":
             guard let args: ToolArguments.Calculation = Self.decodeToolArgs(call) else {
                 return "Error: calculate requires an expression"
@@ -599,6 +672,16 @@ extension AppModel {
             return isAppend ? "Appended to \(written)." : "Saved \(written)."
         default:
             return "Unknown tool."
+        }
+    }
+
+    private func addFinanceSources(_ result: FinanceData.Result) {
+        if let matches = result.matches, !matches.isEmpty {
+            for match in matches {
+                addTurnSource(title: match.name, url: match.url)
+            }
+        } else if let url = result.sourceURL {
+            addTurnSource(title: result.source, url: url)
         }
     }
 

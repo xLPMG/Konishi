@@ -4,6 +4,7 @@ struct StudyView: View {
     @Environment(AppModel.self) private var appModel
     @Bindable var workspace: LanguageWorkspaceModel
     @State private var topic = ""
+    @State private var isProposalTraceExpanded = false
 
     init(workspace: LanguageWorkspaceModel, initialTopic: String = "") {
         _workspace = Bindable(wrappedValue: workspace)
@@ -34,8 +35,41 @@ struct StudyView: View {
                 }
 
                 if let error = workspace.proposalError {
-                    Label(error, systemImage: "exclamationmark.circle")
-                        .foregroundStyle(.red).textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(error, systemImage: "exclamationmark.circle")
+                            .foregroundStyle(.red).textSelection(.enabled)
+                        if let trace = workspace.proposalTrace {
+                            HStack(spacing: 10) {
+                                Button {
+                                    isProposalTraceExpanded.toggle()
+                                } label: {
+                                    Label(isProposalTraceExpanded ? "Hide request trace" : "Show request trace",
+                                          systemImage: isProposalTraceExpanded ? "chevron.down" : "chevron.right")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.blue)
+                                Button {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(trace, forType: .string)
+                                } label: {
+                                    Image(systemName: "doc.on.doc")
+                                }
+                                .buttonStyle(.plain)
+                                .help("Copy request trace")
+                            }
+                            if isProposalTraceExpanded {
+                                ScrollView {
+                                    Text(trace)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(8)
+                                }
+                                .frame(maxHeight: 240)
+                                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 6))
+                            }
+                        }
+                    }
                 }
 
                 if !workspace.studyProposals.isEmpty {

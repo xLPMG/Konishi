@@ -57,6 +57,7 @@ final class LanguageWorkspaceModel {
     var proposalTopic = ""
     var isGeneratingProposals = false
     private(set) var proposalError: String?
+    private(set) var proposalTrace: String?
     @ObservationIgnored private var proposalTask: Task<Void, Never>?
     private(set) var tutorThreads: [LanguageTutorThread] = []
     private(set) var selectedTutorThreadID: UUID?
@@ -381,35 +382,33 @@ final class LanguageWorkspaceModel {
         guard !isGeneratingProposals else { return }
         isGeneratingProposals = true
         proposalError = nil
+        proposalTrace = nil
         let knownItems = store.items(profileID: profile.id)
         let requestedProfileID = profile.id
         proposalTask = Task { [weak self] in
-            do {
-                let proposals = try await LanguageTutorService.proposeVocabulary(
-                    config: config, profile: profile, topic: topic, knownItems: knownItems)
-                guard !Task.isCancelled, let self,
-                      self.activeProfile?.id == requestedProfileID
-                else { return }
+            let result = await LanguageTutorService.proposeVocabulary(
+                config: config, profile: profile, topic: topic, knownItems: knownItems)
+            guard !Task.isCancelled, let self,
+                  self.activeProfile?.id == requestedProfileID
+            else { return }
+            self.proposalTrace = result.trace
+            if let error = result.error {
+                self.proposalError = error
+            } else {
                 var seenTerms = Set(self.studyProposals.map {
                     LanguageLearningEngine.normalizeAnswer($0.targetTerm)
                 })
-                let additions = proposals.filter { proposal in
+                let additions = result.proposals.filter { proposal in
                     seenTerms.insert(LanguageLearningEngine.normalizeAnswer(proposal.targetTerm)).inserted
                         && !self.isDuplicateProposal(proposal)
                 }
                 self.studyProposals.append(contentsOf: additions)
-                if proposals.isEmpty {
+                if result.proposals.isEmpty {
                     self.proposalError = "No valid proposals were returned. Try a different topic."
                 } else if additions.isEmpty {
                     self.proposalError = "No new proposals were returned. Try a different topic."
                 }
-            } catch {
-                guard let self, !Task.isCancelled,
-                      self.activeProfile?.id == requestedProfileID
-                else { return }
-                self.proposalError = error.localizedDescription
             }
-            guard let self, self.activeProfile?.id == requestedProfileID else { return }
             self.isGeneratingProposals = false
             self.proposalTask = nil
         }
@@ -425,6 +424,7 @@ final class LanguageWorkspaceModel {
 
     @discardableResult
     func saveProposal(_ proposal: VocabularyProposal) -> Bool {
+        proposalTrace = nil
         guard let profile = activeProfile, let clean = proposal.normalized() else {
             proposalError = "A target term and translation are required."
             return false
@@ -470,6 +470,7 @@ final class LanguageWorkspaceModel {
         studyProposals.removeAll()
         proposalTopic = ""
         proposalError = nil
+        proposalTrace = nil
         cancelTutorTurn()
         tutorThreads = []
         selectedTutorThreadID = nil

@@ -45,6 +45,36 @@ enum ToolArguments {
         var timeoutSeconds: Int?
     }
     struct Calculation: Decodable { let expression: String }
+    struct FinanceLookup: Decodable {
+        let identifier: String
+        var identifierType: String?
+    }
+    struct FinanceQuote: Decodable {
+        let identifier: String
+        var identifierType: String?
+        var exchange: String?
+    }
+    struct FinanceHistory: Decodable {
+        let identifier: String
+        var days: Int?
+    }
+    struct FinanceSeries: Decodable {
+        let seriesId: String
+        var days: Int?
+    }
+    struct FinancePortfolio: Decodable {
+        let currency: String
+        let holdings: [FinanceData.HoldingInput]
+    }
+    struct FinanceScenario: Decodable {
+        let currency: String
+        let initialAmount: Double
+        let monthlyContribution: Double
+        let years: Int
+        let annualReturnPercent: Double
+        let annualFeePercent: Double
+        let inflationPercent: Double
+    }
     struct CalendarEvents: Decodable {
         var days: Int?
         var calendar: String?

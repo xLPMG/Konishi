@@ -6,6 +6,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
     case files
     case web
     case compute
+    case finance
     case calendar
     case system
     case vault
@@ -18,6 +19,7 @@ enum ToolGroup: String, CaseIterable, Identifiable, Sendable {
         case .files: "Files"
         case .web: "Web"
         case .compute: "Compute"
+        case .finance: "Finance"
         case .calendar: "Calendar & Reminders"
         case .system: "System"
         case .vault: "Research vault"
@@ -214,6 +216,110 @@ enum Tools {
                 required: ["query"]
             ),
             group: .web,
+            defaultEnabled: false
+        ),
+
+        // MARK: Finance
+        ToolSpec(
+            name: "finance_lookup",
+            summary: "Find a security listing",
+            description: "Search Yahoo Finance for a ticker, ISIN, or WKN. Use the returned matches to resolve ambiguous listings before quoting.",
+            parameters: .schema(
+                properties: [
+                    "identifier": .property("string", "ticker, ISIN, or WKN"),
+                    "identifier_type": .property("string", "optional identifier type: ticker, isin, wkn, or auto")
+                ],
+                required: ["identifier"]
+            ),
+            group: .finance,
+            defaultEnabled: false
+        ),
+        ToolSpec(
+            name: "finance_quote",
+            summary: "Get a security quote",
+            description: "Resolve a ticker, ISIN, or WKN and return its latest available quote, currency, exchange, previous close, source, and timestamp. Quotes may be delayed. If multiple listings match, ask the user to confirm the exchange. Market data is informational, not a trading signal.",
+            parameters: .schema(
+                properties: [
+                    "identifier": .property("string", "ticker, ISIN, or WKN"),
+                    "identifier_type": .property("string", "optional identifier type: ticker, isin, wkn, or auto"),
+                    "exchange": .property("string", "optional exchange name or code to disambiguate listings")
+                ],
+                required: ["identifier"]
+            ),
+            group: .finance,
+            defaultEnabled: false
+        ),
+        ToolSpec(
+            name: "finance_history",
+            summary: "Get daily price history",
+            description: "Return daily closing prices for a ticker, ISIN, or WKN over the requested number of days (default 365, maximum 3650). Values include source, currency, and dates; data may be delayed.",
+            parameters: .schema(
+                properties: [
+                    "identifier": .property("string", "ticker, ISIN, or WKN"),
+                    "days": .property("integer", "calendar days of history (default 365, maximum 3650)")
+                ],
+                required: ["identifier"]
+            ),
+            group: .finance,
+            defaultEnabled: false
+        ),
+        ToolSpec(
+            name: "finance_series",
+            summary: "Get a macroeconomic series",
+            description: "Read observations from a FRED series ID, such as FEDFUNDS, DGS10, CPIAUCSL, UNRATE, or DEXUSEU. Returns dated values and a source link; observations are not forecasts.",
+            parameters: .schema(
+                properties: [
+                    "series_id": .property("string", "FRED series ID"),
+                    "days": .property("integer", "calendar days of observations (default 365, maximum 3650)")
+                ],
+                required: ["series_id"]
+            ),
+            group: .finance,
+            defaultEnabled: false
+        ),
+        ToolSpec(
+            name: "finance_portfolio",
+            summary: "Analyze portfolio allocation",
+            description: "Calculate allocation weights and concentration from user-supplied market values in one currency. Runs locally; does not fetch prices, save holdings, or send holdings to a provider. This is not a risk forecast.",
+            parameters: .schema(
+                properties: [
+                    "currency": .property("string", "three-letter currency code; all values must use this currency"),
+                    "holdings": .object([
+                        "type": .string("array"),
+                        "description": .string("positions with name, market_value, and optional asset_class"),
+                        "items": .object([
+                            "type": .string("object"),
+                            "properties": .object([
+                                "name": .property("string", "holding or asset-class name"),
+                                "market_value": .property("number", "current value in the supplied currency"),
+                                "asset_class": .property("string", "optional category for the holding")
+                            ]),
+                            "required": .array([.string("name"), .string("market_value")])
+                        ])
+                    ])
+                ],
+                required: ["currency", "holdings"]
+            ),
+            group: .finance,
+            defaultEnabled: false
+        ),
+        ToolSpec(
+            name: "finance_scenario",
+            summary: "Model an investment scenario",
+            description: "Calculate an illustrative monthly-contribution projection from user-supplied return, fee, and inflation assumptions. Deterministic arithmetic only; not a forecast or investment recommendation.",
+            parameters: .schema(
+                properties: [
+                    "currency": .property("string", "three-letter currency code"),
+                    "initial_amount": .property("number", "starting amount"),
+                    "monthly_contribution": .property("number", "contribution at each month-end"),
+                    "years": .property("integer", "horizon from 1 to 80 years"),
+                    "annual_return_percent": .property("number", "assumed annual return in percent, e.g. 6 for 6%"),
+                    "annual_fee_percent": .property("number", "annual fee in percent"),
+                    "inflation_percent": .property("number", "assumed annual inflation in percent")
+                ],
+                required: ["currency", "initial_amount", "monthly_contribution", "years", "annual_return_percent", "annual_fee_percent", "inflation_percent"]
+            ),
+            group: .finance,
             defaultEnabled: false
         ),
 

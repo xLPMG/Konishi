@@ -7,6 +7,9 @@ import Testing
 struct ToolPermissionsTests {
     @Test("every registered tool is classified")
     func registryIsCompletelyClassified() {
+        let localToolsWithoutCapabilities: Set<String> = [
+            "calculate", "finance_portfolio", "finance_scenario"
+        ]
         for spec in Tools.all {
             let arguments: [String: JSONValue]
             switch spec.name {
@@ -16,7 +19,8 @@ struct ToolPermissionsTests {
             }
             #expect((try? ToolPermissions.classify(
                 toolName: spec.name, arguments: arguments, context: context())) != nil)
-            #expect(!ToolPermissions.possibleCapabilities(for: spec.name).isEmpty || spec.name == "calculate")
+            #expect(!ToolPermissions.possibleCapabilities(for: spec.name).isEmpty
+                || localToolsWithoutCapabilities.contains(spec.name))
         }
     }
 

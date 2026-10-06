@@ -395,7 +395,8 @@ final class AppModel {
     static let readOnlyTools: Set<String> = [
         "memory_list", "memory_read", "file_read", "list_dir",
         "git_status", "git_diff", "git_log", "web_search", "web_fetch", "web_research",
-        "calculate",
+        "calculate", "finance_lookup", "finance_quote", "finance_history", "finance_series",
+        "finance_portfolio", "finance_scenario",
         "vault_search", "vault_read", "vault_list",
         "conversation_search", "conversation_list", "conversation_read",
         "calendar_events", "reminders_list",
@@ -405,6 +406,8 @@ final class AppModel {
     static let continuationTools: Set<String> = [
         "web_search", "web_fetch", "web_research", "file_read", "file_write",
         "memory_list", "memory_read", "calculate", "python_exec", "run_shell",
+        "finance_lookup", "finance_quote", "finance_history", "finance_series",
+        "finance_portfolio", "finance_scenario",
         "vault_search", "vault_read", "vault_list",
         "conversation_search", "conversation_list", "conversation_read",
         "calendar_events", "reminders_list",

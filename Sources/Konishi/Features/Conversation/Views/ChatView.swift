@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 import UniformTypeIdentifiers
 import PDFKit
 
@@ -1967,6 +1968,8 @@ private struct ToolArtifactView: View {
                     }
                 }
             }
+        case let .finance(result):
+            FinanceArtifactView(result: result)
         }
     }
 
@@ -1983,6 +1986,162 @@ private struct ToolArtifactView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(copied ? "Copied" : "Copy result")
+    }
+}
+
+private struct FinanceArtifactView: View {
+    let result: FinanceData.Result
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch result.kind {
+            case "quote": quoteContent
+            case "matches": matchesContent
+            case "history", "series": seriesContent
+            case "portfolio": portfolioContent
+            case "scenario": scenarioContent
+            default: Text(result.title).font(.subheadline.weight(.semibold))
+            }
+            if let note = result.note, !note.isEmpty {
+                Text(note).font(.caption2).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                Text(result.source).lineLimit(1)
+                if let asOf = result.asOf { Text("· \(asOf)").lineLimit(1) }
+                Spacer(minLength: 0)
+                if let url = result.sourceURL.flatMap(URL.init(string:)) {
+                    Link(destination: url) {
+                        Image(systemName: "arrow.up.forward.app")
+                    }
+                    .help("Open data source")
+                }
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var quoteContent: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(result.symbol ?? result.title)
+                    .font(.caption.weight(.semibold).monospaced())
+                if let exchange = result.exchange {
+                    Text(exchange).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(amount(result.price, currency: result.currency))
+                    .font(.title3.weight(.semibold).monospacedDigit())
+                if let change = result.change, let percent = result.changePercent {
+                    Text("\(change >= 0 ? "+" : "")\(number(change)) (\(percent >= 0 ? "+" : "")\(number(percent))%)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(change >= 0 ? .green : .red)
+                }
+                Spacer()
+            }
+            Text(result.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+
+    private var matchesContent: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(result.title).font(.subheadline.weight(.semibold))
+            ForEach(result.matches ?? [], id: \.symbol) { match in
+                if let url = URL(string: match.url) {
+                    Link(destination: url) {
+                        HStack(spacing: 6) {
+                            Text(match.symbol).font(.caption.monospaced().weight(.semibold))
+                            Text(match.name).font(.caption).lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text(match.exchange).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var seriesContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(result.title).font(.subheadline.weight(.semibold))
+            if let points = result.points, !points.isEmpty {
+                Chart(points, id: \.date) { point in
+                    LineMark(x: .value("Date", point.date), y: .value("Value", point.value))
+                        .foregroundStyle(result.kind == "history" ? Color.green : Color.blue)
+                }
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .frame(height: 82)
+                HStack {
+                    Text(points.first?.date ?? "")
+                    Spacer()
+                    Text("\(number(points.last?.value ?? 0)) \(result.currency ?? "")")
+                    Spacer()
+                    Text(points.last?.date ?? "")
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            } else {
+                Text("No observations").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var portfolioContent: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(result.title).font(.subheadline.weight(.semibold))
+                Spacer()
+                Text(amount(result.totalValue, currency: result.currency))
+                    .font(.subheadline.monospacedDigit().weight(.semibold))
+            }
+            ForEach(result.positions ?? [], id: \.name) { position in
+                HStack(spacing: 8) {
+                    Text(position.name).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text("\(number(position.weight * 100))%")
+                    Text(amount(position.marketValue, currency: nil))
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption.monospacedDigit())
+            }
+            if let concentration = result.concentration {
+                Text("Concentration index: \(number(concentration))")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var scenarioContent: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(result.title).font(.subheadline.weight(.semibold))
+            valueRow("Total contributions", result.contributionTotal)
+            valueRow("Illustrative nominal value", result.projectedNominal)
+            valueRow("Inflation-adjusted value", result.projectedReal)
+        }
+    }
+
+    private func valueRow(_ label: String, _ value: Double?) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(amount(value, currency: result.currency)).monospacedDigit()
+        }
+        .font(.caption)
+    }
+
+    private func amount(_ value: Double?, currency: String?) -> String {
+        guard let value else { return "—" }
+        let formatted = number(value)
+        return currency.map { "\($0) \(formatted)" } ?? formatted
+    }
+
+    private func number(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(2)))
     }
 }
 

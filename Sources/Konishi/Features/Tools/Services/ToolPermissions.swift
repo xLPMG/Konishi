@@ -150,7 +150,10 @@ enum ToolPermissions {
             guard let path = string("path", in: arguments) else { return nil }
             let resolved = try PathScope.resolve(path, in: context.workspace)
             return [.init(resolved.isWithinWorkspace ? .workspaceWrite : .externalWrite, path: resolved.url.path)]
-        case "web_search", "web_fetch", "web_research": return [.init(.webAccess)]
+        case "web_search", "web_fetch", "web_research",
+             "finance_lookup", "finance_quote", "finance_history", "finance_series":
+            return [.init(.webAccess)]
+        case "finance_portfolio", "finance_scenario": return []
         case "calculate", "end_conversation": return []
         case "python_exec": return [.init(.codeExecution)]
         case "run_shell":
@@ -281,7 +284,9 @@ enum ToolPermissions {
         case "memory_list", "memory_read": [.memoryRead]
         case "memory_write", "memory_append": [.memoryWrite]
         case "conversation_search", "conversation_list", "conversation_read": [.recallRead]
-        case "web_search", "web_fetch", "web_research": [.webAccess]
+           case "web_search", "web_fetch", "web_research",
+               "finance_lookup", "finance_quote", "finance_history", "finance_series": [.webAccess]
+           case "finance_portfolio", "finance_scenario": []
         case "calculate", "end_conversation": []
         case "python_exec": [.codeExecution]
         case "calendar_events", "reminders_list": [.personalDataRead]
