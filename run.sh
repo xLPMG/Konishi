@@ -6,9 +6,11 @@ set -euo pipefail
 
 CONFIG="debug"
 INSTALL=0
+NO_LAUNCH=0
 for arg in "$@"; do
   case "$arg" in
     --install) INSTALL=1 ;;
+    --no-launch) NO_LAUNCH=1 ;;
     debug|release) CONFIG="$arg" ;;
     *) echo "Unknown argument: $arg" >&2; exit 1 ;;
   esac
@@ -31,6 +33,11 @@ cp Konishi.icns "$APP/Contents/Resources/Konishi.icns"
 
 # Ad-hoc sign with the microphone entitlement so TCC honors the usage strings.
 codesign --force --sign - --entitlements Konishi.entitlements "$APP"
+
+if [[ "$NO_LAUNCH" == "1" ]]; then
+  echo "Packaged $APP"
+  exit 0
+fi
 
 if [[ "$INSTALL" == "1" ]]; then
   DEST="/Applications/$APP"
