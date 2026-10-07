@@ -111,21 +111,35 @@ struct TutorConversationView: View {
         if let profile = workspace.activeProfile, let thread = selectedThread {
             VStack(spacing: 0) {
                 ScrollView {
-                    LazyVStack(spacing: 14) {
+                    LazyVStack(alignment: .leading, spacing: 14) {
                         ForEach(thread.messages) { message in
                             messageRow(message, profile: profile)
                         }
                         if workspace.isTutorStreaming {
-                            HStack(alignment: .top) {
-                                Text(workspace.tutorStreamedReply.isEmpty ? "Thinking…" : workspace.tutorStreamedReply)
+                            AssistantMessageLayout(
+                                assistantName: appModel.currentAssistantName,
+                                iconSymbol: appModel.currentPersona.iconSymbol,
+                                accent: appModel.currentAccent,
+                                surface: appModel.currentPalette.surfaceRaised,
+                                border: appModel.currentPalette.border
+                            ) {
+                                if workspace.tutorStreamedReply.isEmpty {
+                                    Text("Thinking…")
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    MarkdownView(
+                                        text: workspace.tutorStreamedReply,
+                                        baseSize: appModel.settings.fontSize
+                                    )
                                     .textSelection(.enabled)
-                                    .frame(maxWidth: 620, alignment: .leading)
-                                Spacer(minLength: 40)
+                                }
                             }
-                            .padding(.horizontal, 18).padding(.vertical, 10)
                         }
                     }
-                    .padding(.vertical, 18)
+                    .frame(maxWidth: ConversationMessageLayout.columnWidth)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 24)
                 }
 
                 if let error = workspace.tutorError {
@@ -155,48 +169,64 @@ struct TutorConversationView: View {
         }
     }
 
+    @ViewBuilder
     private func messageRow(_ message: LanguageTutorMessage, profile: LanguageProfile) -> some View {
-        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
-            HStack(alignment: .top) {
-                if message.role == .assistant { Spacer(minLength: 40) }
-                Text(message.content)
-                    .textSelection(.enabled)
-                    .padding(12)
-                    .background(
-                        message.role == .user ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.09),
-                        in: RoundedRectangle(cornerRadius: 8))
-                    .frame(maxWidth: 620, alignment: message.role == .user ? .trailing : .leading)
-                if message.role == .user { Spacer(minLength: 40) }
+        if message.role == .user {
+            HStack {
+                Spacer(minLength: 60)
+                UserMessageBubble(accent: appModel.currentAccent) {
+                    Text(message.content)
+                        .font(.system(size: appModel.settings.fontSize))
+                        .textSelection(.enabled)
+                        .foregroundStyle(.primary)
+                    MessageActionBar {
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(message.content, forType: .string)
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .help("Copy message")
+                    }
+                }
             }
-            if message.role == .assistant {
-                HStack(spacing: 12) {
+        } else {
+            AssistantMessageLayout(
+                assistantName: appModel.currentAssistantName,
+                iconSymbol: appModel.currentPersona.iconSymbol,
+                accent: appModel.currentAccent,
+                surface: appModel.currentPalette.surfaceRaised,
+                border: appModel.currentPalette.border
+            ) {
+                MarkdownView(text: message.content, baseSize: appModel.settings.fontSize)
+                    .textSelection(.enabled)
+                MessageActionBar {
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(message.content, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .help("Copy tutor reply")
                     Button {
                         appModel.voice.speakBilingual(
                             message.content, targetLocale: profile.targetLocale, baseLocale: profile.baseLocale,
                             targetVoiceID: profile.targetVoiceID, baseVoiceID: profile.baseVoiceID,
                             rate: appModel.settings.speechRate)
                     } label: {
-                        Label("Speak", systemImage: "speaker.wave.2")
+                        Image(systemName: "speaker.wave.2")
                     }
-                    .buttonStyle(.borderless)
                     .help("Speak this tutor reply")
-
                     Button {
                         workspace.proposalTopic = "Useful vocabulary and natural synonyms related to: \(String(message.content.prefix(240)))"
                         workspace.destination = .study
                     } label: {
-                        Label("Suggest vocabulary", systemImage: "plus.circle")
+                        Image(systemName: "plus.circle")
                     }
-                    .buttonStyle(.borderless)
                     .help("Review vocabulary proposals from this tutor reply")
-                    Spacer()
                 }
-                .font(.caption)
-                .padding(.leading, 8)
             }
         }
-        .padding(.horizontal, 18)
-        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
     }
 
     private func inputBar(profile: LanguageProfile) -> some View {

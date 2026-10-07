@@ -181,9 +181,9 @@ private struct LanguageHomeView: View {
         let stats = workspace.activeStats
         return HStack(spacing: 0) {
             metric("Due", value: stats.due, icon: "clock", tint: .orange)
-            Divider().padding(.vertical, 6)
+            Divider().padding(.vertical, 6).padding(.horizontal, 10)
             metric("Reviewed today", value: stats.reviewedToday, icon: "checkmark.circle", tint: .green)
-            Divider().padding(.vertical, 6)
+            Divider().padding(.vertical, 6).padding(.horizontal, 10)
             metric("Mastered", value: stats.mastered, icon: "star", tint: appModel.currentAccent)
             Spacer(minLength: 0)
             Text("\(stats.total) cards").font(.callout.monospacedDigit()).foregroundStyle(.secondary)
