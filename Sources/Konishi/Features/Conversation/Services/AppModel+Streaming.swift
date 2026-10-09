@@ -39,6 +39,7 @@ extension AppModel {
         resetSpeech()
         loopSignatures.removeAll()
         turnSources.removeAll()
+        turnSuggestions.removeAll()
         beginAgentWork(conversationID: conversationID)
         conversations[idx].messages.append(
             ChatMessage(role: .user, content: text, images: images, attachments: attachments))
@@ -51,6 +52,20 @@ extension AppModel {
         maybeAutoTitle(conversationID: conversationID)
     }
 
+    func sendSuggestedReply(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let conversationID = selectedConversationID else { return }
+
+        if canQueueTextInterrupt {
+            queuedTextInterrupt = QueuedTextInterrupt(
+                conversationID: conversationID, content: text, images: [], attachments: [])
+            return
+        }
+        if canInterruptWithText { stop() }
+        guard canBeginAgentTask else { return }
+        submitUserMessage(text: text, images: [], attachments: [], conversationID: conversationID)
+    }
+
     func regenerate(messageID: UUID) {
         guard canBeginAgentTask,
             let convoID = selectedConversationID, let idx = conversationIndex(convoID),
@@ -60,6 +75,7 @@ extension AppModel {
         reconcileFoldCounters(idx)
         loopSignatures.removeAll()
         turnSources.removeAll()
+        turnSuggestions.removeAll()
         resetSpeech()
         beginAgentWork(conversationID: convoID)
         touch(idx)
@@ -189,6 +205,8 @@ extension AppModel {
             let requestStart = Date()
             var didTraceFirstServerEvent = false
             var stripper = ThinkStripper()  // strip inline chain-of-thought some models emit as content
+            var suggestionStripper = ResponseSuggestionStripper()
+            var responseSuggestions: [MessageSuggestion] = []
             var repeatedLineGuard = RepeatedLineGuard()
             var repeatedReasoningGuard = RepeatedLineGuard()
             do {
@@ -212,7 +230,15 @@ extension AppModel {
                             firstTokenAt = Date()
                         }
                         let out = stripper.consume(d)
-                        if !out.reasoning.isEmpty || !out.visible.isEmpty {
+                        let suggestionOutput = suggestionStripper.consume(out.visible)
+                        responseSuggestions.append(contentsOf: suggestionOutput.suggestions)
+                        if suggestionOutput.footerFound {
+                            self.traceStore.trace(
+                                conversationID: conversationID, kind: .info,
+                                text: "Response action footer: \(suggestionOutput.suggestions.count) valid action(s).",
+                                saveTraces: self.settings.saveTraces)
+                        }
+                        if !out.reasoning.isEmpty || !suggestionOutput.visible.isEmpty {
                             self.activity = nil
                         }
                         if !out.reasoning.isEmpty {
@@ -223,20 +249,20 @@ extension AppModel {
                         }
                         let repeatedReasoning = out.reasoning.isEmpty
                             ? nil : repeatedReasoningGuard.consume(out.reasoning)
-                        if !out.visible.isEmpty {
+                        if !suggestionOutput.visible.isEmpty {
                             deltaCount += 1
-                            charCount += out.visible.count
-                            answer += out.visible
+                            charCount += suggestionOutput.visible.count
+                            answer += suggestionOutput.visible
                             self.appendDelta(
-                                out.visible, conversationID: conversationID,
+                                suggestionOutput.visible, conversationID: conversationID,
                                 assistantID: assistantID)
                         }
-                        if let reason = self.observeAgentOutput(out.reasoning + out.visible) {
+                        if let reason = self.observeAgentOutput(out.reasoning + suggestionOutput.visible) {
                             interruption = reason
                             break streamLoop
                         }
-                        let repeatedAnswer = repeatedReasoning == nil && !out.visible.isEmpty
-                            ? repeatedLineGuard.consume(out.visible) : nil
+                        let repeatedAnswer = repeatedReasoning == nil && !suggestionOutput.visible.isEmpty
+                            ? repeatedLineGuard.consume(suggestionOutput.visible) : nil
                         if let repeated = repeatedReasoning ?? repeatedAnswer {
                             self.traceRepeatedOutput(
                                 repeated, channel: repeatedReasoning == nil ? "reply text" : "reasoning",
@@ -297,14 +323,31 @@ extension AppModel {
                         interruption = .repeatedOutput
                     }
                 }
-                if !tail.visible.isEmpty {
+                let suggestionTail = suggestionStripper.consume(tail.visible)
+                responseSuggestions.append(contentsOf: suggestionTail.suggestions)
+                if suggestionTail.footerFound {
+                    self.traceStore.trace(
+                        conversationID: conversationID, kind: .info,
+                        text: "Response action footer: \(suggestionTail.suggestions.count) valid action(s).",
+                        saveTraces: self.settings.saveTraces)
+                }
+                let suggestionFinal = suggestionStripper.finish()
+                responseSuggestions.append(contentsOf: suggestionFinal.suggestions)
+                if suggestionFinal.footerFound {
+                    self.traceStore.trace(
+                        conversationID: conversationID, kind: .info,
+                        text: "Response action footer: \(suggestionFinal.suggestions.count) valid action(s).",
+                        saveTraces: self.settings.saveTraces)
+                }
+                let visibleTail = suggestionTail.visible + suggestionFinal.visible
+                if !visibleTail.isEmpty {
                     deltaCount += 1
-                    charCount += tail.visible.count
-                    answer += tail.visible
+                    charCount += visibleTail.count
+                    answer += visibleTail
                     self.appendDelta(
-                        tail.visible, conversationID: conversationID, assistantID: assistantID)
+                        visibleTail, conversationID: conversationID, assistantID: assistantID)
                     if interruption == nil {
-                        interruption = self.observeAgentOutput(tail.visible)
+                        interruption = self.observeAgentOutput(visibleTail)
                     }
                 }
                 if interruption == nil, let repeated = repeatedLineGuard.finish() {
@@ -363,6 +406,7 @@ extension AppModel {
                 charCount: charCount,
                 usage: usage,
                 toolCalls: toolCalls,
+                responseSuggestions: responseSuggestions,
                 interruption: interruption,
                 failed: caughtError
             )
@@ -446,6 +490,7 @@ extension AppModel {
         charCount: Int,
         usage: Usage?,
         toolCalls: [ToolCall]?,
+        responseSuggestions: [MessageSuggestion],
         interruption: AgentWorkPauseReason? = nil,
         failed: Bool = false
     ) {
@@ -536,6 +581,10 @@ extension AppModel {
             charCount: charCount, usage: usage
         )
 
+        for suggestion in responseSuggestions where !turnSuggestions.contains(where: { $0.id == suggestion.id }) {
+            turnSuggestions.append(suggestion)
+        }
+
         if let toolCalls, hasTools {
             conversations[idx].messages[mIdx].toolCalls = toolCalls
             touch(idx)
@@ -555,8 +604,12 @@ extension AppModel {
         if !turnSources.isEmpty {
             conversations[idx].messages[mIdx].sources = turnSources
             turnSources.removeAll()
-            touch(idx)
         }
+        if !turnSuggestions.isEmpty {
+            conversations[idx].messages[mIdx].suggestions = turnSuggestions
+            turnSuggestions.removeAll()
+        }
+        touch(idx)
         streamPresentation.clear()
         activity = nil
         isStreaming = false

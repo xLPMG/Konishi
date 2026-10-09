@@ -11,6 +11,35 @@ enum AudioSource: String, CaseIterable, Codable, Sendable, Identifiable {
     }
 }
 
+enum RecommendationSearchProvider: String, CaseIterable, Codable, Sendable, Identifiable {
+    case google
+    case duckDuckGo
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .google: "Google"
+        case .duckDuckGo: "DuckDuckGo"
+        }
+    }
+
+    func searchURL(for query: String) -> URL? {
+        var components = URLComponents()
+        components.scheme = "https"
+        switch self {
+        case .google:
+            components.host = "www.google.com"
+            components.path = "/search"
+        case .duckDuckGo:
+            components.host = "duckduckgo.com"
+            components.path = "/"
+        }
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        return components.url
+    }
+}
+
 /// Global, app-wide configuration persisted to `UserDefaults` (except the token → Keychain).
 @Observable
 @MainActor
@@ -82,6 +111,9 @@ final class AppSettings {
     /// Kill managed servers when the app quits (off = leave them running).
     var stopServersOnQuit: Bool {
         didSet { defaults.set(stopServersOnQuit, forKey: Keys.stopServersOnQuit) }
+    }
+    var recommendationSearchProvider: RecommendationSearchProvider {
+        didSet { defaults.set(recommendationSearchProvider.rawValue, forKey: Keys.recommendationSearchProvider) }
     }
 
     // Advanced generation
@@ -313,6 +345,8 @@ final class AppSettings {
         self.theme = AppTheme.restoring(defaults.string(forKey: Keys.theme)) ?? .signal
         self.apiToken = Keychain.get(Keys.apiToken)
         self.stopServersOnQuit = defaults.object(forKey: Keys.stopServersOnQuit) as? Bool ?? true
+        self.recommendationSearchProvider = RecommendationSearchProvider(
+            rawValue: defaults.string(forKey: Keys.recommendationSearchProvider) ?? "") ?? .google
         self.stopSequences = defaults.string(forKey: Keys.stopSequences) ?? ""
         self.seed = defaults.object(forKey: Keys.seed) as? Int ?? -1
         self.presencePenalty = defaults.object(forKey: Keys.presencePenalty) as? Double ?? 0
@@ -556,6 +590,7 @@ final class AppSettings {
         static let theme = "konishi.theme"
         static let apiToken = "konishi.apiToken"
         static let stopServersOnQuit = "konishi.stopServersOnQuit"
+        static let recommendationSearchProvider = "konishi.recommendationSearchProvider"
         static let stopSequences = "konishi.stopSequences"
         static let seed = "konishi.seed"
         static let presencePenalty = "konishi.presencePenalty"

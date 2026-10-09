@@ -45,6 +45,8 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     var attachments: [Attachment]
     /// Web sources gathered via web_search/web_fetch while writing this reply.
     var sources: [Source]
+    /// Optional reply and web-search actions emitted by the model in a structured footer.
+    var suggestions: [MessageSuggestion]
     /// True only when the user explicitly stopped or spoke over this assistant response.
     var interrupted: Bool
     /// Tool calls requested by the assistant on this turn.
@@ -62,6 +64,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         images: [String] = [],
         attachments: [Attachment] = [],
         sources: [Source] = [],
+        suggestions: [MessageSuggestion] = [],
         interrupted: Bool = false,
         toolCalls: [ToolCall]? = nil,
         toolCallId: String? = nil,
@@ -76,6 +79,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         self.images = images
         self.attachments = attachments
         self.sources = sources
+        self.suggestions = suggestions
         self.interrupted = interrupted
         self.toolCalls = toolCalls
         self.toolCallId = toolCallId
@@ -90,7 +94,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, createdAt, role, content, stats, reasoning, images, attachments, sources, interrupted, toolCalls, toolCallId, toolName
+        case id, createdAt, role, content, stats, reasoning, images, attachments, sources, suggestions, interrupted, toolCalls, toolCallId, toolName
     }
 
     // Tolerant decode so conversations saved before `images`/`attachments` existed still load.
@@ -105,6 +109,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         images = try c.decodeIfPresent([String].self, forKey: .images) ?? []
         attachments = try c.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
         sources = try c.decodeIfPresent([Source].self, forKey: .sources) ?? []
+        suggestions = try c.decodeIfPresent([MessageSuggestion].self, forKey: .suggestions) ?? []
         interrupted = try c.decodeIfPresent(Bool.self, forKey: .interrupted) ?? false
         toolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
         toolCallId = try c.decodeIfPresent(String.self, forKey: .toolCallId)

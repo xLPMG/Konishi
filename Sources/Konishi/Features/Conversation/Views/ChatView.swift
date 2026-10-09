@@ -280,6 +280,7 @@ struct ChatView: View {
         var currentAssistantToolResults: [String: String] = [:]
         var currentAssistantAllIDs: [UUID] = []
         var currentAssistantSources: [Source] = []
+        var currentAssistantSuggestions: [MessageSuggestion] = []
         var currentAssistantInterrupted = false
         var currentAssistantImages: [String] = []
         var currentAssistantAttachments: [Attachment] = []
@@ -293,6 +294,7 @@ struct ChatView: View {
                 steps: currentAssistantSteps,
                 toolResults: currentAssistantToolResults,
                 sources: currentAssistantSources,
+                suggestions: currentAssistantSuggestions,
                 interrupted: currentAssistantInterrupted,
                 images: currentAssistantImages,
                 attachments: currentAssistantAttachments,
@@ -308,6 +310,7 @@ struct ChatView: View {
             currentAssistantToolResults = [:]
             currentAssistantAllIDs = []
             currentAssistantSources = []
+            currentAssistantSuggestions = []
             currentAssistantInterrupted = false
             currentAssistantImages = []
             currentAssistantAttachments = []
@@ -339,6 +342,9 @@ struct ChatView: View {
                             currentAssistantSources.append(src)
                         }
                     }
+                }
+                for suggestion in msg.suggestions where !currentAssistantSuggestions.contains(where: { $0.id == suggestion.id }) {
+                    currentAssistantSuggestions.append(suggestion)
                 }
                 if msg.interrupted { currentAssistantInterrupted = true }
                 if !msg.images.isEmpty { currentAssistantImages.append(contentsOf: msg.images) }
@@ -1275,6 +1281,7 @@ struct AssistantTurn: Identifiable, Sendable {
     let steps: [AssistantStep]
     let toolResults: [String: String]
     let sources: [Source]
+    let suggestions: [MessageSuggestion]
     let interrupted: Bool
     let images: [String]
     let attachments: [Attachment]
@@ -1402,6 +1409,7 @@ private struct UserMessageRow: View {
 
 private struct AssistantTurnRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openURL) private var openURL
     let turn: AssistantTurn
     let isActive: Bool
     let onStreamUpdate: () -> Void
@@ -1479,6 +1487,7 @@ private struct AssistantTurnRow: View {
                     Label("Interrupted", systemImage: "waveform.badge.minus")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
+                if !turn.suggestions.isEmpty { suggestionsView }
                 if !turn.sources.isEmpty { sourcesView }
                 actions
         }
@@ -1547,6 +1556,41 @@ private struct AssistantTurnRow: View {
             }
         }
         .padding(.top, 2)
+    }
+
+    private var suggestionsView: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { suggestionButtons }
+            VStack(alignment: .leading, spacing: 6) { suggestionButtons }
+        }
+        .padding(.top, 2)
+    }
+
+    @ViewBuilder
+    private var suggestionButtons: some View {
+        ForEach(turn.suggestions) { suggestion in
+            switch suggestion.kind {
+            case .reply:
+                Button {
+                    model.sendSuggestedReply(suggestion.value)
+                } label: {
+                    Label(suggestion.label, systemImage: "arrowshape.turn.up.left")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!model.canBeginAgentTask && !model.canInterruptWithText && !model.canQueueTextInterrupt)
+            case .googleSearch, .webSearch:
+                let provider = model.settings.recommendationSearchProvider
+                Button {
+                    if let url = provider.searchURL(for: suggestion.value) { openURL(url) }
+                } label: {
+                    Label("Search \(provider.label)", systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Search \(provider.label) for: \(suggestion.value)")
+            }
+        }
     }
 
     private static func sourceLabel(_ src: Source) -> String {

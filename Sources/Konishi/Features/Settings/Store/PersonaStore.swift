@@ -87,6 +87,9 @@ final class PersonaStore {
             text = "Your name is \(name).\n\n" + text
         }
         text += (text.isEmpty ? "" : "\n\n") + Self.contextSourceInstruction
+        if mode == .chat {
+            text += (text.isEmpty ? "" : "\n\n") + "After your complete user-facing answer, you may append one <konishi_actions> JSON block with this exact shape: {\"suggestions\":[{\"type\":\"reply\",\"label\":\"Tell me more\",\"value\":\"Please tell me more about this\"},{\"type\":\"web_search\",\"label\":\"Search the web\",\"value\":\"search query text\"}]}. If the user explicitly asks for a reply or search recommendation, you MUST include the matching action. If you make a concrete offer such as 'I can explain more' or recommend a specific web search, provide it as an action instead of leaving it only in prose. Otherwise include only genuinely useful actions, at most three. A reply value is the exact follow-up message to send. A web_search value is query text only, never a URL. Keep the answer complete without requiring an action, do not mention this metadata, and omit the block when no action would help."
+        }
         if persona.vaultAccessEnabled, vaultConfigured {
             text +=
                 (text.isEmpty ? "" : "\n\n")

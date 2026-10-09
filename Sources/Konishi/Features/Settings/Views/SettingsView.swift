@@ -183,6 +183,15 @@ private struct GenerationSettings: View {
                 Text("0 = auto-detect from the server or the model's config.json. Override if your server doesn't report it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Search recommendations") {
+                Picker("Search with", selection: $settings.recommendationSearchProvider) {
+                    ForEach(RecommendationSearchProvider.allCases) { provider in
+                        Text(provider.label).tag(provider)
+                    }
+                }
+                Text("Search recommendation buttons open the selected provider in your default browser. Web-search tools are unchanged.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Compression") {
                 Toggle("Summarize old turns (keeps prompts small)", isOn: $settings.compressionEnabled)
                 NumberField("History budget", value: $settings.compressionBudget, range: 500...400_000, step: 500)

@@ -413,6 +413,7 @@ final class AppModel {
     var loopSignatures: [String] = []
     /// Web sources (search results / fetched pages) gathered this turn, attached to the reply.
     var turnSources: [Source] = []
+    var turnSuggestions: [MessageSuggestion] = []
     /// Read-only tools whose identical repeat within a turn can be skipped safely.
     static let readOnlyTools: Set<String> = [
         "memory_list", "memory_read", "file_read", "list_dir",
