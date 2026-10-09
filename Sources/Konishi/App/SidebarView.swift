@@ -26,9 +26,17 @@ struct SidebarView: View {
                 HStack(spacing: 10) {
                     Image(systemName: "sparkles")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(model.currentAccent)
+                        .foregroundStyle(model.currentPalette.neon == nil ? model.currentAccent : Color.white)
                         .frame(width: 36, height: 36)
-                        .background(model.currentPalette.surfaceRaised, in: RoundedRectangle(cornerRadius: 8))
+                        .background {
+                            if let neon = model.currentPalette.neon {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(LinearGradient(colors: neon, startPoint: .topLeading, endPoint: .bottomTrailing))
+                            } else {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(model.currentPalette.surfaceRaised)
+                            }
+                        }
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(model.currentPalette.border, lineWidth: 1))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Konishi").font(.headline)

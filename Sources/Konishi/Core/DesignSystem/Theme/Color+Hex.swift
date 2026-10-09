@@ -12,7 +12,7 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .system: "System"
-        case .signal: "Signal"
+        case .signal: "Neon"
         case .carbon: "Carbon"
         case .glacier: "Glacier"
         }
@@ -21,7 +21,7 @@ enum AppTheme: String, CaseIterable, Codable, Identifiable, Sendable {
     var description: String {
         switch self {
         case .system: "macOS surfaces, with near-black dark mode."
-        case .signal: "Cool slate surfaces with a quiet teal signal."
+        case .signal: "Graphite surfaces with neon pink, violet, and electric blue."
         case .carbon: "Quiet graphite with a sharp lime signal."
         case .glacier: "Cool blue-gray surfaces with an ice-blue signal."
         }
@@ -53,6 +53,7 @@ struct ThemePalette {
     let surfaceRaised: Color
     let border: Color
     let signal: Color
+    let neon: [Color]?
 
     static let system = ThemePalette(
         canvas: systemColor(.underPageBackgroundColor, dark: 0x000000),
@@ -60,16 +61,22 @@ struct ThemePalette {
         surface: systemColor(.controlBackgroundColor, dark: 0x111111),
         surfaceRaised: systemColor(.controlBackgroundColor, dark: 0x191919),
         border: systemColor(.separatorColor, dark: 0x2B2B2B),
-        signal: .accentColor
+        signal: .accentColor,
+        neon: nil
     )
 
     static let signal = ThemePalette(
-        canvas: adaptive(light: 0xF1F5F3, dark: 0x101719),
-        sidebar: adaptive(light: 0xE9F0EE, dark: 0x151F20),
-        surface: adaptive(light: 0xF7FAF8, dark: 0x182324),
-        surfaceRaised: adaptive(light: 0xFFFFFF, dark: 0x202C2E),
-        border: adaptive(light: 0xD6E0DC, dark: 0x2B393A),
-        signal: adaptive(light: 0x157B70, dark: 0x62D6C4)
+        canvas: adaptive(light: 0xECEBF1, dark: 0x090B10),
+        sidebar: adaptive(light: 0xE3E1EC, dark: 0x11121B),
+        surface: adaptive(light: 0xF4F3F8, dark: 0x171822),
+        surfaceRaised: adaptive(light: 0xFFFFFF, dark: 0x201D2A),
+        border: adaptive(light: 0xCDC8D9, dark: 0x39324B),
+        signal: adaptive(light: 0x006C9E, dark: 0x53C9FF),
+        neon: [
+            adaptive(light: 0xC21875, dark: 0xFF4FD8),
+            adaptive(light: 0x7040CC, dark: 0xA980FF),
+            adaptive(light: 0x006C9E, dark: 0x53C9FF)
+        ]
     )
 
     static let carbon = ThemePalette(
@@ -78,7 +85,8 @@ struct ThemePalette {
         surface: adaptive(light: 0xF7F8F5, dark: 0x1E221E),
         surfaceRaised: adaptive(light: 0xFFFFFF, dark: 0x282D28),
         border: adaptive(light: 0xD3D8D1, dark: 0x3A423A),
-        signal: adaptive(light: 0x587A22, dark: 0xB7DF66)
+        signal: adaptive(light: 0x587A22, dark: 0xB7DF66),
+        neon: nil
     )
 
     static let glacier = ThemePalette(
@@ -87,7 +95,8 @@ struct ThemePalette {
         surface: adaptive(light: 0xF7FAFB, dark: 0x1D292F),
         surfaceRaised: adaptive(light: 0xFFFFFF, dark: 0x26363E),
         border: adaptive(light: 0xCFDCE2, dark: 0x394D56),
-        signal: adaptive(light: 0x256F8B, dark: 0x73CBE2)
+        signal: adaptive(light: 0x256F8B, dark: 0x73CBE2),
+        neon: nil
     )
 
     private static func systemColor(_ light: NSColor, dark: UInt32) -> Color {
