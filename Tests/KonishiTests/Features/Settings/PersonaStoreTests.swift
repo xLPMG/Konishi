@@ -29,6 +29,7 @@ struct PersonaStoreTests {
             persona: store.personas[0], injectDateContext: false, mode: .chat)
 
         #expect(prompt.contains(PersonaStore.contextSourceInstruction))
+        #expect(prompt.contains("</konishi_actions>"))
     }
 
     @Test("addPersona appends and persists to disk")
