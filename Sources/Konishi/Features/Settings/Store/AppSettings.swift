@@ -47,7 +47,7 @@ final class AppSettings {
     var baseURL: String {
         didSet { defaults.set(baseURL, forKey: Keys.baseURL) }
     }
-    /// Global default model, used when a persona has no override.
+    /// Current endpoint model selection; empty means none selected.
     var model: String {
         didSet { defaults.set(model, forKey: Keys.model) }
     }
@@ -317,7 +317,7 @@ final class AppSettings {
         let savedSettingsVersion = defaults.integer(forKey: Keys.settingsVersion)
         let isLegacyToolSettings = savedSettingsVersion < 7
         self.baseURL = defaults.string(forKey: Keys.baseURL) ?? "http://127.0.0.1:1234"
-        self.model = defaults.string(forKey: Keys.model) ?? "gemma-4-26b-a4b-it-qat-mlx-4bit"
+        self.model = defaults.string(forKey: Keys.model) ?? ""
         self.temperature = defaults.object(forKey: Keys.temperature) as? Double ?? 0.7
         self.topP = defaults.object(forKey: Keys.topP) as? Double ?? 1.0
         let legacyMaxTokens = defaults.object(forKey: Keys.legacyMaxTokens) as? Int ?? -1
@@ -543,6 +543,25 @@ final class AppSettings {
     }
 
     /// Snapshot of everything the networking layer needs, as Sendable values.
+    func effectiveModel(modelOverride: String?) -> String {
+        let override = modelOverride?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return override.isEmpty
+            ? model.trimmingCharacters(in: .whitespacesAndNewlines)
+            : override
+    }
+
+    func reconcileModelSelection(availableModelIDs: [String]) {
+        let available = Set(availableModelIDs.compactMap { id -> String? in
+            let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalized.isEmpty ? nil : normalized
+        })
+        if available.count == 1, let onlyModel = available.first {
+            model = onlyModel
+        } else if !available.contains(model.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            model = ""
+        }
+    }
+
     func requestConfig(modelOverride: String?) -> RequestConfig {
         RequestConfig(
             chatURL: chatCompletionsURL,
@@ -553,7 +572,7 @@ final class AppSettings {
             speechURL: speechURL,
             audioModelsURL: audioModelsURL,
             audioVoicesURL: audioVoicesURL,
-            model: (modelOverride?.isEmpty == false ? modelOverride! : model),
+            model: effectiveModel(modelOverride: modelOverride),
             temperature: temperature,
             topP: topP == 1.0 ? nil : topP,
             maxTokens: nil,

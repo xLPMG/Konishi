@@ -170,7 +170,7 @@ private struct ModelChip: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Model: \(model.settings.model)")
+        .help(model.currentModelID.isEmpty ? "No model selected" : "Model: \(model.currentModelID)")
     }
 
     private func modelButton(_ info: ModelInfo, settings: AppSettings) -> some View {
@@ -188,7 +188,8 @@ private struct ModelChip: View {
     }
 
     private var shortModel: String {
-        let m = model.settings.model
+        let m = model.currentModelID
+        guard !m.isEmpty else { return "No model" }
         return m.count > 20 ? "…" + m.suffix(18) : m
     }
 }

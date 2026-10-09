@@ -76,7 +76,7 @@ extension AppModel {
         // The summary is re-sent every turn, so cap it well below the live budget (≈¼) — otherwise
         // folding stops saving space and a rolling summary can grow unbounded.
         let summaryCap = max(256, settings.compressionBudget / 4)
-        var config = settings.requestConfig(modelOverride: persona.model)
+        var config = settings.requestConfig(modelOverride: modelID(for: persona))
         config.maxTokens = min(config.maxTokens ?? summaryCap, summaryCap)
         if settings.disableThinkingForTasks { config.enableThinking = false }
         let useServer = settings.compressionUseServer

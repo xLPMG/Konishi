@@ -76,6 +76,7 @@ final class AppModel {
 
     // Server info
     var models: [ModelInfo] = []
+    @ObservationIgnored var serverInfoRequestGeneration = 0
     var audioModels: [ModelInfo] = []
     var audioVoices: [String] = []
     var connectionOK: Bool?
@@ -116,10 +117,11 @@ final class AppModel {
             conversationID: UUID,
             existing: ActiveTurnContext?,
             persona: Persona,
+            modelID: String,
             settings: AppSettings
         ) -> ActiveTurnContext {
             if let existing, existing.conversationID == conversationID { return existing }
-            var config = settings.requestConfig(modelOverride: persona.model)
+            var config = settings.requestConfig(modelOverride: modelID)
             config.enableThinking = settings.reasoningEnabled
             return ActiveTurnContext(
                 conversationID: conversationID, persona: persona, requestConfig: config)
@@ -196,6 +198,15 @@ final class AppModel {
 
     var currentPersona: Persona { personaStore.persona(for: selectedConversation) }
 
+    var currentModelID: String { modelID(for: currentPersona) }
+
+    func modelID(for persona: Persona) -> String {
+        guard connectionOK == true else { return "" }
+        if models.count == 1, let onlyModel = models.first { return onlyModel.id }
+        let preferred = settings.effectiveModel(modelOverride: persona.model)
+        return models.contains { $0.id == preferred } ? preferred : ""
+    }
+
     var currentAssistantName: String { personaStore.assistantName(for: currentPersona) }
 
     var currentPalette: ThemePalette { settings.theme.palette }
@@ -209,8 +220,7 @@ final class AppModel {
 
     var contextWindow: Int? {
         if settings.contextWindowOverride > 0 { return settings.contextWindowOverride }
-        let modelID =
-            currentPersona.model?.isEmpty == false ? currentPersona.model! : settings.model
+        let modelID = currentModelID
         if let info = (models.first { $0.id == modelID } ?? models.first),
             let ctx = info.loadedContextLength ?? info.maxContextLength
         {
@@ -381,7 +391,8 @@ final class AppModel {
     }
 
     var canSend: Bool {
-        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
+        !currentModelID.isEmpty
+            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftImages.isEmpty
             || !draftAttachments.isEmpty)
             && (canBeginAgentTask || canInterruptWithText || canQueueTextInterrupt)
     }

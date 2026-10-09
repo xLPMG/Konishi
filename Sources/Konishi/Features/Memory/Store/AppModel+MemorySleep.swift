@@ -188,7 +188,7 @@ extension AppModel {
             modelCalls += 1
 
             let persona = personaStore.persona(for: convo)
-            var config = settings.requestConfig(modelOverride: persona.model)
+            var config = settings.requestConfig(modelOverride: modelID(for: persona))
             if settings.disableThinkingForTasks { config.enableThinking = false }
             config.maxTokens = min(config.maxTokens ?? 800, 800)
             let prompt = MemoryProfile.digestPrompt(

@@ -3,6 +3,7 @@ import Foundation
 extension AppModel {
 
     func send() {
+        guard !currentModelID.isEmpty else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !draftImages.isEmpty || !draftAttachments.isEmpty,
             let convoID = selectedConversationID,
@@ -34,6 +35,7 @@ extension AppModel {
     func submitUserMessage(
         text: String, images: [String], attachments: [Attachment], conversationID: UUID
     ) {
+        guard !currentModelID.isEmpty else { return }
         guard let idx = conversationIndex(conversationID) else { return }
         errorMessage = nil
         resetSpeech()
@@ -53,6 +55,7 @@ extension AppModel {
     }
 
     func sendSuggestedReply(_ text: String) {
+        guard !currentModelID.isEmpty else { return }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let conversationID = selectedConversationID else { return }
 
@@ -67,7 +70,7 @@ extension AppModel {
     }
 
     func regenerate(messageID: UUID) {
-        guard canBeginAgentTask,
+        guard !currentModelID.isEmpty, canBeginAgentTask,
             let convoID = selectedConversationID, let idx = conversationIndex(convoID),
             let msgIdx = conversations[idx].messages.firstIndex(where: { $0.id == messageID })
         else { return }
@@ -104,10 +107,12 @@ extension AppModel {
     func startTurn(conversationID: UUID) {
         guard let idx = conversationIndex(conversationID) else { return }
         guard pendingWorkGate == nil else { return }
+        let persona = personaStore.persona(for: conversations[idx])
         let turnContext = ActiveTurnContext.resolve(
             conversationID: conversationID,
             existing: activeTurnContext,
-            persona: personaStore.persona(for: conversations[idx]),
+            persona: persona,
+            modelID: modelID(for: persona),
             settings: settings)
         activeTurnContext = turnContext
         if var session = workSession, session.conversationID == conversationID {

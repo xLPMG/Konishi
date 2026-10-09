@@ -113,10 +113,16 @@ private struct ServerSettings: View {
                 SecureField("API Token", text: $settings.apiToken, prompt: Text("Stored in Keychain — required if auth is on"))
                 HStack {
                     Button("Test Connection") { model.refreshServerInfo() }
+                    Spacer()
                     if let ok = model.connectionOK {
                         Label(ok ? "Connected" : "Failed", systemImage: ok ? "checkmark.circle" : "xmark.circle")
                             .foregroundStyle(ok ? .green : .red)
+                    } else {
+                        ProgressView().controlSize(.small)
                     }
+                }
+                if let ctx = model.contextWindow {
+                    LabeledContent("Context window", value: "\(ctx) tokens")
                 }
             }
             Section("Audio Endpoint") {
@@ -129,23 +135,6 @@ private struct ServerSettings: View {
                 TextField("Embedding Base URL", text: $settings.embeddingBaseURL, prompt: Text("blank = same as chat"))
                 Text("mlx_lm.server has no /v1/embeddings. Point this at a dedicated embeddings server (the 'mlx embeddings' preset in the Local Servers tab, or LM Studio) so RAG and semantic memory work while mlx serves chat.")
                     .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Default Model") {
-                if model.models.isEmpty {
-                    TextField("Model", text: $settings.model)
-                } else {
-                    Picker("Model", selection: $settings.model) {
-                        ForEach(model.models) { info in
-                            Text(info.isLoaded == true ? "● \(info.id)" : info.id).tag(info.id)
-                        }
-                    }
-                }
-                if model.hasLoadState {
-                    Text("● = currently loaded in the server").font(.caption).foregroundStyle(.secondary)
-                }
-                if let ctx = model.contextWindow {
-                    LabeledContent("Context window", value: "\(ctx) tokens")
-                }
             }
         }
         .formStyle(.grouped)

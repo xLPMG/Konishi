@@ -31,8 +31,8 @@ struct PersonaEditorView: View {
                     set: { draft.accentColorHex = $0.hexString }
                 ))
             }
-            Section("Model override") {
-                TextField("Model (blank = use default)", text: Binding(
+            Section("Model preference") {
+                TextField("Model (blank = use chat selection)", text: Binding(
                     get: { draft.model ?? "" },
                     set: { draft.model = $0.isEmpty ? nil : $0 }
                 ))

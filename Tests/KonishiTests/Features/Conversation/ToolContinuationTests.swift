@@ -76,7 +76,8 @@ struct ToolContinuationTests {
         let persona = Persona.defaults[0]
 
         let initial = AppModel.ActiveTurnContext.resolve(
-            conversationID: conversationID, existing: nil, persona: persona, settings: settings)
+            conversationID: conversationID, existing: nil, persona: persona,
+            modelID: settings.model, settings: settings)
 
         settings.baseURL = "http://127.0.0.1:8040"
         settings.model = "/Users/me/Models/gemma"
@@ -85,14 +86,14 @@ struct ToolContinuationTests {
 
         let continuation = AppModel.ActiveTurnContext.resolve(
             conversationID: conversationID, existing: initial,
-            persona: changedPersona, settings: settings)
+            persona: changedPersona, modelID: changedPersona.model ?? "", settings: settings)
         #expect(continuation.requestConfig.model == "incoai/Qwen3.8-27B-Splash")
         #expect(continuation.requestConfig.chatURL?.port == 8080)
         #expect(continuation.persona.model == nil)
 
         let nextTurn = AppModel.ActiveTurnContext.resolve(
             conversationID: UUID(), existing: continuation,
-            persona: changedPersona, settings: settings)
+            persona: changedPersona, modelID: changedPersona.model ?? "", settings: settings)
         #expect(nextTurn.requestConfig.model == "/Users/me/Models/gemma")
         #expect(nextTurn.requestConfig.chatURL?.port == 8040)
     }

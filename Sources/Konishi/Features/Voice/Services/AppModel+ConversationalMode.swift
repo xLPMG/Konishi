@@ -384,7 +384,7 @@ extension AppModel {
         let history = Array(allHistory.dropFirst(folded))
         let summary = conversations[idx].summary ?? ""
         let pinnedContext = ContextPin.promptText(for: conversations[idx].contextPins ?? [])
-        let config = settings.requestConfig(modelOverride: persona.model)
+        let config = settings.requestConfig(modelOverride: modelID(for: persona))
         conversationGeneration &+= 1
         let generation = conversationGeneration
         conversationResponseTask?.cancel()
@@ -500,7 +500,7 @@ extension AppModel {
         let folded = min(conversations[idx].summarizedCount ?? 0, allHistory.count)
         let history = Array(allHistory.dropFirst(folded)) + [ChatMessage(role: .user, content: text)]
         let summary = conversations[idx].summary ?? ""
-        let config = settings.requestConfig(modelOverride: persona.model)
+        let config = settings.requestConfig(modelOverride: modelID(for: persona))
         let generation = conversationGeneration
 
         speculativeResponseTask = Task { [weak self] in

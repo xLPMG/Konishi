@@ -1,13 +1,23 @@
 extension AppModel {
     func refreshServerInfo() {
+        serverInfoRequestGeneration += 1
+        let requestGeneration = serverInfoRequestGeneration
+        connectionOK = nil
+        models = []
         let config = settings.requestConfig(modelOverride: nil)
         Task { [weak self] in
+            guard let self else { return }
             do {
                 let list = try await ChatService.fetchModels(config: config)
-                self?.models = list
-                self?.connectionOK = true
+                guard self.serverInfoRequestGeneration == requestGeneration else { return }
+                self.models = list
+                self.settings.reconcileModelSelection(availableModelIDs: list.map(\.id))
+                self.connectionOK = true
             } catch {
-                self?.connectionOK = false
+                guard self.serverInfoRequestGeneration == requestGeneration else { return }
+                self.models = []
+                self.settings.reconcileModelSelection(availableModelIDs: [])
+                self.connectionOK = false
             }
         }
     }

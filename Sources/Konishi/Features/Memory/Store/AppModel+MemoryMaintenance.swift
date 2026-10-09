@@ -120,7 +120,7 @@ extension AppModel {
                 current: snapshot, transcript: promptTranscript, extra: extra,
                 assistantName: assistant, now: now, currentDigest: convo.digest)
         // Gemma/Qwen-style thinking is wasteful for this mechanical rewrite: disable it and cap output.
-        var config = settings.requestConfig(modelOverride: persona.model)
+        var config = settings.requestConfig(modelOverride: modelID(for: persona))
         if settings.disableThinkingForTasks { config.enableThinking = false }
         config.maxTokens = min(config.maxTokens ?? 2000, 2000)
 

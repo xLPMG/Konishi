@@ -53,6 +53,16 @@ struct PermissionPolicyMigrationTests {
         #expect(!settings.toolsEnabled(for: .language))
     }
 
+    @Test("leaves the default chat model unset until selected")
+    func defaultModelIsUnset() {
+        let settings = AppSettings(defaults: makeDefaults())
+
+        #expect(settings.model.isEmpty)
+        #expect(settings.requestConfig(modelOverride: nil).model.isEmpty)
+        #expect(settings.requestConfig(modelOverride: "  ").model.isEmpty)
+        #expect(settings.requestConfig(modelOverride: " chosen-model ").model == "chosen-model")
+    }
+
     @Test("persists migrated policy JSON per mode")
     func persistsPolicyJSON() throws {
         let defaults = makeDefaults()
