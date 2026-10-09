@@ -194,6 +194,20 @@ enum Tools {
             defaultEnabled: false
         ),
         ToolSpec(
+            name: "web_image_search",
+            summary: "Search web images",
+            description: "Search DuckDuckGo Images and attach up to 4 images in the conversation. Images display in chat; they are sent to the model only when Settings > Generation > Send images to the model is enabled and the endpoint supports vision.",
+            parameters: .schema(
+                properties: [
+                    "query": .property("string", "what images to find"),
+                    "max_results": .property("integer", "number of images, 1 to 4 (default 4)"),
+                ],
+                required: ["query"]
+            ),
+            group: .web,
+            defaultEnabled: false
+        ),
+        ToolSpec(
             name: "web_fetch",
             summary: "Fetch a URL's readable text",
             description: "Fetch an http(s) URL as readable text.",

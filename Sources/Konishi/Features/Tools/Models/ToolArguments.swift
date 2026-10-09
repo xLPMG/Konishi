@@ -34,6 +34,10 @@ enum ToolArguments {
 
     struct URLValue: Decodable { let url: String }
     struct Query: Decodable { let query: String }
+    struct ImageSearch: Decodable {
+        let query: String
+        var maxResults: Int?
+    }
     struct Research: Decodable {
         let query: String
         var maxSources: Int?

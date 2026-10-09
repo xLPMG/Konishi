@@ -162,6 +162,7 @@ extension AppModel {
                 let repeats = self.loopSignatures.reversed().prefix(while: { $0 == sig }).count
                 let toolStart = Date()
                 let result: String
+                var resultImages: [WebImageResult] = []
                 let evaluation = batch.permissionEvaluations[call.id]
                 if repeats >= 2 {
                     result = "You have called `\(name)` with identical arguments \(repeats + 1) times in a row without making progress. Stop repeating it: try different arguments, a different tool, or give the user your answer based on what you already have."
@@ -180,6 +181,21 @@ extension AppModel {
                 } else if Self.readOnlyTools.contains(name), self.loopSignatures.contains(sig) {
                     result = "[identical `\(name)` call already ran this turn; the result is unchanged — reuse the earlier output instead of calling it again]"
                     forceContinuation = true
+                } else if name == "web_image_search" {
+                    if let args: ToolArguments.ImageSearch = Self.decodeToolArgs(call),
+                       !args.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        let imageResult = await WebResearch.searchImages(
+                            args.query, limit: args.maxResults ?? 4)
+                        result = imageResult.text
+                        for source in imageResult.sources {
+                            self.addTurnSource(title: source.title, url: source.url)
+                        }
+                        resultImages = imageResult.images.map {
+                            WebImageResult(title: $0.title, sourceURL: $0.sourceURL, dataURL: $0.dataURL)
+                        }
+                    } else {
+                        result = "Error: web_image_search requires a query"
+                    }
                 } else {
                     result = await self.executeTool(
                         call, conversationID: batch.conversationID, permissionEvaluation: evaluation)
@@ -192,7 +208,9 @@ extension AppModel {
                     saveTraces: settings.saveTraces)
                 if let i = self.ensureHydratedIndex(batch.conversationID) {
                     self.conversations[i].messages.append(
-                        ChatMessage(role: .tool, content: result, toolCallId: call.id, toolName: call.function.name)
+                        ChatMessage(
+                            role: .tool, content: result, webImageResults: resultImages,
+                            toolCallId: call.id, toolName: call.function.name)
                     )
                     if name == "python_exec" {
                         self.attachNewPlots(conversationID: batch.conversationID, since: toolStart)

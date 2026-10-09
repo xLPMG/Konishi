@@ -278,6 +278,7 @@ struct ChatView: View {
         var items: [ChatItem] = []
         var currentAssistantSteps: [AssistantStep] = []
         var currentAssistantToolResults: [String: String] = [:]
+        var currentAssistantWebImageResults: [WebImageResult] = []
         var currentAssistantAllIDs: [UUID] = []
         var currentAssistantSources: [Source] = []
         var currentAssistantSuggestions: [MessageSuggestion] = []
@@ -293,6 +294,7 @@ struct ChatView: View {
                 createdAt: currentAssistantCreatedAt,
                 steps: currentAssistantSteps,
                 toolResults: currentAssistantToolResults,
+                webImageResults: currentAssistantWebImageResults,
                 sources: currentAssistantSources,
                 suggestions: currentAssistantSuggestions,
                 interrupted: currentAssistantInterrupted,
@@ -308,6 +310,7 @@ struct ChatView: View {
             }
             currentAssistantSteps = []
             currentAssistantToolResults = [:]
+            currentAssistantWebImageResults = []
             currentAssistantAllIDs = []
             currentAssistantSources = []
             currentAssistantSuggestions = []
@@ -354,6 +357,7 @@ struct ChatView: View {
                 if let callId = msg.toolCallId {
                     currentAssistantToolResults[callId] = msg.content
                 }
+                currentAssistantWebImageResults.append(contentsOf: msg.webImageResults)
             case .system:
                 break
             }
@@ -1280,6 +1284,7 @@ struct AssistantTurn: Identifiable, Sendable {
     let createdAt: Date?
     let steps: [AssistantStep]
     let toolResults: [String: String]
+    let webImageResults: [WebImageResult]
     let sources: [Source]
     let suggestions: [MessageSuggestion]
     let interrupted: Bool
@@ -1476,6 +1481,46 @@ private struct AssistantTurnRow: View {
                             }
                         }
                     }
+                }
+
+                if !turn.webImageResults.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(turn.webImageResults.enumerated()), id: \.element.id) { index, result in
+                            HStack(alignment: .top, spacing: 12) {
+                                if let image = ChatView.nsImage(from: result.dataURL) {
+                                    Button { zoom = IdentifiableImage(image: image) } label: {
+                                        Image(nsImage: image).resizable().scaledToFit()
+                                            .frame(width: 220, height: 150)
+                                            .background(model.currentPalette.surfaceRaised)
+                                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Click to enlarge")
+                                }
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Text(result.title)
+                                        .font(.callout.weight(.semibold))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    if let url = URL(string: result.sourceURL) {
+                                        Link(destination: url) {
+                                            Label(
+                                                Self.sourceLabel(Source(title: result.title, url: result.sourceURL)),
+                                                systemImage: "arrow.up.forward.app")
+                                                .font(.caption)
+                                                .lineLimit(1)
+                                        }
+                                        .help(result.sourceURL)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            if index < turn.webImageResults.count - 1 {
+                                Divider()
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
                 }
 
                 if isActive, let activity = model.activity {
@@ -1852,6 +1897,7 @@ private struct ToolCallView: View {
 
     private func toolIcon(_ name: String) -> String {
         switch name {
+        case "web_image_search": return "photo.on.rectangle.angled"
         case "web_search", "web_research": return "magnifyingglass"
         case "web_fetch": return "globe"
         case "calculate": return "function"
@@ -2159,12 +2205,24 @@ private struct ZoomImageView: View {
             }
             .padding(8)
             Divider()
-            ScrollView([.horizontal, .vertical]) {
-                Image(nsImage: image)
-                    .resizable().scaledToFit()
-                    .scaleEffect(scale)
-                    .padding()
-                    .gesture(MagnificationGesture().onChanged { scale = max(0.5, min($0, 6)) })
+            GeometryReader { geometry in
+                let aspectRatio = image.size.width / max(image.size.height, 1)
+                let availableWidth = max(1, geometry.size.width - 32)
+                let availableHeight = max(1, geometry.size.height - 32)
+                let fitWidth = min(availableWidth, availableHeight * aspectRatio)
+                let fitHeight = fitWidth / max(aspectRatio, 0.01)
+
+                ScrollView([.horizontal, .vertical]) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: fitWidth * scale, height: fitHeight * scale)
+                        .gesture(MagnificationGesture().onChanged { scale = max(0.5, min($0, 6)) })
+                        .frame(
+                            minWidth: geometry.size.width,
+                            minHeight: geometry.size.height,
+                            alignment: .center)
+                }
             }
         }
         .frame(minWidth: 560, minHeight: 440)

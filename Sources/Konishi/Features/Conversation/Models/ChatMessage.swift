@@ -31,6 +31,13 @@ struct Source: Identifiable, Equatable, Codable, Sendable {
     var id: String { url }
 }
 
+struct WebImageResult: Identifiable, Equatable, Codable, Sendable {
+    var id = UUID()
+    var title: String
+    var sourceURL: String
+    var dataURL: String
+}
+
 struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     var id = UUID()
     var createdAt: Date?
@@ -41,9 +48,11 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     var reasoning: String?
     /// Base64 data URLs for attached images (vision).
     var images: [String]
+    /// Downloaded web images attached to their tool results, not sent as user turns.
+    var webImageResults: [WebImageResult]
     /// Extracted-text document attachments (PDF, text files) injected into the prompt.
     var attachments: [Attachment]
-    /// Web sources gathered via web_search/web_fetch while writing this reply.
+    /// Web sources gathered while writing this reply.
     var sources: [Source]
     /// Optional reply and web-search actions emitted by the model in a structured footer.
     var suggestions: [MessageSuggestion]
@@ -63,6 +72,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         reasoning: String? = nil,
         images: [String] = [],
         attachments: [Attachment] = [],
+        webImageResults: [WebImageResult] = [],
         sources: [Source] = [],
         suggestions: [MessageSuggestion] = [],
         interrupted: Bool = false,
@@ -78,6 +88,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         self.reasoning = reasoning
         self.images = images
         self.attachments = attachments
+        self.webImageResults = webImageResults
         self.sources = sources
         self.suggestions = suggestions
         self.interrupted = interrupted
@@ -94,7 +105,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, createdAt, role, content, stats, reasoning, images, attachments, sources, suggestions, interrupted, toolCalls, toolCallId, toolName
+        case id, createdAt, role, content, stats, reasoning, images, webImageResults, attachments, sources, suggestions, interrupted, toolCalls, toolCallId, toolName
     }
 
     // Tolerant decode so conversations saved before `images`/`attachments` existed still load.
@@ -114,6 +125,7 @@ struct ChatMessage: Identifiable, Equatable, Codable, Sendable {
         toolCalls = try c.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
         toolCallId = try c.decodeIfPresent(String.self, forKey: .toolCallId)
         toolName = try c.decodeIfPresent(String.self, forKey: .toolName)
+        webImageResults = try c.decodeIfPresent([WebImageResult].self, forKey: .webImageResults) ?? []
     }
 }
 

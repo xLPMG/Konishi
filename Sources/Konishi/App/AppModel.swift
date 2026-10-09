@@ -428,7 +428,7 @@ final class AppModel {
     /// Read-only tools whose identical repeat within a turn can be skipped safely.
     static let readOnlyTools: Set<String> = [
         "memory_list", "memory_read", "file_read", "list_dir",
-        "git_status", "git_diff", "git_log", "web_search", "web_fetch", "web_research",
+        "git_status", "git_diff", "git_log", "web_search", "web_image_search", "web_fetch", "web_research",
         "calculate", "finance_lookup", "finance_quote", "finance_history", "finance_series",
         "finance_portfolio", "finance_scenario",
         "vault_search", "vault_read", "vault_list",
@@ -438,7 +438,7 @@ final class AppModel {
     /// Tools whose OUTPUT the model must read to finish its reply, so a continuation turn is warranted.
     /// After fire-and-forget writes (e.g. banking a card) with a written reply, the turn is complete.
     static let continuationTools: Set<String> = [
-        "web_search", "web_fetch", "web_research", "file_read", "file_write",
+        "web_search", "web_image_search", "web_fetch", "web_research", "file_read", "file_write",
         "memory_list", "memory_read", "calculate", "python_exec", "run_shell",
         "finance_lookup", "finance_quote", "finance_history", "finance_series",
         "finance_portfolio", "finance_scenario",

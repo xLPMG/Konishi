@@ -41,7 +41,7 @@ enum ToolArtifact: Equatable {
                   let exitCode = Int(status.dropFirst("exit ".count)) else { return nil }
             let output = lines.count > 1 ? String(lines[1]) : ""
             return .process(exitCode: exitCode, output: output)
-        case "web_search", "web_research", "web_fetch":
+        case "web_search", "web_image_search", "web_research", "web_fetch":
             return sources.isEmpty ? nil : .sources(sources)
         default:
             return nil
