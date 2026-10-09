@@ -325,6 +325,16 @@ struct ShortTermMemoryTests {
         #expect(!ConversationRecall.mentionsPast("How do I sort an array in Swift?"))
     }
 
+    @Test("ambient recall rejects vague prompts and weak lexical matches")
+    func ambientRecallRequiresSpecificEvidence() {
+        #expect(!ConversationRecall.hasSpecificTopic("this is a test"))
+        #expect(ConversationRecall.hasSpecificTopic("science rendering test sheet"))
+        #expect(!ConversationRecall.hasStrongFallbackMatch(
+            query: "this is a test", digest: "Science rendering test sheet"))
+        #expect(ConversationRecall.hasStrongFallbackMatch(
+            query: "science rendering test sheet", digest: "Science rendering formulas"))
+    }
+
     @Test("entries skip the current chat and chats without a digest")
     func entriesFilter() {
         let current = Conversation(title: "current", digest: "now")

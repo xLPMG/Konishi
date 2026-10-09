@@ -10,15 +10,28 @@ extension AppModel {
         let entries = ConversationRecall.entries(from: conversations, excluding: conversationID)
         guard !entries.isEmpty else { return "" }
         let refersToPast = ConversationRecall.mentionsPast(query)
+        guard refersToPast || ConversationRecall.hasSpecificTopic(query) else { return "" }
         let ranking = await HybridRetrieval.rank(
             chunks: entries.map { (ConversationRecall.shortID($0.id), ConversationRecall.chunkText($0)) },
             query: query, cache: embeddingCache, requestConfig: config,
-            hybridThreshold: settings.memoryThreshold + (refersToPast ? 0 : ConversationRecall.normalMargin),
-            lexicalThreshold: refersToPast ? 0.25 : 0.45)
+            hybridThreshold: min(
+                1, settings.memoryThreshold + (refersToPast ? 0 : ConversationRecall.normalMargin)),
+            lexicalThreshold: refersToPast ? 0.25 : 0.60)
         guard !Task.isCancelled else { return "" }
+        let eligible = ranking.scored.filter { item in
+            ranking.failure == nil || refersToPast
+                || ConversationRecall.hasStrongFallbackMatch(query: query, digest: item.chunk.text)
+        }
+        if let failure = ranking.failure {
+            traceStore.trace(
+                conversationID: conversationID, kind: .error,
+                text: "past conversation embedding retrieval failed; BM25 fallback retained \(eligible.count)/\(entries.count) summaries: \(failure)",
+                saveTraces: settings.saveTraces,
+                detail: HybridRetrieval.traceDetail(eligible))
+        }
         let byID = Dictionary(
             entries.map { (ConversationRecall.shortID($0.id), $0) }, uniquingKeysWith: { first, _ in first })
-        let picked = ranking.scored.prefix(refersToPast ? 3 : 2).compactMap { byID[$0.chunk.label] }
+        let picked = eligible.prefix(refersToPast ? 3 : 2).compactMap { byID[$0.chunk.label] }
         guard !picked.isEmpty else { return "" }
         traceStore.trace(
             conversationID: conversationID, kind: .memory,

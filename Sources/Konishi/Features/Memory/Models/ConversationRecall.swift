@@ -11,7 +11,18 @@ enum ConversationRecall {
 
     /// Past-conversation summaries are held to a higher bar than memory bullets unless the user
     /// explicitly refers back to an earlier conversation.
-    static let normalMargin = 0.1
+    static let normalMargin = 0.2
+    static let minimumAmbientQueryTerms = 2
+    static let minimumFallbackOverlapTerms = 2
+
+    static func hasSpecificTopic(_ query: String) -> Bool {
+        HybridRetrieval.distinctiveTermCount(query) >= minimumAmbientQueryTerms
+    }
+
+    static func hasStrongFallbackMatch(query: String, digest: String) -> Bool {
+        HybridRetrieval.sharedTermCount(query: query, document: digest)
+            >= minimumFallbackOverlapTerms
+    }
 
     /// Conversations that have a digest, excluding Learn sessions and the one in progress.
     static func entries(from conversations: [Conversation], excluding current: UUID?) -> [Entry] {

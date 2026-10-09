@@ -16,6 +16,14 @@ enum HybridRetrieval {
         0.7 * semantic + 0.3 * lexical
     }
 
+    static func distinctiveTermCount(_ text: String) -> Int {
+        Set(tokenize(text)).count
+    }
+
+    static func sharedTermCount(query: String, document: String) -> Int {
+        Set(tokenize(query)).intersection(tokenize(document)).count
+    }
+
     struct Ranking: Sendable {
         let scored: [ScoredChunk]
         let candidateCount: Int

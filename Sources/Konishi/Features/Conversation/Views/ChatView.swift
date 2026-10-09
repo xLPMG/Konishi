@@ -1645,6 +1645,7 @@ private struct AssistantTurnRow: View {
 }
 
 private struct LiveAssistantStepView: View {
+    @Environment(AppModel.self) private var model
     let step: AssistantStep
     let toolResults: [String: String]
     let presentation: StreamPresentation
@@ -1656,10 +1657,15 @@ private struct LiveAssistantStepView: View {
         let isCurrent = presentation.assistantID == step.id
         let content = step.content + (isCurrent ? presentation.content : "")
         let reasoning = (step.reasoning ?? "") + (isCurrent ? presentation.reasoning : "")
+        let isReasoningActive = isCurrent && model.isStreaming && content.isEmpty
 
         VStack(alignment: .leading, spacing: 6) {
             if !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ReasoningDisclosureView(reasoning: reasoning, title: "Reasoning")
+                ReasoningDisclosureView(
+                    reasoning: reasoning,
+                    title: "Reasoning",
+                    isGenerating: isReasoningActive
+                )
             }
             if !content.isEmpty {
                 Text(content)
@@ -1733,6 +1739,7 @@ private struct ReasoningDisclosureView: View {
     @Environment(AppModel.self) private var model
     let reasoning: String
     var title: String = "Reasoning"
+    var isGenerating = false
     @State private var isExpanded = false
 
     var body: some View {
@@ -1748,9 +1755,16 @@ private struct ReasoningDisclosureView: View {
             }
                 .padding(.top, 4)
         } label: {
-            Text(title)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.tertiary)
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.tertiary)
+                if isGenerating && !isExpanded {
+                    AssistantActivityView(text: "Thinking…")
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: isGenerating && !isExpanded)
         }
         .padding(.vertical, 2)
     }
