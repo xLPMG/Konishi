@@ -21,6 +21,8 @@ struct MarkdownView: View {
                         baseSize: baseSize,
                         sources: sources
                     )
+                case let .science(card):
+                    ScienceCardView(card: card, baseSize: baseSize)
                 case let .lines(lines):
                     ForEach(Array(groupedLines(lines).enumerated()), id: \.offset) { _, line in
                         lineView(line)
@@ -36,6 +38,7 @@ struct MarkdownView: View {
         case lines([String])
         case code(String, String?)
         case table([String], [[String]], [TableAlignment])
+        case science(ScienceCard)
     }
 
     fileprivate enum TableAlignment {
@@ -113,7 +116,14 @@ struct MarkdownView: View {
                 }
                 continue
             }
-            if inCode { codeLines.append(line) } else { buffer.append(line) }
+            if inCode {
+                codeLines.append(line)
+            } else if let card = ScienceCard.parseDirective(line) {
+                flushLines()
+                result.append(.science(card))
+            } else {
+                buffer.append(line)
+            }
         }
         if inCode { result.append(.code(codeLines.joined(separator: "\n"), language)) }
         flushLines()

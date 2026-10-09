@@ -212,6 +212,22 @@ private struct Decoder {
         return String(c)
     }
 
+    private mutating func rawGroup() -> String {
+        while i < chars.count && chars[i] == " " { i += 1 }
+        guard i < chars.count, chars[i] == "{" else { return group() }
+        i += 1
+        let start = i
+        var depth = 1
+        while i < chars.count && depth > 0 {
+            if chars[i] == "{" { depth += 1 }
+            if chars[i] == "}" { depth -= 1 }
+            if depth > 0 { i += 1 }
+        }
+        let value = String(chars[start..<i])
+        if i < chars.count { i += 1 }
+        return value
+    }
+
     private mutating func command() -> String {
         i += 1 // consume backslash
         guard i < chars.count else { return mathMode ? "" : "\\" }
@@ -249,6 +265,9 @@ private struct Decoder {
             let numerator = group()
             let denominator = group()
             return spoken ? " " + numerator + " over " + denominator + " " : fraction(numerator, denominator)
+        case "ce":
+            let chemistry = ChemistryNotation.render(rawGroup())
+            return spoken ? " " + chemistry + " " : chemistry
         case "sqrt":
             var index = ""
             if i < chars.count && chars[i] == "[" {

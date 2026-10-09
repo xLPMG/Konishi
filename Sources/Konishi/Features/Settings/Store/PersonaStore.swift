@@ -88,6 +88,9 @@ final class PersonaStore {
         }
         text += (text.isEmpty ? "" : "\n\n") + Self.contextSourceInstruction
         if mode == .chat {
+            text += (text.isEmpty ? "" : "\n\n") + #"""
+            For chemistry, use \ce{...} for formulas, charges, isotopes, condensed organic bonds, and reactions; examples: \ce{H2O}, \ce{Fe^3+}, \ce{^{14}C}, \ce{CH3-CH2-OH}, \ce{2H2 + O2 -> 2H2O}. Use an explicit caret for a charge magnitude. When requested or genuinely useful, put one card directive on its own line: :::element Fe or :::particle electron. Use only known local element/particle records and do not invent properties. Element cards show neutral ground-state shell populations; the Bohr drawing is schematic, not a quantum-orbital picture, and configurations for the heaviest elements may be predictions. Do not use these cards for molecules or present condensed bond notation as a structural diagram.
+            """#
             text += (text.isEmpty ? "" : "\n\n") + "After your complete user-facing answer, you may append one <konishi_actions> JSON block with this exact shape: {\"suggestions\":[{\"type\":\"reply\",\"label\":\"Tell me more\",\"value\":\"Please tell me more about this\"},{\"type\":\"web_search\",\"label\":\"Search the web\",\"value\":\"search query text\"}]}. If the user explicitly asks for a reply or search recommendation, you MUST include the matching action. If you make a concrete offer such as 'I can explain more' or recommend a specific web search, provide it as an action instead of leaving it only in prose. Otherwise include only genuinely useful actions, at most three. A reply value is the exact follow-up message to send. A web_search value is query text only, never a URL. Keep the answer complete without requiring an action, do not mention this metadata, and omit the block when no action would help."
         }
         if persona.vaultAccessEnabled, vaultConfigured {

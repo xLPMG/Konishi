@@ -61,6 +61,30 @@ struct MarkdownRenderingTests {
     }
 }
 
+@Suite("Science cards")
+struct ScienceCardTests {
+    @Test("bundled neutral atom shell counts match atomic numbers")
+    func elementShells() {
+        #expect(ChemicalElement.all.count == 118)
+        for element in ChemicalElement.all {
+            #expect(element.shells.reduce(0, +) == element.atomicNumber)
+        }
+        #expect(ChemicalElement.lookup("Fe")?.name == "Iron")
+        #expect(ChemicalElement.lookup("8")?.symbol == "O")
+    }
+
+    @Test("explicit element and particle directives resolve locally")
+    func directives() {
+        let iron = ChemicalElement.lookup("iron")!
+        let electron = PhysicsParticle.lookup("electron")!
+        #expect(ScienceCard.parseDirective(":::element Fe") == .element(iron))
+        #expect(ScienceCard.parseDirective(":::particle electron") == .particle(electron))
+        #expect(ScienceCard.parseDirective(":::element Unknownium") == nil)
+        #expect(ScienceCard.parseDirective(":::particle unknown") == nil)
+        #expect(ScienceCard.parseDirective(":::element Fe extra") == nil)
+    }
+}
+
 @Suite("Tool artifacts")
 struct ToolArtifactTests {
     @Test("calculator output becomes a result artifact")

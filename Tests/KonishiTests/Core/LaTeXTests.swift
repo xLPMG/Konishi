@@ -43,6 +43,18 @@ struct LaTeXTests {
         #expect(LaTeX.render("\\[x^2\\]") == "`x²`")
     }
 
+    @Test("chemical formulas, charges, isotopes, bonds, and reactions")
+    func chemistry() {
+        #expect(LaTeX.render(#"Water is \ce{H2O}."#) == "Water is H₂O.")
+        #expect(LaTeX.render(#"\ce{2H2 + O2 -> 2H2O}"#) == "2H₂ + O₂ → 2H₂O")
+        #expect(LaTeX.render(#"\ce{SO4^2-}"#) == "SO₄²⁻")
+        #expect(LaTeX.render(#"\ce{Na+ + Cl- -> NaCl}"#) == "Na⁺ + Cl⁻ → NaCl")
+        #expect(LaTeX.render(#"\ce{^{14}C}"#) == "¹⁴C")
+        #expect(LaTeX.render(#"\ce{CH3-CH2-OH}"#) == "CH₃-CH₂-OH")
+        #expect(LaTeX.render(#"\ce{HC#CH}"#) == "HC≡CH")
+        #expect(LaTeX.render(#"\ce{CuSO4\cdot5H2O}"#) == "CuSO₄·5H₂O")
+    }
+
     @Test("currency is not treated as math")
     func currency() {
         #expect(LaTeX.render("$5 and $10 total") == "$5 and $10 total")
