@@ -12,11 +12,6 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         var isChat: Bool { self == .mlxLMChat || self == .mlxVLMChat }
     }
 
-    private enum LegacyChatBackend: String, Codable {
-        case mlxLM
-        case mlxVLM
-    }
-
     enum Role: String, Codable, Sendable, CaseIterable, Identifiable {
         case none, chat, audio, embedding
         var id: String { rawValue }
@@ -49,8 +44,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     var role: Role
     /// Short hint shown in the UI.
     var note: String
-    /// Start automatically when Konishi launches. Optional for back-compat.
-    var autostart: Bool?
+    /// Start automatically when Konishi launches.
+    var autostart: Bool
 
     var effectiveAPIModelID: String? {
         guard builtInServer == .splash else { return apiModelID }
@@ -181,7 +176,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         port: Int,
         role: Role,
         note: String,
-        autostart: Bool? = nil,
+        autostart: Bool = false,
         builtInServer: BuiltInServer? = nil,
         isCustom: Bool = false
     ) {
@@ -203,35 +198,6 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, name, pipPackage, command, model, apiModelID, builtInServer, isCustom, host, port, role, note, autostart
-    }
-
-    private enum LegacyCodingKeys: String, CodingKey {
-        case builtInChatBackend
-    }
-
-    init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        let legacyCommand = try values.decode(String.self, forKey: .command)
-        id = try values.decode(UUID.self, forKey: .id)
-        name = try values.decode(String.self, forKey: .name)
-        pipPackage = try values.decode(String.self, forKey: .pipPackage)
-        command = Self.commandWithoutModel(legacyCommand)
-        model = try values.decodeIfPresent(String.self, forKey: .model) ?? Self.extractModelPath(from: legacyCommand)
-        apiModelID = try values.decodeIfPresent(String.self, forKey: .apiModelID)
-        if let persisted = try values.decodeIfPresent(BuiltInServer.self, forKey: .builtInServer) {
-            builtInServer = persisted
-        } else if let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
-            .decodeIfPresent(LegacyChatBackend.self, forKey: .builtInChatBackend) {
-            builtInServer = legacy == .mlxLM ? .mlxLMChat : .mlxVLMChat
-        } else {
-            builtInServer = nil
-        }
-        isCustom = try values.decodeIfPresent(Bool.self, forKey: .isCustom) ?? false
-        host = try values.decode(String.self, forKey: .host)
-        port = try values.decode(Int.self, forKey: .port)
-        role = try values.decode(Role.self, forKey: .role)
-        note = try values.decode(String.self, forKey: .note)
-        autostart = try values.decodeIfPresent(Bool.self, forKey: .autostart)
     }
 
     static var presets: [ManagedServer] {

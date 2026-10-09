@@ -70,16 +70,6 @@ struct ManagedServerTests {
         #expect(chat.command == "mlx_lm.server")
     }
 
-    @Test("previous built-in backend identity decodes into the unified server type")
-    func legacyBuiltInBackendMigration() throws {
-        let data = Data(#"{"id":"00000000-0000-0000-0000-000000000002","name":"Chat","pipPackage":"mlx-vlm","command":"mlx_vlm.server","model":"mlx-community/gemma-4-12B-it-qat-4bit","host":"127.0.0.1","port":8082,"role":"chat","note":"","builtInChatBackend":"mlxVLM"}"#.utf8)
-
-        let server = try JSONDecoder().decode(ManagedServer.self, from: data)
-
-        #expect(server.builtInServer == .mlxVLMChat)
-        #expect(server.modelPath == "mlx-community/gemma-4-12B-it-qat-4bit")
-    }
-
     @Test("custom server marker survives encoding")
     func customMarkerPersistence() throws {
         let custom = ManagedServer(
@@ -98,17 +88,6 @@ struct ManagedServerTests {
 
         #expect(decoded.isCustom)
         #expect(decoded.builtInServer == nil)
-    }
-
-    @Test("legacy model arguments migrate out of the saved command")
-    func legacyModelCommandMigration() throws {
-        let data = Data(#"{"id":"00000000-0000-0000-0000-000000000001","name":"mlx","pipPackage":"mlx-lm","command":"mlx_lm.server --model '~/Models/My Model'","host":"127.0.0.1","port":8080,"role":"chat","note":""}"#.utf8)
-
-        let server = try JSONDecoder().decode(ManagedServer.self, from: data)
-
-        #expect(server.command == "mlx_lm.server")
-        #expect(server.modelPath == "~/Models/My Model")
-        #expect(server.launchCommand.contains("--model \"$HOME\"/'Models/My Model'"))
     }
 
     @Test("local endpoint model response decodes model identifiers")

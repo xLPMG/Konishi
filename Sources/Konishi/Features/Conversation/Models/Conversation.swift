@@ -96,9 +96,6 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
     var summarizedCount: Int?
     /// Number of leading messages already folded into long-term memory.
     var memorizedCount: Int?
-    /// Legacy marker decoded only so startup can remove pre-workspace Learn conversation files.
-    /// Legacy marker used by startup cleanup; not used for conversation routing or memory policy.
-    var isLanguage: Bool?
     /// Number of messages at the time the title was last updated.
     var lastTitledMessageCount: Int?
     /// Short recallable summary of the whole conversation (distinct from the compression `summary`).
@@ -125,11 +122,10 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         summary: String? = nil,
         summarizedCount: Int? = nil,
         memorizedCount: Int? = nil,
-        isLanguage: Bool? = nil,
         lastTitledMessageCount: Int? = nil,
         digest: String? = nil,
         digestCount: Int? = nil,
-        digestUpdatedAt: Date? = nil,
+        digestUpdatedAt: Date? = .now,
         tasks: [ConversationTask]? = nil,
         contextPins: [ContextPin]? = nil,
         permissionRules: [PermissionRule]? = nil
@@ -143,7 +139,6 @@ struct Conversation: Identifiable, Codable, Equatable, Sendable {
         self.summary = summary
         self.summarizedCount = summarizedCount
         self.memorizedCount = memorizedCount
-        self.isLanguage = isLanguage
         self.lastTitledMessageCount = lastTitledMessageCount
         self.digest = digest
         self.digestCount = digestCount
@@ -171,7 +166,6 @@ struct ConversationMeta: Decodable {
     var summary: String?
     var summarizedCount: Int?
     var memorizedCount: Int?
-    var isLanguage: Bool?
     var lastTitledMessageCount: Int?
     var digest: String?
     var digestCount: Int?
@@ -187,7 +181,7 @@ struct ConversationMeta: Decodable {
             id: id, title: title, personaID: personaID, messages: [],
             createdAt: createdAt, updatedAt: updatedAt,
             summary: summary, summarizedCount: summarizedCount, memorizedCount: memorizedCount,
-            isLanguage: isLanguage, lastTitledMessageCount: lastTitledMessageCount,
+            lastTitledMessageCount: lastTitledMessageCount,
             digest: digest, digestCount: digestCount, digestUpdatedAt: digestUpdatedAt,
             tasks: tasks, contextPins: contextPins,
             permissionRules: permissionRules

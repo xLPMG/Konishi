@@ -9,7 +9,7 @@ struct Persona: Identifiable, Codable, Equatable, Sendable {
     var model: String?          // optional per-persona model override
     var iconSymbol: String
     var accentColorHex: String?
-    /// The assistant's own name (distinct from this persona/mode label). Optional for back-compat.
+    /// Explicit assistant name; when absent, the persona's name is used.
     var assistantName: String?
     /// When on, this persona can retrieve from and read/write the research vault. Off keeps vault
     /// content out of this persona's chats entirely.
@@ -35,25 +35,6 @@ struct Persona: Identifiable, Codable, Equatable, Sendable {
         self.accentColorHex = accentColorHex
         self.assistantName = assistantName
         self.vaultAccessEnabled = vaultAccessEnabled
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id, name, systemPrompt, memoryScope, model, iconSymbol, accentColorHex
-        case assistantName, vaultAccessEnabled
-    }
-
-    // Tolerant decode so personas.json saved before newer fields existed still loads.
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
-        name = try c.decode(String.self, forKey: .name)
-        systemPrompt = try c.decode(String.self, forKey: .systemPrompt)
-        memoryScope = try c.decode(String.self, forKey: .memoryScope)
-        model = try c.decodeIfPresent(String.self, forKey: .model)
-        iconSymbol = try c.decodeIfPresent(String.self, forKey: .iconSymbol) ?? "person.circle"
-        accentColorHex = try c.decodeIfPresent(String.self, forKey: .accentColorHex)
-        assistantName = try c.decodeIfPresent(String.self, forKey: .assistantName)
-        vaultAccessEnabled = try c.decodeIfPresent(Bool.self, forKey: .vaultAccessEnabled) ?? false
     }
 
     static var defaults: [Persona] {

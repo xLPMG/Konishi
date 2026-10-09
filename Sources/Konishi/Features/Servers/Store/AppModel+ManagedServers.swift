@@ -45,7 +45,7 @@ extension AppModel {
     func autostartServers() {
         Task {
             runtime.rescan()
-            let autostartServers = runtime.roleServers.filter { $0.autostart == true }
+            let autostartServers = runtime.roleServers.filter(\.autostart)
             let chatServers = autostartServers.filter { $0.role == .chat }
             let selectedChat = chatServers.first { $0.endpointURL == settings.baseURL }
                 ?? chatServers.first { $0.builtInServer == .mlxLMChat }

@@ -161,9 +161,6 @@ final class AppModel {
         self.conversations = Self.loadConversations().sorted { $0.updatedAt > $1.updatedAt }
         self.selectedConversationID = nil
 
-        let legacyLanguageIDs = conversations.filter { $0.isLanguage == true }.map(\.id)
-        for id in legacyLanguageIDs { deleteConversation(id) }
-
         if conversations.isEmpty {
             newConversation()
         } else {

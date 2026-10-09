@@ -314,15 +314,12 @@ final class AppSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let savedSettingsVersion = defaults.integer(forKey: Keys.settingsVersion)
-        let isLegacyToolSettings = savedSettingsVersion < 7
         self.baseURL = defaults.string(forKey: Keys.baseURL) ?? "http://127.0.0.1:1234"
         self.model = defaults.string(forKey: Keys.model) ?? ""
         self.temperature = defaults.object(forKey: Keys.temperature) as? Double ?? 0.7
         self.topP = defaults.object(forKey: Keys.topP) as? Double ?? 1.0
-        let legacyMaxTokens = defaults.object(forKey: Keys.legacyMaxTokens) as? Int ?? -1
         let outputTokenLimit = defaults.object(forKey: Keys.workOutputTokenLimit) as? Int
-            ?? (legacyMaxTokens > 0 ? legacyMaxTokens : AgentWorkLimits.defaults.outputTokens)
+            ?? AgentWorkLimits.defaults.outputTokens
         let turnLimit = defaults.object(forKey: Keys.workTurnLimit) as? Int
             ?? AgentWorkLimits.defaults.modelTurns
         let toolCallLimit = defaults.object(forKey: Keys.workToolCallLimit) as? Int
@@ -366,120 +363,28 @@ final class AppSettings {
         self.ragTopK = defaults.object(forKey: Keys.ragTopK) as? Int ?? 6
         self.vaultPath = defaults.string(forKey: Keys.vaultPath) ?? ""
         self.vaultTopK = defaults.object(forKey: Keys.vaultTopK) as? Int ?? 6
-        let legacyToolsEnabled: Bool
-        if savedSettingsVersion == 0 {
-            legacyToolsEnabled = defaults.object(forKey: Keys.toolsEnabled) as? Bool ?? true
-        } else if isLegacyToolSettings {
-            legacyToolsEnabled = defaults.object(forKey: Keys.toolsEnabled) as? Bool ?? false
-        } else {
-            legacyToolsEnabled = true
-        }
-        var enabledByMode: [String: Set<String>] = [:]
-        var autoByMode: [String: Set<String>] = [:]
-        // Legacy flat sets applied to chat AND voice before tools went per-mode; migrate into both.
-        let legacyModes: Set<AppMode> = [.chat, .conversational]
-        for m in AppMode.allCases {
-            if let arr = defaults.stringArray(forKey: Keys.enabledToolsKey(m)) {
-                enabledByMode[m.rawValue] = Set(arr)
-            } else if isLegacyToolSettings, legacyModes.contains(m),
-                      let old = defaults.stringArray(forKey: Keys.enabledTools) {
-                enabledByMode[m.rawValue] = Set(old)   // migrate legacy flat set
-            }
-            if isLegacyToolSettings {
-                if let arr = defaults.stringArray(forKey: Keys.autoApproveKey(m)) {
-                    autoByMode[m.rawValue] = Set(arr)
-                } else if legacyModes.contains(m),
-                          let old = defaults.stringArray(forKey: Keys.autoApproveTools) {
-                    autoByMode[m.rawValue] = Set(old)
-                }
-            }
-        }
-        if defaults.integer(forKey: Keys.settingsVersion) < 3 {
-            for mode in [AppMode.chat, .conversational] {
-                var enabled = enabledByMode[mode.rawValue] ?? Tools.modeEnabledDefaults(mode)
-                enabled.insert("calculate")
-                enabledByMode[mode.rawValue] = enabled
-                defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(mode))
-
-                var approved = autoByMode[mode.rawValue]
-                    ?? PermissionPolicyMigration.legacyAutoApprovedDefaults(for: mode)
-                approved.insert("calculate")
-                autoByMode[mode.rawValue] = approved
-                defaults.set(Array(approved), forKey: Keys.autoApproveKey(mode))
-            }
-            defaults.set(3, forKey: Keys.settingsVersion)
-        }
-        if defaults.integer(forKey: Keys.settingsVersion) < 4 {
-            // Make the research-vault tools available in text chat; the persona flag still gates them.
-            var enabled = enabledByMode[AppMode.chat.rawValue] ?? Tools.modeEnabledDefaults(.chat)
-            enabled.formUnion(Tools.vaultToolNames)
-            enabledByMode[AppMode.chat.rawValue] = enabled
-            defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(.chat))
-
-            var approved = autoByMode[AppMode.chat.rawValue]
-                ?? PermissionPolicyMigration.legacyAutoApprovedDefaults(for: .chat)
-            approved.formUnion(["vault_search", "vault_read", "vault_list"])
-            autoByMode[AppMode.chat.rawValue] = approved
-            defaults.set(Array(approved), forKey: Keys.autoApproveKey(.chat))
-
-            defaults.set(4, forKey: Keys.settingsVersion)
-        }
-        if defaults.integer(forKey: Keys.settingsVersion) < 5 {
-            // Past-conversation recall tools for existing installs (text chat and voice).
-            let recall: Set<String> = ["conversation_search", "conversation_list", "conversation_read"]
-            for mode in [AppMode.chat, .conversational] {
-                var enabled = enabledByMode[mode.rawValue] ?? Tools.modeEnabledDefaults(mode)
-                enabled.formUnion(recall)
-                enabledByMode[mode.rawValue] = enabled
-                defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(mode))
-
-                var approved = autoByMode[mode.rawValue]
-                    ?? PermissionPolicyMigration.legacyAutoApprovedDefaults(for: mode)
-                approved.formUnion(recall)
-                autoByMode[mode.rawValue] = approved
-                defaults.set(Array(approved), forKey: Keys.autoApproveKey(mode))
-            }
-            defaults.set(5, forKey: Keys.settingsVersion)
-        }
-        if defaults.integer(forKey: Keys.settingsVersion) < 6 {
-            // Make the approval-gated workspace writer available to existing chat installs.
-            var enabled = enabledByMode[AppMode.chat.rawValue] ?? Tools.modeEnabledDefaults(.chat)
-            enabled.insert("file_write")
-            enabledByMode[AppMode.chat.rawValue] = enabled
-            defaults.set(Array(enabled), forKey: Keys.enabledToolsKey(.chat))
-            defaults.set(6, forKey: Keys.settingsVersion)
-        }
-        if defaults.integer(forKey: Keys.settingsVersion) < 8 {
-            enabledByMode[AppMode.language.rawValue] = []
-            autoByMode[AppMode.language.rawValue] = []
-            defaults.set([String](), forKey: Keys.enabledToolsKey(.language))
-            defaults.set([String](), forKey: Keys.autoApproveKey(.language))
-            defaults.set(false, forKey: Keys.toolsEnabledKey(.language))
-        }
         var modeMasterSwitches: [String: Bool] = [:]
+        var enabledToolsByMode: [String: Set<String>] = [:]
         var permissionPolicies: [String: PermissionPolicy] = [:]
         for mode in AppMode.allCases {
             let masterKey = Keys.toolsEnabledKey(mode)
             let enabled = defaults.object(forKey: masterKey) as? Bool
-                ?? (mode == .language ? false : legacyToolsEnabled)
+                ?? (mode != .language)
             modeMasterSwitches[mode.rawValue] = enabled
             defaults.set(enabled, forKey: masterKey)
+
+            if let tools = defaults.stringArray(forKey: Keys.enabledToolsKey(mode)) {
+                enabledToolsByMode[mode.rawValue] = Set(tools)
+            }
 
             let policyKey = Keys.permissionPolicyKey(mode)
             let savedPolicy = defaults.data(forKey: policyKey)
                 .flatMap { try? JSONDecoder().decode(PermissionPolicy.self, from: $0) }
-            let policy = savedPolicy ?? PermissionPolicyMigration.migrate(
-                mode: mode,
-                legacyAutoApprovedTools: isLegacyToolSettings ? autoByMode[mode.rawValue] : nil)
-            permissionPolicies[mode.rawValue] = policy
-            if savedPolicy == nil, let data = try? JSONEncoder().encode(policy) {
-                defaults.set(data, forKey: policyKey)
-            }
+            permissionPolicies[mode.rawValue] = savedPolicy ?? PermissionPolicy()
         }
-        defaults.set(8, forKey: Keys.settingsVersion)
         self.toolsEnabledByMode = modeMasterSwitches
+        self.enabledToolsByMode = enabledToolsByMode
         self.permissionPolicyByMode = permissionPolicies
-        self.enabledToolsByMode = enabledByMode
         self.shellAllowlistByMode = Dictionary(uniqueKeysWithValues: AppMode.allCases.compactMap { mode in
             defaults.string(forKey: Keys.shellAllowlistKey(mode)).map { (mode.rawValue, $0) }
         })
@@ -593,7 +498,6 @@ final class AppSettings {
         static let model = "konishi.model"
         static let temperature = "konishi.temperature"
         static let topP = "konishi.topP"
-        static let legacyMaxTokens = "konishi.maxTokens"
         static let workOutputTokenLimit = "konishi.workOutputTokenLimit"
         static let workTurnLimit = "konishi.workTurnLimit"
         static let workToolCallLimit = "konishi.workToolCallLimit"
@@ -629,17 +533,12 @@ final class AppSettings {
         static let ragTopK = "konishi.ragTopK"
         static let vaultPath = "konishi.vaultPath"
         static let vaultTopK = "konishi.vaultTopK"
-        static let toolsEnabled = "konishi.toolsEnabled"
         static func toolsEnabledKey(_ mode: AppMode) -> String { "konishi.toolsEnabled." + mode.rawValue }
-        static let enabledTools = "konishi.enabledTools"
-        static let autoApproveTools = "konishi.autoApproveTools"
         static func enabledToolsKey(_ mode: AppMode) -> String { "konishi.enabledTools." + mode.rawValue }
-        static func autoApproveKey(_ mode: AppMode) -> String { "konishi.autoApprove." + mode.rawValue }
         static func permissionPolicyKey(_ mode: AppMode) -> String { "konishi.permissionPolicy." + mode.rawValue }
         static func shellAllowlistKey(_ mode: AppMode) -> String { "konishi.shellAutoApproveCommands." + mode.rawValue }
         static let sendImagesToModel = "konishi.sendImagesToModel"
         static let useOnDeviceModel = "konishi.useOnDeviceModel"
-        static let settingsVersion = "konishi.settingsVersion"
         static let embeddingModel = "konishi.embeddingModel"
         static let memoryTopK = "konishi.memoryTopK"
         static let memoryThreshold = "konishi.memoryThreshold"

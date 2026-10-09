@@ -5,6 +5,11 @@ import Testing
 
 @Suite("Pinned conversation context")
 struct ContextPinTests {
+    @Test("new conversations start digest tracking")
+    func newConversationStartsDigestTracking() {
+        #expect(Conversation().digestUpdatedAt != nil)
+    }
+
     @Test("conversation pins round-trip and old conversations still decode")
     func persistenceCompatibility() throws {
         let pin = ContextPin(messageID: UUID(), role: .user, text: "Keep this constraint in mind.")

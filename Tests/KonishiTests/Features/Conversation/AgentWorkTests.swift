@@ -146,12 +146,12 @@ struct AgentWorkTests {
 @Suite("Agent work settings")
 @MainActor
 struct AgentWorkSettingsTests {
-    @Test("legacy response cap migrates to a soft work budget and chat has no fixed cap")
-    func legacyTokenSettingMigration() {
+    @Test("current output limit is a soft work budget and chat has no fixed cap")
+    func currentOutputLimitIsSoftBudget() {
         let suite = "AgentWorkSettingsTests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(2_048, forKey: "konishi.maxTokens")
+        defaults.set(2_048, forKey: "konishi.workOutputTokenLimit")
 
         let settings = AppSettings(defaults: defaults)
 

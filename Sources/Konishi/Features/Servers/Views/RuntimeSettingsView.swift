@@ -282,7 +282,7 @@ private struct ManagedServerRow: View {
             }
             HStack {
                 Toggle("Start on launch", isOn: Binding(
-                    get: { draft.autostart ?? false },
+                    get: { draft.autostart },
                     set: { draft.autostart = $0 }
                 ))
                 .toggleStyle(.switch)

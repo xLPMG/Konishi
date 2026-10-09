@@ -7,8 +7,6 @@ import Foundation
 extension AppModel {
     static let sleepIdleDelay: Duration = .seconds(300)
     private static let digestsPerPass = 3
-    /// Legacy chats without a digest are only back-filled within this many of the newest.
-    private static let digestBackfillWindow = 50
 
     /// (Re)start the countdown to the next pass; a later call replaces an earlier one.
     func scheduleSleepPass(after delay: Duration) {
@@ -143,12 +141,11 @@ extension AppModel {
     private func staleDigestCandidates() -> [UUID] {
         conversations
             .sorted { $0.updatedAt > $1.updatedAt }
-            .enumerated()
-            .filter { offset, c in
-                let stale = c.digestUpdatedAt.map { c.updatedAt > $0 } ?? true
-                return stale && (c.digestUpdatedAt != nil || offset < Self.digestBackfillWindow)
+            .filter { conversation in
+                guard let digestUpdatedAt = conversation.digestUpdatedAt else { return false }
+                return conversation.updatedAt > digestUpdatedAt
             }
-            .map(\.element.id)
+            .map(\.id)
     }
 
     private struct DigestRefresh {
