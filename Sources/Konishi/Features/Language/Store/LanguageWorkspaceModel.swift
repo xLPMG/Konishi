@@ -34,6 +34,8 @@ enum LanguageWorkspaceDestination: String, CaseIterable, Hashable, Identifiable,
     }
 }
 
+typealias TutorTraceHandler = @MainActor (UUID, TraceEntry.Kind, String, String?) -> Void
+
 @Observable
 @MainActor
 final class LanguageWorkspaceModel {
@@ -66,6 +68,8 @@ final class LanguageWorkspaceModel {
     private(set) var isTutorStreaming = false
     private(set) var tutorError: String?
     private(set) var failedTutorMessageID: UUID?
+    private(set) var tutorCanContinue = false
+    private(set) var failedTutorContinuation = false
     @ObservationIgnored private var tutorTask: Task<Void, Never>?
     var onProfileChange: ((UUID?) -> Void)?
 
@@ -520,7 +524,7 @@ final class LanguageWorkspaceModel {
         if selectedTutorThreadID == id { selectedTutorThreadID = tutorThreads.first?.id }
     }
 
-    func sendTutorMessage(config: RequestConfig) {
+    func sendTutorMessage(config: RequestConfig, trace: @escaping TutorTraceHandler) {
         let content = tutorDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty, !isTutorStreaming, let profile = activeProfile else { return }
         if selectedTutorThreadID == nil { createTutorThread() }
@@ -545,62 +549,166 @@ final class LanguageWorkspaceModel {
         tutorDraft = ""
         startTutorTurn(
             config: config, profile: profile, threadID: threadID,
-            history: history, userMessageID: message.id)
+            history: history, userMessageID: message.id, trace: trace)
     }
 
-    func retryTutorMessage(config: RequestConfig) {
+    func retryTutorMessage(config: RequestConfig, trace: @escaping TutorTraceHandler) {
         guard !isTutorStreaming,
               let failedMessageID = failedTutorMessageID,
               let profile = activeProfile,
               let threadID = selectedTutorThreadID,
               let thread = tutorThreads.first(where: { $0.id == threadID }),
-              thread.messages.last?.id == failedMessageID,
-              thread.messages.last?.role == .user
+              thread.messages.contains(where: { $0.id == failedMessageID && $0.role == .user }),
+              failedTutorContinuation || thread.messages.last?.id == failedMessageID
         else { return }
         startTutorTurn(
             config: config, profile: profile, threadID: threadID,
-            history: thread.messages, userMessageID: failedMessageID)
+            history: thread.messages, userMessageID: failedMessageID, trace: trace,
+            continueResponse: failedTutorContinuation)
+    }
+
+    func continueTutorReply(config: RequestConfig, trace: @escaping TutorTraceHandler) {
+        guard !isTutorStreaming, tutorCanContinue,
+              let profile = activeProfile,
+              let threadID = selectedTutorThreadID,
+              let thread = tutorThreads.first(where: { $0.id == threadID }),
+              let userMessageID = thread.messages.last(where: { $0.role == .user })?.id
+        else { return }
+        tutorCanContinue = false
+        startTutorTurn(
+            config: config, profile: profile, threadID: threadID,
+            history: thread.messages, userMessageID: userMessageID, trace: trace,
+            continueResponse: true)
+    }
+
+    func dismissTutorContinuation() {
+        tutorCanContinue = false
     }
 
     private func startTutorTurn(
         config: RequestConfig, profile: LanguageProfile, threadID: UUID,
-        history: [LanguageTutorMessage], userMessageID: UUID
+        history: [LanguageTutorMessage], userMessageID: UUID, trace: @escaping TutorTraceHandler,
+        continueResponse: Bool = false
     ) {
         let knownItems = store.items(profileID: profile.id)
+        var wireMessages = LanguageTutorService.conversationMessages(
+            profile: profile, knownItems: knownItems, history: history)
         tutorError = nil
         failedTutorMessageID = nil
+        failedTutorContinuation = false
+        tutorCanContinue = false
         tutorStreamedReply = ""
         isTutorStreaming = true
         tutorTask = Task { [weak self] in
+            let toolRoundLimit = 3
+            var toolRounds = 0
+            var finishReason = "(not reported)"
+            var reasoningCharacters = 0
+            var usageSummary = "not reported"
+            var detectedRepetition: (channel: String, sample: String)?
             do {
-                for try await delta in LanguageTutorService.streamConversation(
-                    config: config, profile: profile, knownItems: knownItems, history: history)
-                {
+                while true {
+                    var toolCalls: [ToolCall] = []
+                    var turnText = ""
+                    let tools = toolRounds < toolRoundLimit ? LanguageTutorTools.definitions : nil
+                    for try await event in LanguageTutorService.streamConversation(
+                        config: config, messages: wireMessages, tools: tools,
+                        continueResponse: continueResponse && toolRounds == 0)
+                    {
+                        guard !Task.isCancelled, let self else { return }
+                        switch event {
+                        case .request(let summary, let detail):
+                            trace(threadID, .request, summary, detail)
+                        case .delta(let text):
+                            turnText += text
+                            self.tutorStreamedReply += text
+                        case .reasoning(let text):
+                            reasoningCharacters = text.utf8.count
+                            trace(threadID, .reasoning, "Tutor reasoning: \(reasoningCharacters) characters", text)
+                        case .toolCalls(let calls):
+                            toolCalls = calls
+                        case .repetition(let channel, let sample):
+                            detectedRepetition = (channel, sample)
+                            trace(
+                                threadID, .error, "Tutor generation stopped after repeating \(channel).",
+                                sample)
+                        case .result(let text):
+                            trace(threadID, .result, "Tutor response: \(text.utf8.count) characters", text.isEmpty ? "(empty)" : text)
+                        case .usage(let usage):
+                            let prompt = usage.promptTokens.map(String.init) ?? "n/a"
+                            let completion = usage.completionTokens.map(String.init) ?? "n/a"
+                            let total = usage.totalTokens.map(String.init) ?? "n/a"
+                            usageSummary = "prompt=\(prompt), completion=\(completion), total=\(total)"
+                            trace(threadID, .usage, usageSummary, nil)
+                        case .finish(let reason):
+                            finishReason = reason
+                            trace(threadID, .finish, "finish_reason=\(reason)", nil)
+                        }
+                    }
                     guard !Task.isCancelled, let self else { return }
-                    self.tutorStreamedReply += delta
+                    guard !toolCalls.isEmpty else { break }
+
+                    wireMessages.append(WireMessage(
+                        role: "assistant", content: turnText.isEmpty ? nil : .text(turnText),
+                        toolCalls: toolCalls))
+                    for call in toolCalls {
+                        let name = call.function.name ?? ""
+                        trace(threadID, .tool, "Tutor tool: \(name)", call.function.arguments)
+                        let result = self.performTutorTool(call, profileID: profile.id)
+                        trace(threadID, .result, "Tutor tool result: \(name)", result)
+                        wireMessages.append(.toolResult(id: call.id, name: name, content: result))
+                    }
+                    toolRounds += 1
                 }
                 guard !Task.isCancelled, let self else { return }
                 let reply = self.tutorStreamedReply.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !reply.isEmpty {
+                    let response = LanguageTutorMessage(role: .assistant, content: reply)
+                    guard self.store.appendTutorMessage(response, to: threadID) else {
+                        self.tutorError = "The tutor replied, but the response could not be saved. Retry the last message."
+                        trace(threadID, .error, "Tutor response could not be saved.", reply)
+                        self.failedTutorMessageID = userMessageID
+                        self.failedTutorContinuation = continueResponse
+                        self.tutorStreamedReply = ""
+                        self.isTutorStreaming = false
+                        self.tutorTask = nil
+                        return
+                    }
+                    if let index = self.tutorThreads.firstIndex(where: { $0.id == threadID }) {
+                        self.tutorThreads[index].messages.append(response)
+                        self.tutorThreads[index].updatedAt = response.createdAt
+                    }
+                }
+                if finishReason == "length" {
+                    self.tutorCanContinue = true
+                    trace(
+                        threadID, .info, "The server stopped at its output limit. The reply can be continued.",
+                        "visible_reply_chars=\(reply.utf8.count)")
+                    self.tutorStreamedReply = ""
+                    self.isTutorStreaming = false
+                    self.tutorTask = nil
+                    return
+                }
+                if detectedRepetition != nil {
+                    self.tutorError = "Tutor response stopped after repeating itself. Retry to continue without repeating."
+                    self.failedTutorMessageID = userMessageID
+                    self.failedTutorContinuation = true
+                    self.tutorStreamedReply = ""
+                    self.isTutorStreaming = false
+                    self.tutorTask = nil
+                    return
+                }
                 guard !reply.isEmpty else {
                     self.tutorError = "The tutor returned an empty reply. Retry the last message."
+                    trace(
+                        threadID, .error, "Tutor returned an empty reply.",
+                        "finish_reason=\(finishReason)\nreasoning_chars=\(reasoningCharacters)\nusage=\(usageSummary)")
                     self.failedTutorMessageID = userMessageID
+                    self.failedTutorContinuation = continueResponse
                     self.tutorStreamedReply = ""
                     self.isTutorStreaming = false
                     self.tutorTask = nil
                     return
-                }
-                let response = LanguageTutorMessage(role: .assistant, content: reply)
-                guard self.store.appendTutorMessage(response, to: threadID) else {
-                    self.tutorError = "The tutor replied, but the response could not be saved. Retry the last message."
-                    self.failedTutorMessageID = userMessageID
-                    self.tutorStreamedReply = ""
-                    self.isTutorStreaming = false
-                    self.tutorTask = nil
-                    return
-                }
-                if let index = self.tutorThreads.firstIndex(where: { $0.id == threadID }) {
-                    self.tutorThreads[index].messages.append(response)
-                    self.tutorThreads[index].updatedAt = response.createdAt
                 }
                 self.tutorStreamedReply = ""
                 self.isTutorStreaming = false
@@ -610,7 +718,9 @@ final class LanguageWorkspaceModel {
             } catch {
                 guard let self, !Task.isCancelled else { return }
                 self.tutorError = error.localizedDescription
+                trace(threadID, .error, "Tutor request failed: \(error.localizedDescription)", nil)
                 self.failedTutorMessageID = userMessageID
+                self.failedTutorContinuation = continueResponse
                 self.tutorStreamedReply = ""
                 self.isTutorStreaming = false
                 self.tutorTask = nil
@@ -624,6 +734,8 @@ final class LanguageWorkspaceModel {
         tutorStreamedReply = ""
         isTutorStreaming = false
         failedTutorMessageID = nil
+        failedTutorContinuation = false
+        tutorCanContinue = false
     }
 
     func notifyDeckChanged() {

@@ -33,6 +33,8 @@ final class TraceStore {
     }
 
     func deleteTraceFile(conversationID: UUID) {
+        traceSaveTasks[conversationID]?.cancel()
+        traceSaveTasks[conversationID] = nil
         traces[conversationID] = nil
         let url = traceFileURL(conversationID)
         try? FileManager.default.removeItem(at: url)

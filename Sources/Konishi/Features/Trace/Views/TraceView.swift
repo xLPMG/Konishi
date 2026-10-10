@@ -3,6 +3,8 @@ import SwiftUI
 struct TraceView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    var conversationID: UUID? = nil
+    var title = "Trace"
     @State private var pinned = true
     @State private var expanded: Set<UUID> = []
     @State private var filterText = ""
@@ -11,12 +13,13 @@ struct TraceView: View {
     private static let filterableKinds = TraceEntry.Kind.allCases.filter { $0 != .token }
 
     var body: some View {
-        let visibleTrace = model.currentTrace.filter { $0.kind != .token }
-        let totalTraceCount = model.currentTrace.count
+        let trace = traceID.flatMap { model.traceStore.traces[$0] } ?? []
+        let visibleTrace = trace.filter { $0.kind != .token }
+        let totalTraceCount = trace.count
         let entries = filteredTrace(from: visibleTrace)
         VStack(spacing: 0) {
             HStack {
-                Text("Trace").font(.headline)
+                Text(title).font(.headline)
                 Spacer()
                 Text("\(entries.count) of \(visibleTrace.count) events")
                     .font(.caption).foregroundStyle(.secondary)
@@ -26,7 +29,7 @@ struct TraceView: View {
                     NSPasteboard.general.setString(text, forType: .string)
                 } label: { Label("Copy", systemImage: "doc.on.doc") }
                 Button("Clear") {
-                    if let id = model.selectedConversationID { model.traceStore.clearTrace(conversationID: id) }
+                    if let id = traceID { model.traceStore.clearTrace(conversationID: id) }
                 }
                 Button("Done") { dismiss() }
             }
@@ -93,12 +96,14 @@ struct TraceView: View {
         .frame(minWidth: 560, minHeight: 460)
         .background(model.currentPalette.canvas.ignoresSafeArea())
         .onAppear {
-            if let id = model.selectedConversationID { model.traceStore.ensureTraceLoaded(conversationID: id) }
+            if let id = traceID { model.traceStore.ensureTraceLoaded(conversationID: id) }
         }
-        .onChange(of: model.selectedConversationID) { _, id in
+        .onChange(of: traceID) { _, id in
             if let id { model.traceStore.ensureTraceLoaded(conversationID: id) }
         }
     }
+
+    private var traceID: UUID? { conversationID ?? model.selectedConversationID }
 
     private var typeFilterLabel: String {
         if selectedKinds.count == Self.filterableKinds.count { return "All Types" }

@@ -6,6 +6,17 @@ struct VocabularyProposalResult: Sendable {
     let error: String?
 }
 
+enum LanguageTutorStreamEvent: Sendable {
+    case request(summary: String, detail: String)
+    case delta(String)
+    case reasoning(String)
+    case toolCalls([ToolCall])
+    case repetition(channel: String, sample: String)
+    case result(String)
+    case usage(Usage)
+    case finish(String)
+}
+
 enum LanguageTutorService {
     private struct ProposalEnvelope: Decodable {
         let proposals: [Proposal]
@@ -124,33 +135,120 @@ enum LanguageTutorService {
     }
 
     static func streamConversation(
-        config: RequestConfig, profile: LanguageProfile, knownItems: [LearnItem],
-        history: [LanguageTutorMessage]
-    ) -> AsyncThrowingStream<String, Error> {
+        config: RequestConfig, messages: [WireMessage], tools: [ToolDef]?, continueResponse: Bool = false
+    ) -> AsyncThrowingStream<LanguageTutorStreamEvent, Error> {
         var boundedConfig = config
-        boundedConfig.maxTokens = min(config.maxTokens ?? 1200, 1200)
         boundedConfig.temperature = min(max(config.temperature, 0.35), 0.8)
         boundedConfig.enableThinking = config.enableThinking ?? false
         let streamConfig = boundedConfig
-        let messages = conversationMessages(profile: profile, knownItems: knownItems, history: history)
+        var messages = messages
+        if continueResponse {
+            let instruction = messages.last?.role == LanguageTutorRole.assistant.rawValue
+                ? "Continue your previous answer from exactly where it stopped. Do not repeat text already provided."
+                : "The previous generation stopped before producing visible text. Answer the user's request directly and concisely."
+            if let lastIndex = messages.indices.last,
+                messages[lastIndex].role == LanguageTutorRole.user.rawValue,
+                case .text(let previous)? = messages[lastIndex].content
+            {
+                messages[lastIndex].content = .text(previous + "\n\n" + instruction)
+            } else {
+                messages.append(WireMessage(role: LanguageTutorRole.user.rawValue, text: instruction))
+            }
+        }
+        let streamMessages = messages
+        let request = conversationRequestTrace(config: streamConfig, messages: messages)
 
-        return AsyncThrowingStream(String.self) { continuation in
+        return AsyncThrowingStream(LanguageTutorStreamEvent.self) { continuation in
+            continuation.yield(.request(summary: request.summary, detail: request.detail))
             let task = Task {
+                var response = ""
+                var reasoning = ""
+                var finishReason = "(not reported)"
+                var usage: Usage?
+                var responseGuard = RepeatedLineGuard()
+                var reasoningGuard = RepeatedLineGuard()
                 do {
-                    for try await event in ChatService.stream(config: streamConfig, messages: messages, tools: nil) {
-                        if case .delta(let text) = event, !text.isEmpty {
-                            continuation.yield(text)
+                    streamLoop: for try await event in ChatService.stream(
+                        config: streamConfig, messages: streamMessages, tools: tools)
+                    {
+                        switch event {
+                        case .delta(let text) where !text.isEmpty:
+                            response += text
+                            continuation.yield(.delta(text))
+                            if let repeated = responseGuard.consume(text) {
+                                finishReason = "repetition"
+                                continuation.yield(.repetition(channel: "reply text", sample: repeated))
+                                break streamLoop
+                            }
+                        case .reasoning(let text):
+                            reasoning += text
+                            if let repeated = reasoningGuard.consume(text) {
+                                finishReason = "repetition"
+                                continuation.yield(.repetition(channel: "reasoning", sample: repeated))
+                                break streamLoop
+                            }
+                        case .usage(let value):
+                            usage = value
+                        case .toolCalls(let calls):
+                            continuation.yield(.toolCalls(calls))
+                        case .finish(let reason):
+                            finishReason = reason ?? "(nil)"
+                        case .delta, .toolCallDelta:
+                            break
                         }
                     }
-                    continuation.finish()
+                    if finishReason != "repetition" {
+                        if let repeated = responseGuard.finish() {
+                            finishReason = "repetition"
+                            continuation.yield(.repetition(channel: "reply text", sample: repeated))
+                        } else if let repeated = reasoningGuard.finish() {
+                            finishReason = "repetition"
+                            continuation.yield(.repetition(channel: "reasoning", sample: repeated))
+                        }
+                    }
                 } catch is CancellationError {
                     continuation.finish()
+                    return
                 } catch {
+                    continuation.yield(.result(response))
+                    if !reasoning.isEmpty { continuation.yield(.reasoning(reasoning)) }
+                    if let usage { continuation.yield(.usage(usage)) }
+                    continuation.yield(.finish(finishReason))
                     continuation.finish(throwing: error)
+                    return
                 }
+                continuation.yield(.result(response))
+                if !reasoning.isEmpty { continuation.yield(.reasoning(reasoning)) }
+                if let usage { continuation.yield(.usage(usage)) }
+                continuation.yield(.finish(finishReason))
+                continuation.finish()
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    private static func conversationRequestTrace(
+        config: RequestConfig, messages: [WireMessage]
+    ) -> (summary: String, detail: String) {
+        let roles = messages.map(\.role).reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+            .map { "\($0.key):\($0.value)" }.sorted().joined(separator: " ")
+        let summary = [
+            "model=\(config.model)  temp=\(config.temperature)  maxTokens=\(config.maxTokens.map(String.init) ?? "default")",
+            "messages=\(messages.count) [\(roles)]  thinking=\(config.enableThinking == true ? "on" : "off")"
+        ].joined(separator: "\n")
+        let detail = messages.map { message in
+            let content: String
+            switch message.content {
+            case let .some(.text(text)):
+                content = text
+            case let .some(.parts(parts)):
+                content = parts.map { $0.text ?? "[\($0.type)]" }.joined(separator: "\n")
+            case .none:
+                content = "(no content)"
+            }
+            return "── \(message.role) ──\n\(content)"
+        }.joined(separator: "\n\n")
+        return (summary, detail)
     }
 
     static func estimatedContextTokens(
@@ -169,12 +267,12 @@ enum LanguageTutorService {
         return (bytes + 3) / 4
     }
 
-    private static func conversationMessages(
+    static func conversationMessages(
         profile: LanguageProfile, knownItems: [LearnItem], history: [LanguageTutorMessage]
     ) -> [WireMessage] {
         let knownTerms = knownItems.filter { $0.kind == .vocab }.prefix(100).map(\.term).joined(separator: ", ")
         let system = """
-        You are a patient language tutor helping the learner study \(profile.targetName) at \(profile.level.code). Explain in \(profile.baseName). \(profile.romanization.guidance) Use the learner's goals and script notes as preferences for explanations and examples: goals = \(profile.goals.isEmpty ? "not specified" : profile.goals); script notes = \(profile.scriptNotes.isEmpty ? "none" : profile.scriptNotes). Correct mistakes gently and keep the conversation natural. The following is a partial sample of recent known deck vocabulary, not a complete list; absence from it does not mean a word is unlearned: \(knownTerms). Do not claim a word is unlearned if it appears in that sample. You may suggest useful words, but never claim anything was saved. You have no tools and must not control lessons, quizzes, grades, or deck persistence.
+        You are a patient language tutor helping the learner study \(profile.targetName) at \(profile.level.code). Explain in \(profile.baseName). \(profile.romanization.guidance) Use the learner's goals and script notes as preferences for explanations and examples: goals = \(profile.goals.isEmpty ? "not specified" : profile.goals); script notes = \(profile.scriptNotes.isEmpty ? "none" : profile.scriptNotes). Correct mistakes gently and keep the conversation natural. The following is a partial sample of recent known deck vocabulary, not a complete list; absence from it does not mean a word is unlearned: \(knownTerms). Do not claim a word is unlearned if it appears in that sample. Use language_deck_summary, language_deck_list, language_deck_search, language_due_items, and language_review_history to answer questions about the active deck and actual review history; the due queue is based on scheduled dates. These are read-only. Use add_vocabulary only when the learner explicitly asks to add or save words, not when merely discussing or suggesting vocabulary. That tool immediately saves valid new cards; report only what its result confirms. Do not control lessons, quizzes, grades, or any other deck data.
         """
         return [WireMessage(role: "system", text: system)] + history.suffix(16).map {
             WireMessage(role: $0.role.rawValue, text: String($0.content.prefix(4_000)))

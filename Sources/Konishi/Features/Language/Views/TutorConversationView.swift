@@ -4,6 +4,7 @@ struct TutorConversationView: View {
     @Environment(AppModel.self) private var appModel
     @Bindable var workspace: LanguageWorkspaceModel
     @State private var confirmDelete = false
+    @State private var showTutorTrace = false
     @State private var threadPendingDeletion: LanguageTutorThread?
     @FocusState private var inputFocused: Bool
 
@@ -24,8 +25,21 @@ struct TutorConversationView: View {
         .onChange(of: appModel.voice.isListening) { _, listening in
             if !listening { appModel.voice.stopDictation() }
         }
+        .sheet(isPresented: $showTutorTrace) {
+            if let id = workspace.selectedTutorThreadID {
+                TraceView(conversationID: id, title: "Tutor Trace")
+                    .environment(appModel)
+                    .tint(appModel.currentAccent)
+            }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
+                if workspace.selectedTutorThreadID != nil {
+                    Button { showTutorTrace = true } label: {
+                        Label("Trace", systemImage: "waveform.path.ecg")
+                    }
+                    .help("Inspect this tutor thread's model requests and responses")
+                }
                 if appModel.voice.isSpeaking {
                     Button { appModel.voice.stopSpeaking() } label: {
                         Label("Stop Voice", systemImage: "speaker.slash")
@@ -44,6 +58,7 @@ struct TutorConversationView: View {
             Button("Delete Conversation", role: .destructive) {
                 if let thread = threadPendingDeletion {
                     if thread.id == workspace.selectedTutorThreadID { appModel.voice.stopSpeaking() }
+                    appModel.traceStore.deleteTraceFile(conversationID: thread.id)
                     workspace.deleteTutorThread(thread.id)
                 }
                 threadPendingDeletion = nil
@@ -149,7 +164,8 @@ struct TutorConversationView: View {
                         Spacer(minLength: 0)
                         if workspace.failedTutorMessageID != nil {
                             Button("Retry") {
-                                workspace.retryTutorMessage(config: tutorRequestConfig())
+                                workspace.retryTutorMessage(
+                                    config: tutorRequestConfig(), trace: recordTutorTrace)
                             }
                             .buttonStyle(.bordered)
                             .disabled(workspace.isTutorStreaming)
@@ -157,6 +173,25 @@ struct TutorConversationView: View {
                     }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 14).padding(.top, 8)
+                }
+                if workspace.tutorCanContinue {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Continue this reply?")
+                                .font(.callout.weight(.semibold))
+                            Text(selectedThread?.messages.last?.role == .assistant
+                                ? "The server stopped at its output limit."
+                                : "The server stopped before returning visible text.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Button("Stop") { workspace.dismissTutorContinuation() }
+                            .buttonStyle(.bordered)
+                        Button("Continue", action: continueTutorReply)
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
                 }
                 inputBar(profile: profile)
             }
@@ -352,7 +387,19 @@ struct TutorConversationView: View {
     }
 
     private func send() {
-        workspace.sendTutorMessage(config: tutorRequestConfig())
+        workspace.sendTutorMessage(config: tutorRequestConfig(), trace: recordTutorTrace)
+    }
+
+    private func continueTutorReply() {
+        workspace.continueTutorReply(config: tutorRequestConfig(), trace: recordTutorTrace)
+    }
+
+    private func recordTutorTrace(
+        _ threadID: UUID, _ kind: TraceEntry.Kind, _ text: String, _ detail: String?
+    ) {
+        appModel.traceStore.trace(
+            conversationID: threadID, kind: kind, text: text,
+            saveTraces: appModel.settings.saveTraces, detail: detail)
     }
 
     private func tutorRequestConfig() -> RequestConfig {

@@ -224,6 +224,78 @@ struct LanguageWorkspaceModelTests {
         #expect(store.items(profileID: profile.id).count == 1)
     }
 
+    @Test("tutor add_vocabulary tool saves cards and reports duplicates")
+    @MainActor
+    func tutorCanAddVocabulary() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        store.upsertProfile(profile)
+        let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
+        let call = ToolCall(
+            id: "call-1", type: "function",
+            function: FunctionCall(
+                name: "add_vocabulary",
+                arguments: #"{"items":[{"target_term":"学校","translation":"school","reading":"がっこう","accepted_translations":["school building"]}]}"#))
+
+        let result = workspace.performTutorTool(call, profileID: profile.id)
+
+        let saved = try #require(store.findByTerm(profileID: profile.id, kind: .vocab, term: "学校"))
+        #expect(saved.translation == "school")
+        #expect(saved.reading == "がっこう")
+        #expect(saved.acceptedTranslations == ["school building"])
+        #expect(result.contains("Added 1 vocabulary card"))
+        #expect(workspace.deckRevision == 1)
+
+        let duplicateResult = workspace.performTutorTool(call, profileID: profile.id)
+        #expect(duplicateResult.contains("Skipped"))
+        #expect(store.items(profileID: profile.id).count == 1)
+    }
+
+    @Test("tutor read tools expose deck cards, due queue, summary, and review history")
+    @MainActor
+    func tutorCanReadDeckAndReviews() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        let dueCard = LearnItem(
+            profileID: profile.id, kind: .vocab, term: "猫", reading: "ねこ", translation: "cat",
+            dueDate: Date(timeIntervalSince1970: 1_700_000_000),
+            createdAt: Date(timeIntervalSince1970: 1_600_000_000))
+        let futureCard = LearnItem(
+            profileID: profile.id, kind: .phrase, term: "またね", translation: "see you",
+            dueDate: Date(timeIntervalSince1970: 2_000_000_000),
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000))
+        store.upsertProfile(profile)
+        store.upsert(dueCard)
+        store.upsert(futureCard)
+        let attempt = LanguageReviewAttempt(
+            profileID: profile.id, itemID: dueCard.id, activity: .typedRecall, outcome: .correct,
+            createdAt: Date(timeIntervalSince1970: 1_700_000_000), submittedAnswer: "cat")
+        guard case .recorded = store.recordReview(attempt) else {
+            Issue.record("Could not seed review history for the tutor tool test.")
+            return
+        }
+        let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
+
+        let summary = workspace.performTutorTool(tutorCall("language_deck_summary"), profileID: profile.id)
+        let page = workspace.performTutorTool(
+            tutorCall("language_deck_list", #"{"limit":1,"offset":1}"#), profileID: profile.id)
+        let search = workspace.performTutorTool(
+            tutorCall("language_deck_search", #"{"query":"ねこ"}"#), profileID: profile.id)
+        let due = workspace.performTutorTool(tutorCall("language_due_items"), profileID: profile.id)
+        let history = workspace.performTutorTool(tutorCall("language_review_history"), profileID: profile.id)
+
+        #expect(summary.contains("total=2"))
+        #expect(summary.contains("due=1"))
+        #expect(page.contains("猫"))
+        #expect(search.contains("cat"))
+        #expect(due.contains("猫"))
+        #expect(!due.contains("またね"))
+        #expect(history.contains("猫 — correct"))
+        #expect(history.contains("answer: cat"))
+    }
+
     @Test("manual card creation and editing preserve scheduling and reject duplicate terms")
     @MainActor
     func manualCardSave() throws {
@@ -348,6 +420,11 @@ struct LanguageWorkspaceModelTests {
         LearnItem(
             profileID: profileID, kind: .vocab, term: term, translation: translation,
             dueDate: Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    private func tutorCall(_ name: String, _ arguments: String = "{}") -> ToolCall {
+        ToolCall(id: "call-\(name)", type: "function",
+                 function: FunctionCall(name: name, arguments: arguments))
     }
 
     private func executeSQL(_ sql: String, at url: URL) throws {
