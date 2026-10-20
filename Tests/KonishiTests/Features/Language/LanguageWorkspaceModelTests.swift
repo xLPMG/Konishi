@@ -296,6 +296,96 @@ struct LanguageWorkspaceModelTests {
         #expect(history.contains("answer: cat"))
     }
 
+    @Test("tutor reasoning persists with the assistant message")
+    @MainActor
+    func tutorReasoningRoundTrip() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        store.upsertProfile(profile)
+        let thread = try #require(store.createTutorThread(profileID: profile.id))
+        let userMessage = LanguageTutorMessage(role: .user, content: "Why?")
+        let assistantMessage = LanguageTutorMessage(
+            role: .assistant, content: "Because.", reasoning: "I compared the two forms.")
+
+        #expect(store.appendTutorMessage(userMessage, to: thread.id))
+        #expect(store.appendTutorMessage(assistantMessage, to: thread.id))
+
+        let loadedThread = try #require(store.tutorThreads(profileID: profile.id).first)
+        #expect(loadedThread.messages.first?.reasoning == nil)
+        #expect(loadedThread.messages.last?.reasoning == "I compared the two forms.")
+    }
+
+    @Test("tutor tool exchanges persist with the assistant message")
+    @MainActor
+    func tutorToolExchangeRoundTrip() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        store.upsertProfile(profile)
+        let thread = try #require(store.createTutorThread(profileID: profile.id))
+        let exchange = LanguageTutorToolExchange(
+            id: "call-1", name: "language_due_items", arguments: #"{"limit":5}"#,
+            result: "Due cards (1 shown; 1 total): - 猫")
+        let message = LanguageTutorMessage(
+            role: .assistant, content: "You have one card due.", toolExchanges: [exchange])
+        #expect(store.appendTutorMessage(message, to: thread.id))
+
+        let loadedThread = try #require(store.tutorThreads(profileID: profile.id).first)
+
+        #expect(loadedThread.messages.first?.toolExchanges == [exchange])
+    }
+
+    @Test("legacy tutor messages decode without tool exchanges")
+    func legacyTutorMessageDecodes() throws {
+        let messageID = UUID()
+        let data = Data("""
+        {"id":"\(messageID.uuidString)","role":"assistant","content":"Earlier reply","createdAt":0}
+        """.utf8)
+
+        let message = try JSONDecoder().decode(LanguageTutorMessage.self, from: data)
+
+        #expect(message.id == messageID)
+        #expect(message.content == "Earlier reply")
+        #expect(message.toolExchanges.isEmpty)
+    }
+
+    @Test("deleting a tutor message removes it from SQLite and the selected thread")
+    @MainActor
+    func deleteTutorMessage() throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let profile = makeProfile()
+        store.upsertProfile(profile)
+        let thread = try #require(store.createTutorThread(profileID: profile.id))
+        let userMessage = LanguageTutorMessage(role: .user, content: "First")
+        let assistantMessage = LanguageTutorMessage(role: .assistant, content: "Reply")
+        #expect(store.appendTutorMessage(userMessage, to: thread.id))
+        #expect(store.appendTutorMessage(assistantMessage, to: thread.id))
+        let workspace = LanguageWorkspaceModel(store: store, activeProfileID: profile.id.uuidString)
+
+        workspace.deleteTutorMessage(userMessage.id)
+
+        #expect(workspace.tutorThreads.first?.messages.map(\.id) == [assistantMessage.id])
+        #expect(store.tutorThreads(profileID: profile.id).first?.messages.map(\.id) == [assistantMessage.id])
+        #expect(!store.deleteTutorMessage(id: userMessage.id, threadID: thread.id))
+    }
+
+    @Test("reasoning-only tutor messages stay out of model history")
+    @MainActor
+    func reasoningOnlyTutorMessageIsNotSentBack() {
+        let profile = makeProfile()
+        let history = [
+            LanguageTutorMessage(role: .user, content: "Why?"),
+            LanguageTutorMessage(role: .assistant, content: "", reasoning: "Internal reasoning")
+        ]
+
+        let messages = LanguageTutorService.conversationMessages(
+            profile: profile, knownItems: [], history: history)
+
+        #expect(messages.map(\.role) == ["system", "user"])
+    }
+
     @Test("manual card creation and editing preserve scheduling and reject duplicate terms")
     @MainActor
     func manualCardSave() throws {

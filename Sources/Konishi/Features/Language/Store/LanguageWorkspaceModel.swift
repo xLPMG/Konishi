@@ -65,6 +65,8 @@ final class LanguageWorkspaceModel {
     private(set) var selectedTutorThreadID: UUID?
     var tutorDraft = ""
     private(set) var tutorStreamedReply = ""
+    private(set) var tutorStreamedReasoning = ""
+    private(set) var tutorStreamedToolExchanges: [LanguageTutorToolExchange] = []
     private(set) var isTutorStreaming = false
     private(set) var tutorError: String?
     private(set) var failedTutorMessageID: UUID?
@@ -524,6 +526,19 @@ final class LanguageWorkspaceModel {
         if selectedTutorThreadID == id { selectedTutorThreadID = tutorThreads.first?.id }
     }
 
+    func deleteTutorMessage(_ id: UUID) {
+        guard !isTutorStreaming,
+              let threadID = selectedTutorThreadID,
+              tutorThreads.first(where: { $0.id == threadID })?.messages.contains(where: { $0.id == id }) == true
+        else { return }
+        guard store.deleteTutorMessage(id: id, threadID: threadID) else {
+            tutorError = "Could not delete this tutor message."
+            return
+        }
+        refreshTutorThreads()
+        tutorError = nil
+    }
+
     func sendTutorMessage(config: RequestConfig, trace: @escaping TutorTraceHandler) {
         let content = tutorDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty, !isTutorStreaming, let profile = activeProfile else { return }
@@ -598,6 +613,8 @@ final class LanguageWorkspaceModel {
         failedTutorContinuation = false
         tutorCanContinue = false
         tutorStreamedReply = ""
+        tutorStreamedReasoning = ""
+        tutorStreamedToolExchanges = []
         isTutorStreaming = true
         tutorTask = Task { [weak self] in
             let toolRoundLimit = 3
@@ -622,6 +639,9 @@ final class LanguageWorkspaceModel {
                         case .delta(let text):
                             turnText += text
                             self.tutorStreamedReply += text
+                        case .reasoningDelta(let text):
+                            self.tutorStreamedReasoning += text
+                            reasoningCharacters = self.tutorStreamedReasoning.utf8.count
                         case .reasoning(let text):
                             reasoningCharacters = text.utf8.count
                             trace(threadID, .reasoning, "Tutor reasoning: \(reasoningCharacters) characters", text)
@@ -655,6 +675,8 @@ final class LanguageWorkspaceModel {
                         let name = call.function.name ?? ""
                         trace(threadID, .tool, "Tutor tool: \(name)", call.function.arguments)
                         let result = self.performTutorTool(call, profileID: profile.id)
+                        self.tutorStreamedToolExchanges.append(LanguageTutorToolExchange(
+                            id: call.id, name: name, arguments: call.function.arguments, result: result))
                         trace(threadID, .result, "Tutor tool result: \(name)", result)
                         wireMessages.append(.toolResult(id: call.id, name: name, content: result))
                     }
@@ -662,14 +684,19 @@ final class LanguageWorkspaceModel {
                 }
                 guard !Task.isCancelled, let self else { return }
                 let reply = self.tutorStreamedReply.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !reply.isEmpty {
-                    let response = LanguageTutorMessage(role: .assistant, content: reply)
+                if !reply.isEmpty || !self.tutorStreamedReasoning.isEmpty || !self.tutorStreamedToolExchanges.isEmpty {
+                    let response = LanguageTutorMessage(
+                        role: .assistant, content: reply, reasoning: self.tutorStreamedReasoning.isEmpty
+                            ? nil : self.tutorStreamedReasoning,
+                        toolExchanges: self.tutorStreamedToolExchanges)
                     guard self.store.appendTutorMessage(response, to: threadID) else {
                         self.tutorError = "The tutor replied, but the response could not be saved. Retry the last message."
                         trace(threadID, .error, "Tutor response could not be saved.", reply)
                         self.failedTutorMessageID = userMessageID
                         self.failedTutorContinuation = continueResponse
                         self.tutorStreamedReply = ""
+                        self.tutorStreamedReasoning = ""
+                        self.tutorStreamedToolExchanges = []
                         self.isTutorStreaming = false
                         self.tutorTask = nil
                         return
@@ -685,6 +712,8 @@ final class LanguageWorkspaceModel {
                         threadID, .info, "The server stopped at its output limit. The reply can be continued.",
                         "visible_reply_chars=\(reply.utf8.count)")
                     self.tutorStreamedReply = ""
+                    self.tutorStreamedReasoning = ""
+                    self.tutorStreamedToolExchanges = []
                     self.isTutorStreaming = false
                     self.tutorTask = nil
                     return
@@ -694,6 +723,8 @@ final class LanguageWorkspaceModel {
                     self.failedTutorMessageID = userMessageID
                     self.failedTutorContinuation = true
                     self.tutorStreamedReply = ""
+                    self.tutorStreamedReasoning = ""
+                    self.tutorStreamedToolExchanges = []
                     self.isTutorStreaming = false
                     self.tutorTask = nil
                     return
@@ -706,11 +737,15 @@ final class LanguageWorkspaceModel {
                     self.failedTutorMessageID = userMessageID
                     self.failedTutorContinuation = continueResponse
                     self.tutorStreamedReply = ""
+                    self.tutorStreamedReasoning = ""
+                    self.tutorStreamedToolExchanges = []
                     self.isTutorStreaming = false
                     self.tutorTask = nil
                     return
                 }
                 self.tutorStreamedReply = ""
+                self.tutorStreamedReasoning = ""
+                self.tutorStreamedToolExchanges = []
                 self.isTutorStreaming = false
                 self.tutorTask = nil
             } catch is CancellationError {
@@ -722,6 +757,8 @@ final class LanguageWorkspaceModel {
                 self.failedTutorMessageID = userMessageID
                 self.failedTutorContinuation = continueResponse
                 self.tutorStreamedReply = ""
+                self.tutorStreamedReasoning = ""
+                self.tutorStreamedToolExchanges = []
                 self.isTutorStreaming = false
                 self.tutorTask = nil
             }
@@ -732,6 +769,8 @@ final class LanguageWorkspaceModel {
         tutorTask?.cancel()
         tutorTask = nil
         tutorStreamedReply = ""
+        tutorStreamedReasoning = ""
+        tutorStreamedToolExchanges = []
         isTutorStreaming = false
         failedTutorMessageID = nil
         failedTutorContinuation = false

@@ -114,6 +114,18 @@ final class LanguageStore {
                     try execute("PRAGMA user_version = 4;")
                 }
             }
+            if version < 5 {
+                try transaction {
+                    try addColumn("reasoning", definition: "TEXT", table: "tutor_messages")
+                    try execute("PRAGMA user_version = 5;")
+                }
+            }
+            if version < 6 {
+                try transaction {
+                    try addColumn("toolExchanges", definition: "TEXT", table: "tutor_messages")
+                    try execute("PRAGMA user_version = 6;")
+                }
+            }
         } catch {
             initializationError = error.localizedDescription
             NSLog("LanguageStore: migration failed: \(error.localizedDescription)")
@@ -437,18 +449,57 @@ final class LanguageStore {
         do {
             try transaction {
                 try withStatement("""
-                    INSERT INTO tutor_messages (id, threadID, role, content, createdAt)
-                    VALUES (?, ?, ?, ?, ?);
+                    INSERT INTO tutor_messages (id, threadID, role, content, createdAt, reasoning, toolExchanges)
+                    VALUES (?, ?, ?, ?, ?, ?, ?);
                     """) { stmt in
                     bind(stmt, 1, message.id.uuidString)
                     bind(stmt, 2, threadID.uuidString)
                     bind(stmt, 3, message.role.rawValue)
                     bind(stmt, 4, message.content)
                     sqlite3_bind_double(stmt, 5, message.createdAt.timeIntervalSince1970)
+                    if let reasoning = message.reasoning { bind(stmt, 6, reasoning) }
+                    else { sqlite3_bind_null(stmt, 6) }
+                    if message.toolExchanges.isEmpty {
+                        sqlite3_bind_null(stmt, 7)
+                    } else {
+                        let data = try JSONEncoder().encode(message.toolExchanges)
+                        guard let encoded = String(data: data, encoding: .utf8) else { throw storeError() }
+                        bind(stmt, 7, encoded)
+                    }
                     guard sqlite3_step(stmt) == SQLITE_DONE else { throw storeError() }
                 }
                 try withStatement("UPDATE tutor_threads SET updatedAt = ? WHERE id = ?;") { stmt in
                     sqlite3_bind_double(stmt, 1, message.createdAt.timeIntervalSince1970)
+                    bind(stmt, 2, threadID.uuidString)
+                    guard sqlite3_step(stmt) == SQLITE_DONE, sqlite3_changes(db) == 1 else {
+                        throw storeError()
+                    }
+                }
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func deleteTutorMessage(id: UUID, threadID: UUID) -> Bool {
+        guard let db else { return false }
+        do {
+            try transaction {
+                try withStatement("DELETE FROM tutor_messages WHERE id = ? AND threadID = ?;") { stmt in
+                    bind(stmt, 1, id.uuidString)
+                    bind(stmt, 2, threadID.uuidString)
+                    guard sqlite3_step(stmt) == SQLITE_DONE, sqlite3_changes(db) == 1 else {
+                        throw storeError()
+                    }
+                }
+                try withStatement("""
+                    UPDATE tutor_threads
+                    SET updatedAt = COALESCE(
+                        (SELECT MAX(createdAt) FROM tutor_messages WHERE threadID = ?), createdAt)
+                    WHERE id = ?;
+                    """) { stmt in
+                    bind(stmt, 1, threadID.uuidString)
                     bind(stmt, 2, threadID.uuidString)
                     guard sqlite3_step(stmt) == SQLITE_DONE, sqlite3_changes(db) == 1 else {
                         throw storeError()
@@ -481,7 +532,7 @@ final class LanguageStore {
     private func tutorMessages(threadID: UUID) -> [LanguageTutorMessage] {
         var messages: [LanguageTutorMessage] = []
         prepared("""
-            SELECT id, role, content, createdAt FROM tutor_messages
+            SELECT id, role, content, createdAt, reasoning, toolExchanges FROM tutor_messages
             WHERE threadID = ? ORDER BY createdAt, rowid;
             """) { stmt in
             bind(stmt, 1, threadID.uuidString)
@@ -506,9 +557,18 @@ final class LanguageStore {
         guard let id = UUID(uuidString: text(stmt, 0)),
               let role = LanguageTutorRole(rawValue: text(stmt, 1))
         else { return nil }
+        let toolExchanges: [LanguageTutorToolExchange]
+        if sqlite3_column_type(stmt, 5) == SQLITE_NULL {
+            toolExchanges = []
+        } else {
+            let data = Data(text(stmt, 5).utf8)
+            toolExchanges = (try? JSONDecoder().decode([LanguageTutorToolExchange].self, from: data)) ?? []
+        }
         return LanguageTutorMessage(
             id: id, role: role, content: text(stmt, 2),
-            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)))
+            createdAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)),
+            reasoning: sqlite3_column_type(stmt, 4) == SQLITE_NULL ? nil : text(stmt, 4),
+            toolExchanges: toolExchanges)
     }
 
     private func reviewAttempt(id: UUID) -> LanguageReviewAttempt? {

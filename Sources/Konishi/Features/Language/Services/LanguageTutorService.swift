@@ -9,6 +9,7 @@ struct VocabularyProposalResult: Sendable {
 enum LanguageTutorStreamEvent: Sendable {
     case request(summary: String, detail: String)
     case delta(String)
+    case reasoningDelta(String)
     case reasoning(String)
     case toolCalls([ToolCall])
     case repetition(channel: String, sample: String)
@@ -182,6 +183,7 @@ enum LanguageTutorService {
                             }
                         case .reasoning(let text):
                             reasoning += text
+                            continuation.yield(.reasoningDelta(text))
                             if let repeated = reasoningGuard.consume(text) {
                                 finishReason = "repetition"
                                 continuation.yield(.repetition(channel: "reasoning", sample: repeated))
@@ -274,7 +276,10 @@ enum LanguageTutorService {
         let system = """
         You are a patient language tutor helping the learner study \(profile.targetName) at \(profile.level.code). Explain in \(profile.baseName). \(profile.romanization.guidance) Use the learner's goals and script notes as preferences for explanations and examples: goals = \(profile.goals.isEmpty ? "not specified" : profile.goals); script notes = \(profile.scriptNotes.isEmpty ? "none" : profile.scriptNotes). Correct mistakes gently and keep the conversation natural. The following is a partial sample of recent known deck vocabulary, not a complete list; absence from it does not mean a word is unlearned: \(knownTerms). Do not claim a word is unlearned if it appears in that sample. Use language_deck_summary, language_deck_list, language_deck_search, language_due_items, and language_review_history to answer questions about the active deck and actual review history; the due queue is based on scheduled dates. These are read-only. Use add_vocabulary only when the learner explicitly asks to add or save words, not when merely discussing or suggesting vocabulary. That tool immediately saves valid new cards; report only what its result confirms. Do not control lessons, quizzes, grades, or any other deck data.
         """
-        return [WireMessage(role: "system", text: system)] + history.suffix(16).map {
+        let visibleHistory = history.filter {
+            $0.role == .user || !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return [WireMessage(role: "system", text: system)] + visibleHistory.suffix(16).map {
             WireMessage(role: $0.role.rawValue, text: String($0.content.prefix(4_000)))
         }
     }

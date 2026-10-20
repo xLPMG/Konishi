@@ -33,23 +33,35 @@ struct TutorConversationView: View {
             }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .automatic) {
-                if workspace.selectedTutorThreadID != nil {
-                    Button { showTutorTrace = true } label: {
-                        Label("Trace", systemImage: "waveform.path.ecg")
+            ToolbarItem(placement: .automatic) {
+                HStack(spacing: 8) {
+                    ModelSelector()
+                    if workspace.selectedTutorThreadID != nil {
+                        Button { showTutorTrace = true } label: {
+                            Image(systemName: "waveform.path.ecg")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Inspect this tutor thread's model requests and responses")
                     }
-                    .help("Inspect this tutor thread's model requests and responses")
-                }
-                if appModel.voice.isSpeaking {
-                    Button { appModel.voice.stopSpeaking() } label: {
-                        Label("Stop Voice", systemImage: "speaker.slash")
+                    if appModel.voice.isSpeaking {
+                        Button { appModel.voice.stopSpeaking() } label: {
+                            Image(systemName: "speaker.slash")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Stop voice playback")
+                    }
+                    if workspace.isTutorStreaming {
+                        Button(role: .destructive) { workspace.cancelTutorTurn() } label: {
+                            Image(systemName: "stop.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Stop tutor response")
                     }
                 }
-                if workspace.isTutorStreaming {
-                    Button(role: .destructive) { workspace.cancelTutorTurn() } label: {
-                        Label("Stop", systemImage: "stop.fill")
-                    }
-                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(appModel.currentPalette.surfaceRaised, in: Capsule())
+                .overlay(Capsule().stroke(appModel.currentPalette.border.opacity(0.55), lineWidth: 1))
             }
         }
         .confirmationDialog(
@@ -138,10 +150,19 @@ struct TutorConversationView: View {
                                 surface: appModel.currentPalette.surfaceRaised,
                                 border: appModel.currentPalette.border
                             ) {
-                                if workspace.tutorStreamedReply.isEmpty {
+                                if workspace.tutorStreamedReply.isEmpty && workspace.tutorStreamedReasoning.isEmpty {
                                     Text("Thinking…")
                                         .foregroundStyle(.secondary)
-                                } else {
+                                }
+                                if !workspace.tutorStreamedReasoning.isEmpty {
+                                    ReasoningDisclosureView(
+                                        reasoning: workspace.tutorStreamedReasoning,
+                                        isGenerating: workspace.tutorStreamedReply.isEmpty)
+                                }
+                                ForEach(workspace.tutorStreamedToolExchanges) { exchange in
+                                    TutorToolExchangeView(exchange: exchange)
+                                }
+                                if !workspace.tutorStreamedReply.isEmpty {
                                     MarkdownView(
                                         text: workspace.tutorStreamedReply,
                                         baseSize: appModel.settings.fontSize
@@ -222,6 +243,13 @@ struct TutorConversationView: View {
                             Image(systemName: "doc.on.doc")
                         }
                         .help("Copy message")
+                        Button(role: .destructive) {
+                            workspace.deleteTutorMessage(message.id)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .help("Delete message")
+                        .disabled(workspace.isTutorStreaming)
                     }
                 }
             }
@@ -233,6 +261,14 @@ struct TutorConversationView: View {
                 surface: appModel.currentPalette.surfaceRaised,
                 border: appModel.currentPalette.border
             ) {
+                if let reasoning = message.reasoning,
+                   !reasoning.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                {
+                    ReasoningDisclosureView(reasoning: reasoning)
+                }
+                ForEach(message.toolExchanges) { exchange in
+                    TutorToolExchangeView(exchange: exchange)
+                }
                 MarkdownView(text: message.content, baseSize: appModel.settings.fontSize)
                     .textSelection(.enabled)
                 MessageActionBar {
@@ -259,6 +295,13 @@ struct TutorConversationView: View {
                         Image(systemName: "plus.circle")
                     }
                     .help("Review vocabulary proposals from this tutor reply")
+                    Button(role: .destructive) {
+                        workspace.deleteTutorMessage(message.id)
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                    .help("Delete message")
+                    .disabled(workspace.isTutorStreaming)
                 }
             }
         }
@@ -406,5 +449,79 @@ struct TutorConversationView: View {
         var config = appModel.settings.requestConfig(modelOverride: nil)
         config.enableThinking = appModel.settings.reasoningEnabled
         return config
+    }
+}
+
+private struct TutorToolExchangeView: View {
+    let exchange: LanguageTutorToolExchange
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: icon)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(exchange.name)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .help(exchange.arguments)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !exchange.arguments.isEmpty && exchange.arguments != "{}" {
+                        detailSection("Arguments", text: exchange.arguments)
+                    }
+                    detailSection("Result", text: exchange.result)
+                }
+                .padding(6)
+                .background(.quaternary.opacity(0.2), in: RoundedRectangle(cornerRadius: 6))
+            }
+        }
+    }
+
+    private func detailSection(_ title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ScrollView {
+                Text(text.prefix(4_000))
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 120)
+        }
+        .padding(6)
+        .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    private var icon: String {
+        switch exchange.name {
+        case "add_vocabulary": "text.badge.plus"
+        case "language_deck_summary": "chart.bar"
+        case "language_deck_list": "rectangle.stack"
+        case "language_deck_search": "magnifyingglass"
+        case "language_due_items": "calendar.badge.clock"
+        case "language_review_history": "clock.arrow.circlepath"
+        default: "wrench.and.screwdriver"
+        }
     }
 }
