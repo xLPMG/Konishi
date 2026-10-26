@@ -1,6 +1,6 @@
 # Konishi
 
-Named after the Konishi Polis in Greg Egan's *Diaspora*, this is a little harness for LLMs. I built it around my own workflows for interacting with language models, managing local servers, and integrating various tools for language learning and research. It only contains the features I personally need, as to not overwhelm local LLMs with unnecessary complexity.
+Named after the Konishi Polis in Greg Egan's [*Diaspora*](https://www.gregegan.net/DIASPORA/DIASPORA.html), this is a harness for LLMs. I built it around my own workflows for interacting with language models, managing local servers, and integrating various tools for language learning and research. It only contains the features I personally need, as to not overwhelm local LLMs with unnecessary complexity. It is lightweight by design and uses a sophisticated memory collection and injection mechanism to build a locally stored and contextually aware profile of the user.
 
 It can set up and run local servers using [mlx-lm](https://github.com/ml-explore/mlx-lm), [mlx-vlm](https://github.com/Blaizzy/mlx-vlm) (both built on Apple's [MLX](https://github.com/ml-explore/mlx)), or [IncoAI's Splash Engine](https://github.com/incoai/splash) for high-performance Qwen inference. I use it for language learning too: it suggests vocabulary and grammar, keeps track of progress, and handles spaced repetition. There's a voice mode as well, so you can talk to the model, interrupt it mid answer, and steer it while it's still going.
 
