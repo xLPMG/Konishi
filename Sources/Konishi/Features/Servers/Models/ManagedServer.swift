@@ -37,6 +37,8 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     var model: String?
     /// API model identifier when it differs from the local model directory.
     var apiModelID: String?
+    /// Splash only: DFlash2 draft directory used instead of the one Splash selects for the model's family.
+    var draftModel: String?
     var builtInServer: BuiltInServer?
     var isCustom: Bool
     var host: String
@@ -49,16 +51,28 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
 
     var effectiveAPIModelID: String? {
         guard builtInServer == .splash else { return apiModelID }
+        if splashUsesHubModel { return modelPath }
         return Self.splashModelID(from: modelPath) ?? apiModelID
     }
 
+    /// Splash downloads a Hugging Face ID (`owner/repo[:VARIANT]`) itself; a path is prepared from local files.
+    var splashUsesHubModel: Bool {
+        guard builtInServer == .splash, let value = modelPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty, !value.hasPrefix("/"), !value.hasPrefix("~") else { return false }
+        return value.range(of: #"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?$"#, options: .regularExpression) != nil
+    }
+
+    /// Splash chooses the draft from the model's family; this is the draft repository Konishi expects it to need.
+    var splashRequiredDraftRepository: String? {
+        guard builtInServer == .splash, !splashUsesHubModel,
+              draftModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true else { return nil }
+        return SplashDrafts.repository(forModel: modelPath)
+    }
+
+    static let splashIncompatibleMarker = "KONISHI_SPLASH_INCOMPATIBLE"
+
     var launchCommand: String {
-        if builtInServer == .splash {
-            let modelDirectory = modelPath.map(Self.shellQuotePath)
-                ?? Self.shellQuotePath("~/.lmstudio/models/incoai/Qwen3.8-27B-Splash")
-            let modelID = Self.shellQuote(effectiveAPIModelID ?? "incoai/Qwen3.8-27B-Splash")
-            return "SPLASH_ROOT=\"$(brew --prefix splash)/libexec\"; MODEL_DIR=\(modelDirectory); MODEL_ID=\(modelID); export PYTHONPATH=\"$SPLASH_ROOT\"; exec \"$SPLASH_ROOT/python/bin/python3\" -u -P -m server.server \"$MODEL_DIR\" --tokenizer \"$MODEL_DIR/tokenizer\" --model \"$MODEL_ID\" --binary \"$SPLASH_ROOT/engine/splash\" --port \(port)"
-        }
+        if builtInServer == .splash { return splashLaunchCommand }
         let stripped = Self.commandWithoutModel(command)
             .replacingOccurrences(of: #"\s*--host(?:=|\s+)\S+"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"\s*--port(?:=|\s+)\d+"#, with: "", options: .regularExpression)
@@ -67,6 +81,24 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
         return ([stripped] + (modelArgument.map { [$0] } ?? []) + ["--host \(Self.shellQuote(host))", "--port \(port)"])
             .filter { !$0.isEmpty }
             .joined(separator: " ")
+    }
+
+    private var splashLaunchCommand: String {
+        let draft = draftModel?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        let incompatible = Self.shellQuote("\(Self.splashIncompatibleMarker): Splash is not installed or its layout changed")
+        if splashUsesHubModel {
+            let modelID = Self.shellQuote(effectiveAPIModelID ?? "")
+            let draftArgument = draft.map { " --draft-model \(Self.shellQuotePath($0))" } ?? ""
+            return "SPLASH_BIN=\"$(brew --prefix splash)/bin/splash\"; [ -x \"$SPLASH_BIN\" ] || { echo \(incompatible) >&2; exit 78; }; exec \"$SPLASH_BIN\" serve --model \(modelID) --served-model-name \(modelID) --announce-served-name\(draftArgument) --host \(Self.shellQuote(host)) --port \(port)"
+        }
+        let modelDirectory = modelPath.map(Self.shellQuotePath)
+            ?? Self.shellQuotePath("~/.lmstudio/models/mlx-community/Qwen3.8-27B-4bit")
+        let modelID = Self.shellQuote(effectiveAPIModelID ?? "mlx-community/Qwen3.8-27B-4bit")
+        let preparationScript = "import sys; from install.local import prepare_local_model; stdout = sys.stdout; sys.stdout = sys.stderr; model = prepare_local_model(sys.argv[1], draft=sys.argv[2] if len(sys.argv) > 2 else None); sys.stdout = stdout; print(model)"
+        let draftAssignment = draft.map { "DRAFT_SOURCE=\(Self.shellQuotePath($0)); " } ?? ""
+        let draftArgument = draft == nil ? "" : " \"$DRAFT_SOURCE\""
+        let prepareCommand = "\"$SPLASH_ROOT/python/bin/python3\" -c \(Self.shellQuote(preparationScript)) \"$MODEL_SOURCE\"\(draftArgument)"
+        return "SPLASH_ROOT=\"$(brew --prefix splash)/libexec\"; MODEL_SOURCE=\(modelDirectory); \(draftAssignment)MODEL_ID=\(modelID); [ -x \"$SPLASH_ROOT/engine/splash\" ] && [ -f \"$SPLASH_ROOT/server/server.py\" ] || { echo \(incompatible) >&2; exit 78; }; export PYTHONPATH=\"$SPLASH_ROOT\"; MODEL_DIR=\"$(\(prepareCommand))\" || exit $?; exec \"$SPLASH_ROOT/python/bin/python3\" -u -P -m server.server \"$MODEL_DIR\" --model \"$MODEL_ID\" --binary \"$SPLASH_ROOT/engine/splash\" --port \(port)"
     }
 
     var supportsModelSelection: Bool {
@@ -197,7 +229,7 @@ struct ManagedServer: Identifiable, Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, pipPackage, command, model, apiModelID, builtInServer, isCustom, host, port, role, note, autostart
+        case id, name, pipPackage, command, model, apiModelID, draftModel, builtInServer, isCustom, host, port, role, note, autostart
     }
 
     static var presets: [ManagedServer] {
@@ -260,13 +292,13 @@ private extension ManagedServer.BuiltInServer {
         case .mlxVLMChat: "mlx-community/gemma-4-12B-it-qat-4bit"
         case .mlxAudio: nil
         case .mlxEmbeddings: "~/.lmstudio/models/AutomatosX/AX-Qwen3-Embedding-0.6B-MLX-AXQ-4bit"
-        case .splash: "~/.lmstudio/models/incoai/Qwen3.8-27B-Splash"
+        case .splash: "~/.lmstudio/models/mlx-community/Qwen3.8-27B-4bit"
         }
     }
 
     var apiModelID: String? {
         switch self {
-        case .splash: "incoai/Qwen3.8-27B-Splash"
+        case .splash: "mlx-community/Qwen3.8-27B-4bit"
         default: nil
         }
     }
@@ -300,8 +332,12 @@ private extension ManagedServer.BuiltInServer {
         case .mlxEmbeddings:
             "Native MLX embeddings server for semantic memory and document retrieval."
         case .splash:
-            "Runs Splash with a local model directory; install/update with the official Homebrew formula."
+            "Runs Splash with a local model folder (for example from LM Studio) or a Hugging Face ID that Splash downloads itself. Drafts are downloaded and managed by Splash; install/update with the official Homebrew formula."
         }
     }
 }
 
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}

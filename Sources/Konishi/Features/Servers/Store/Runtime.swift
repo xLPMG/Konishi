@@ -19,6 +19,8 @@ enum ProcStatus: Equatable, Sendable {
 final class Runtime {
     var servers: [ManagedServer]
     var log = ""
+    private(set) var missingSplashDrafts: [UUID: String] = [:]
+    private(set) var downloadingSplashDrafts: Set<UUID> = []
     /// True while a venv/pip operation is running (one at a time).
     var busy = false
     var pythonVersion: String?
@@ -48,6 +50,7 @@ final class Runtime {
     private(set) var statuses: [UUID: ProcStatus] = [:]
     private var processes: [UUID: Process] = [:]
     private var opProcess: Process?
+    private var opSuccess: (@MainActor () -> Void)?
     /// Background tasks tailing each server's log file into `log`.
     private var tailTasks: [UUID: Task<Void, Never>] = [:]
 
@@ -464,7 +467,26 @@ final class Runtime {
     func stopOp() {
         opProcess?.terminate()
         opProcess = nil
+        opSuccess = nil
+        downloadingSplashDrafts.removeAll()
         busy = false
+    }
+
+    func downloadSplashDraft(
+        _ repo: String,
+        for server: ManagedServer,
+        thenStart: @escaping @MainActor () -> Void
+    ) {
+        guard !busy, Self.isValidHubRepoID(repo) else { return }
+        let command = "SPLASH_ROOT=\"$(brew --prefix splash)/libexec\"; exec \"$SPLASH_ROOT/python/bin/python3\" -u -m huggingface_hub.cli.hf download \(Self.shellQuote(repo))"
+        if runOp("Download Splash draft \(repo)", command: command, onSuccess: { [weak self] in
+            guard let self else { return }
+            self.downloadingSplashDrafts.remove(server.id)
+            self.missingSplashDrafts[server.id] = nil
+            thenStart()
+        }) {
+            downloadingSplashDrafts.insert(server.id)
+        }
     }
 
     // MARK: - Servers
@@ -479,6 +501,15 @@ final class Runtime {
             statuses[server.id] = .failed(message)
             appendLog("✗ \(server.name): \(message)\n")
             return false
+        }
+        if server.builtInServer == .splash {
+            missingSplashDrafts[server.id] = nil
+            if let repo = server.splashRequiredDraftRepository, !SplashDrafts.isCached(repo) {
+                missingSplashDrafts[server.id] = repo
+                statuses[server.id] = .failed("Splash needs the draft \(repo) before it can start.")
+                appendLog("Splash requires draft \(repo). Choose Download draft to continue.\n")
+                return false
+            }
         }
         statuses[server.id] = .starting
         if server.builtInServer == .mlxEmbeddings {
@@ -555,6 +586,7 @@ final class Runtime {
             if await Self.httpAlive(host: server.host, port: server.port) {
                 guard processes[server.id] === process else { return false }
                 statuses[server.id] = .running
+                missingSplashDrafts[server.id] = nil
                 appendLog("✓ \(server.name) is ready at http://127.0.0.1:\(server.port)\n")
                 return true
             }
@@ -703,15 +735,22 @@ final class Runtime {
 
     // MARK: - Process plumbing
 
-    private func runOp(_ label: String, command: String) {
-        guard !busy else { return }
+    @discardableResult
+    private func runOp(
+        _ label: String,
+        command: String,
+        onSuccess: (@MainActor () -> Void)? = nil
+    ) -> Bool {
+        guard !busy else { return false }
         busy = true
         appendLog("\n$ \(label)\n")
         guard let proc = launch(command, id: nil, isServer: false) else {
             busy = false
-            return
+            return false
         }
         opProcess = proc
+        opSuccess = onSuccess
+        return true
     }
 
     private func launch(_ command: String, id: UUID?, isServer: Bool, logFile: URL? = nil) -> Process? {
@@ -767,20 +806,55 @@ final class Runtime {
             default:
                 statuses[id] = .stopped
             }
+            if code != 0,
+               let output = try? String(contentsOf: Paths.serverLog(id), encoding: .utf8) {
+                if let repo = Self.missingSplashDraft(in: output) {
+                    missingSplashDrafts[id] = repo
+                    appendLog("Splash requires draft \(repo). Choose Download draft to continue.\n")
+                } else if servers.first(where: { $0.id == id })?.builtInServer == .splash,
+                          let reason = SplashDrafts.failureReason(in: output) {
+                    statuses[id] = .failed(reason)
+                    appendLog("✗ \(name): \(reason)\n")
+                }
+            }
             if code != 0 { appendLog("✗ \(name) exited with code \(code). Check its server log above.\n") }
         } else {
             opProcess = nil
             busy = false
+            downloadingSplashDrafts.removeAll()
             appendLog(code == 0 ? "✓ done\n" : "✗ exited with code \(code)\n")
             detectPython()
             refreshPackages()
             refreshSplashVersion()
+            let completion = code == 0 ? opSuccess : nil
+            opSuccess = nil
+            completion?()
         }
     }
 
     private func appendLog(_ text: String) {
         log += text
         if log.count > 40_000 { log = String(log.suffix(32_000)) }
+    }
+
+    nonisolated static func missingSplashDraft(in output: String) -> String? {
+        guard output.contains("no draft was given"),
+              output.contains("Hub cache records no commit for the default branch"),
+              let start = output.range(of: "; download ")?.upperBound,
+              let end = output[start...].range(of: ", or pass")?.lowerBound else { return nil }
+        let repo = String(output[start..<end])
+        guard isValidHubRepoID(repo) else { return nil }
+        return repo
+    }
+
+    nonisolated private static func isValidHubRepoID(_ repo: String) -> Bool {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-/")
+        return repo.split(separator: "/").count == 2
+            && repo.rangeOfCharacter(from: allowed.inverted) == nil
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private static func shellOutput(_ command: String) async -> String? {

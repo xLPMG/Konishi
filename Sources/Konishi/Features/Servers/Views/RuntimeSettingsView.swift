@@ -210,6 +210,8 @@ private struct ManagedServerRow: View {
     @State private var draft: ManagedServer
     @State private var advanced = false
     @State private var showDeleteConfirmation = false
+    @State private var showSplashDraftConfirmation = false
+    @State private var splashDraftRepository = ""
 
     init(server: ManagedServer) { _draft = State(initialValue: server) }
 
@@ -248,7 +250,10 @@ private struct ManagedServerRow: View {
                 Image(systemName: roleIcon).foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(draft.role.label).fontWeight(.semibold)
-                    Text(draft.name).font(.caption).foregroundStyle(.secondary)
+                    Text(endpointURL.isEmpty ? draft.name : "\(draft.name) · \(endpointURL)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
                 Spacer()
                 if draft.builtInServer == nil {
@@ -275,8 +280,6 @@ private struct ManagedServerRow: View {
                 .toggleStyle(.switch)
                 .disabled(managedActive)
             }
-            LabeledContent("Active endpoint", value: endpointURL.isEmpty ? "Not configured" : endpointURL)
-                .font(.caption)
             if case .failed(let message) = status {
                 Text(message).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             }
@@ -291,11 +294,10 @@ private struct ManagedServerRow: View {
                     Text("Splash \(runtime.splashVersion.map { "v\($0)" } ?? "not installed")")
                         .font(.caption.monospaced())
                         .foregroundStyle(runtime.splashVersion == nil ? .secondary : .primary)
-                    Button(runtime.splashVersion == nil ? "Install" : "Update") {
+                    installButton(installed: runtime.splashVersion != nil, help: "Install or update Splash with Homebrew") {
                         runtime.installSplash()
                     }
                     .disabled(runtime.busy)
-                    .help("Install or update Splash with Homebrew")
                 } else {
                     let primary = Runtime.primaryPackageName(draft.pipPackage)
                     let version = primary.flatMap { runtime.installedVersion(of: $0) }
@@ -306,11 +308,10 @@ private struct ManagedServerRow: View {
                     } else if let version {
                         Text("v\(version)").font(.caption.monospaced()).foregroundStyle(.secondary)
                     }
-                    Button(version == nil ? "Install" : "Update") {
+                    installButton(installed: version != nil, help: "Install or update this server runtime") {
                         runtime.install(package: draft.pipPackage)
                     }
                     .disabled(runtime.busy || !runtime.venvReady || draft.pipPackage.isEmpty)
-                    .help("Install or update this server runtime")
                 }
             }
             DisclosureGroup("Server options", isExpanded: $advanced) {
@@ -349,6 +350,16 @@ private struct ManagedServerRow: View {
         } message: {
             Text("This removes the custom server configuration.")
         }
+        .confirmationDialog("Download the required Splash draft?", isPresented: $showSplashDraftConfirmation, titleVisibility: .visible) {
+            Button("Download & Start") {
+                runtime.downloadSplashDraft(splashDraftRepository, for: draft) {
+                    model.startServer(draft)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Konishi will download \(splashDraftRepository), then prepare and start Splash.")
+        }
     }
 
     private var roleIcon: String {
@@ -362,7 +373,10 @@ private struct ManagedServerRow: View {
 
     @ViewBuilder
     private var statusLabel: some View {
-        switch localStatus {
+        if runtime.downloadingSplashDrafts.contains(draft.id) {
+            Label("Downloading draft", systemImage: "arrow.down.circle").foregroundStyle(.orange)
+        } else {
+            switch localStatus {
         case .stopped:
             Label("Stopped", systemImage: "circle").foregroundStyle(.secondary)
         case .starting:
@@ -380,12 +394,16 @@ private struct ManagedServerRow: View {
             Label("Needs attention", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
                 .help(message)
+            }
         }
     }
 
     @ViewBuilder
     private var actionButton: some View {
-        switch localStatus {
+        if runtime.downloadingSplashDrafts.contains(draft.id) {
+            ProgressView().controlSize(.small)
+        } else {
+            switch localStatus {
         case .running:
             Button("Stop", role: .destructive) { runtime.stop(draft.id) }
         case .starting, .stopping:
@@ -397,8 +415,17 @@ private struct ManagedServerRow: View {
             Button("Start local") { model.startServer(draft) }
                 .disabled(draft.command.isEmpty)
         case .stopped, .failed:
-            Button(status == .external || status == .configured ? "Start local" : "Start") { model.startServer(draft) }
-                .disabled(draft.command.isEmpty)
+            if let repo = runtime.missingSplashDrafts[draft.id] {
+                Button("Download draft…") {
+                    splashDraftRepository = repo
+                    showSplashDraftConfirmation = true
+                }
+                .disabled(runtime.busy)
+            } else {
+                Button(status == .external || status == .configured ? "Start local" : "Start") { model.startServer(draft) }
+                    .disabled(draft.command.isEmpty)
+            }
+            }
         }
     }
 
@@ -407,29 +434,35 @@ private struct ManagedServerRow: View {
         @Bindable var settings = model.settings
         VStack(alignment: .leading, spacing: 5) {
             if draft.supportsModelSelection {
-                LabeledContent("Model path") {
-                    HStack {
-                        TextField("Local path or Hugging Face ID", text: modelPathBinding)
-                            .font(.system(size: 12, design: .monospaced))
-                            .disabled(managedActive)
-                        Button(action: chooseModelFolder) {
-                            Image(systemName: "folder")
+                pathRow("Model", placeholder: "Local path or Hugging Face ID", text: modelPathBinding) {
+                    Menu {
+                        ForEach(model.discoveredModels.prefix(100)) { entry in
+                            Button(entry.name) { selectModel(entry.path) }
                         }
-                        .help("Choose a local model folder")
-                        .disabled(managedActive)
-                        Menu {
-                            ForEach(model.discoveredModels.prefix(100)) { entry in
-                                Button(entry.name) { selectModel(entry.path) }
-                            }
-                            if model.discoveredModels.isEmpty {
-                                Text("No local models detected")
-                            }
-                        } label: {
-                            Image(systemName: "square.grid.2x2")
-                        }
-                        .help("Choose a detected local model")
-                        .disabled(model.discoveredModels.isEmpty || managedActive)
+                    } label: {
+                        Image(systemName: "square.grid.2x2")
                     }
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Choose a detected local model")
+                    .disabled(model.discoveredModels.isEmpty)
+                    Button(action: chooseModelFolder) {
+                        Image(systemName: "folder")
+                    }
+                    .help("Choose a local model folder")
+                }
+            }
+            if draft.builtInServer == .splash {
+                pathRow("Draft", placeholder: "Automatic", text: draftModelBinding) {
+                    // Keeps the folder button in the same column as the Model row.
+                    Menu {} label: { Image(systemName: "square.grid.2x2") }
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .hidden()
+                    Button(action: chooseDraftFolder) {
+                        Image(systemName: "folder")
+                    }
+                    .help("Choose a local DFlash2 draft folder")
                 }
             }
             switch draft.role {
@@ -453,11 +486,64 @@ private struct ManagedServerRow: View {
         }
     }
 
+    @ViewBuilder
+    private func installButton(installed: Bool, help: String, action: @escaping () -> Void) -> some View {
+        if installed {
+            Button(action: action) {
+                Label("Update", systemImage: "arrow.triangle.2.circlepath").labelStyle(.iconOnly)
+            }
+            .help(help)
+        } else {
+            Button("Install", action: action).help(help)
+        }
+    }
+
+    private func pathRow<Actions: View>(
+        _ title: String,
+        placeholder: String,
+        text: Binding<String>,
+        @ViewBuilder actions: () -> Actions
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .frame(width: 52, alignment: .leading)
+            TextField(title, text: text, prompt: Text(placeholder))
+                .labelsHidden()
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 12, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            actions()
+        }
+        .disabled(managedActive)
+    }
+
     private var modelPathBinding: Binding<String> {
         Binding(
             get: { draft.modelPath ?? "" },
             set: { selectModel($0) }
         )
+    }
+
+    private var draftModelBinding: Binding<String> {
+        Binding(
+            get: { draft.draftModel ?? "" },
+            set: {
+                let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                draft.draftModel = value.isEmpty ? nil : value
+            }
+        )
+    }
+
+    private func chooseDraftFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Draft Folder"
+        panel.prompt = "Choose Draft"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        draft.draftModel = url.path
     }
 
     private func shortModelName(_ identifier: String) -> String {
