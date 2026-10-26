@@ -52,7 +52,7 @@ struct LanguageStoreTests {
         let reopened = LanguageStore(databaseURL: databaseURL)
         #expect(reopened.profile(id: profile.id) == profile)
         #expect(reopened.item(id: item.id) == item)
-        #expect(try userVersion(at: databaseURL) == 4)
+        #expect(try userVersion(at: databaseURL) == 6)
     }
 
     @Test("legacy profile and item rows survive opening the store")
